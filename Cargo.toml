@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/huffi-protocol",
+    "crates/huffi",
+    "crates/huffi-cli",
+    "crates/huffi-ui",
+]

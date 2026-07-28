@@ -1,0 +1,15 @@
+[package]
+name = "huffi-cli"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "CLI client for the huffi adaptive application launcher"
+repository = "https://github.com/suiluj482/huffi"
+
+[[bin]]
+name = "huffi"
+path = "src/main.rs"
+
+[dependencies]
+huffi-protocol = { path = "../huffi-protocol" }
+anyhow = "1"

@@ -1,0 +1,17 @@
+[package]
+name = "huffi-ui"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Wayland layershell GUI for the huffi adaptive application launcher"
+repository = "https://github.com/suiluj482/huffi"
+
+[[bin]]
+name = "huffi-ui"
+path = "src/main.rs"
+
+[dependencies]
+huffi-protocol = { path = "../huffi-protocol" }
+iced_layershell = "0.13"
+iced = { version = "0.13", features = ["advanced", "image", "svg"] }
+anyhow = "1"
