@@ -26,6 +26,9 @@ pub use util::{Action, EntryBuilder, entry};
 #[derive(Debug, Clone)]
 pub struct EntryMeta {
     pub id: String,
+    /// The provider that produced this entry, stamped by
+    /// [`ProviderCollection`] when the entry is queried.
+    pub provider_id: Option<String>,
     pub title: String,
     pub subtitle: Option<String>,
     pub comment: Option<String>,
@@ -63,6 +66,13 @@ pub type ScoredEntry = Scored<EntryMeta>;
 /// [`history_key`](util::EntryBuilder::history_key). Entries without one
 /// will still appear in results but won't influence or be influenced by
 /// the usage-history ranking.
+///
+/// Entries built with [`score`](util::EntryBuilder::score) use
+/// [`Rank::Score`](crate::scoring::Rank::Score): the value is used as-is
+/// (provider contract: `0.0..=1.0`) and is not normalized against fuzzy
+/// matches. Entries built with
+/// [`match_fields`](util::EntryBuilder::match_fields) are fuzzy-scored and
+/// normalized against the best fuzzy match in the whole batch.
 ///
 /// # Example
 ///

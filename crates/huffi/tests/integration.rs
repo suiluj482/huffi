@@ -42,7 +42,7 @@ impl DaemonProcess {
             .arg("--data").arg(data.join("history.json"))
             .arg("--dry-run");
 
-        let child = cmd.spawn().expect("failed to start daemon");
+        let mut child = cmd.spawn().expect("failed to start daemon");
 
         for _ in 0..DAEMON_START_RETRIES {
             thread::sleep(Duration::from_millis(DAEMON_START_DELAY_MS));
@@ -58,6 +58,9 @@ impl DaemonProcess {
                 };
             }
         }
+
+        let _ = child.kill();
+        let _ = child.wait();
         panic!("daemon didn't start");
     }
 

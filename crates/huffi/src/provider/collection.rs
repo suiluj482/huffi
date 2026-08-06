@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::scoring::history::KeyedHistoryRecord;
-use crate::scoring::{Scored, Scorer};
+use crate::scoring::{QueryGroup, Scored, Scorer};
 
 use super::{CalculatorProvider, DesktopEntryProvider, Entry, EntryMeta, Provider};
 
@@ -47,11 +47,16 @@ impl ProviderCollection {
 
     /// Query providers and score results.
     ///
+    /// Each provider is grouped with the query its entries should be
+    /// fuzzy-matched against: the prefix-stripped query for the provider whose
+    /// prefix matched, the original query for everyone else. All groups are
+    /// normalized together. History is always looked up with the original
+    /// query.
+    ///
     /// Returns the resolved global prefix (if any) alongside the scored entries.
     pub fn query(&self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>) {
         let pre = self.preprocess_query(query);
-        let entries = self.entries(&pre);
-        let scored = self.scorer.score(&entries, query);
+        let scored = self.scorer.score(self.grouped_entries(&pre), query);
         (pre.prefix, scored)
     }
 
@@ -88,15 +93,34 @@ impl ProviderCollection {
 
     /// Query providers without scoring (raw entries).
     pub fn entries(&self, pre: &PreprocessedQuery) -> Vec<Entry> {
+        self.grouped_entries(pre)
+            .into_iter()
+            .flat_map(|g| g.entries)
+            .collect()
+    }
+
+    /// Query each provider and group its entries with the query they should
+    /// be fuzzy-scored against. Entries are annotated with their provider id.
+    fn grouped_entries(&self, pre: &PreprocessedQuery) -> Vec<QueryGroup<EntryMeta>> {
         self.providers
             .iter()
-            .flat_map(|p| {
-                let matched = pre.prefix.as_deref().is_some_and(|pfx| {
-                    p.prefixes().contains(&pfx)
-                });
-                match matched {
-                    true => p.query(pre.prefix.as_deref(), &pre.query),
-                    false => p.query(None, &pre.original_query),
+            .map(|p| {
+                let matched = pre
+                    .prefix
+                    .as_deref()
+                    .is_some_and(|pfx| p.prefixes().contains(&pfx));
+                let (prefix, query) = if matched {
+                    (pre.prefix.as_deref(), &pre.query)
+                } else {
+                    (None, &pre.original_query)
+                };
+                let mut entries = p.query(prefix, query);
+                for e in entries.iter_mut() {
+                    e.entry.provider_id = Some(p.id().to_string());
+                }
+                QueryGroup {
+                    query: query.to_string(),
+                    entries,
                 }
             })
             .collect()
@@ -163,7 +187,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::provider::{entry, Provider};
+    use crate::provider::{entry, Provider, TestProvider};
+    use crate::scoring::MatchField;
 
     type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
 
@@ -263,9 +288,54 @@ mod tests {
         assert_eq!(long, &("long".to_string(), Some("==".to_string()), " 2".to_string()));
     }
 
+    fn match_fields_entry(id: &str, text: &str) -> Entry {
+        entry(id, id)
+            .history_key(id)
+            .match_fields(vec![MatchField {
+                text: text.into(),
+                weight: 1.0,
+            }])
+    }
+
     #[test]
-    fn providers_lists_ids_and_prefixes() {
+    fn prefixed_entries_scored_against_stripped_query() {
+        let mut c = collection();
+        c.add_provider(Box::new(TestProvider::with_prefixes(
+            "pfx",
+            vec!["=="],
+            vec![match_fields_entry("pfx", "Firefox")],
+        )));
+        c.add_provider(Box::new(TestProvider::new(
+            "other",
+            vec![match_fields_entry("other", "Firefox")],
+        )));
+
+        let (prefix, scored) = c.query("==fi");
+
+        assert_eq!(prefix.as_deref(), Some("=="));
+        assert!(
+            scored.iter().any(|s| s.entry.id == "pfx"),
+            "prefixed provider entry should fuzzy-match the stripped query"
+        );
+        assert!(
+            !scored.iter().any(|s| s.entry.id == "other"),
+            "unprefixed provider entry should not fuzzy-match the original query"
+        );
+        assert_eq!(scored[0].entry.provider_id.as_deref(), Some("pfx"));
+    }
+
+    #[test]
+    fn entries_are_stamped_with_provider_id() {
         let c = collection();
+        let entries = c.entries(&c.preprocess_query("firefox"));
+        for e in &entries {
+            assert!(e.entry.provider_id.is_some());
+        }
+        assert!(entries.iter().any(|e| e.entry.provider_id.as_deref() == Some("desktop")));
+    }
+
+    #[test]
+    fn providers_lists_ids_and_prefixes() {        let c = collection();
         let providers = c.providers();
         assert!(providers.iter().any(|p| p.id == "desktop" && p.prefixes.is_empty()));
         assert!(providers.iter().any(|p| p.id == "calculator" && p.prefixes == vec!["="]));

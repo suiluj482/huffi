@@ -117,9 +117,6 @@ fall through straight to the neutral text-score-only floor.
 `text_score` is computed via the [`nucleo`](https://github.com/helix-editor/nucleo)
 crate (the matcher built for the Helix editor), which implements fzf-style
 consecutive-character and word-boundary bonus scoring with gap penalties.
-Space-separated query terms are matched as independent fuzzy fragments and
-combined (fzf's "extended search" behavior), so `"fi mgr"` can match
-"File Manager" as two separate fragments rather than one contiguous run.
 
 ## Adaptation / migration behavior
 

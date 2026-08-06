@@ -1,8 +1,8 @@
 # Writing a huffi provider
 
-A provider is a Rust struct that implements the [`Provider`] trait. It acts as
+A provider is a Rust struct that implements the `Provider` trait. It acts as
 a data source for the launcher — every keystroke, the daemon calls every
-registered provider's [`query()`] method and blends the returned entries into
+registered provider's `query()` method and blends the returned entries into
 a ranked list.
 
 ## The trait
@@ -18,8 +18,7 @@ pub trait Provider: Send + Sync {
 
 ### `id()`
 
-A short, unique name for this provider. Used only in log messages and
-possibly in a later `@provider` search syntax.
+A short, unique name for this provider.
 
 ### `prefixes()`
 
@@ -30,10 +29,16 @@ transparency (the UI lists them and marks the active one).
 Prefixes are resolved once per query by the daemon: the **longest** declared
 prefix that the user's input starts with becomes the *global prefix* for that
 query — there is at most one active prefix per query. When the user's input
-starts with that prefix, [`query()`] is called with `prefix: Some("...")` and
+starts with that prefix, `query()` is called with `prefix: Some("...")` and
 the text *after* the prefix as `query`. If a provider's prefixes do **not**
 contain the global prefix, it is called with `prefix: None` and the original
 full query — the same as for providers with no prefixes at all.
+
+Entries are fuzzy-matched against that `query` parameter, so a matching
+provider's prefix is left out of scoring: typing `"= 2 + 2"` with prefix `"="`
+fuzzy-matches the provider's entries against `" 2 + 2"`, not the full input.
+Providers whose prefix did not match score against the full input instead. A
+`.score()`-based entry isn't affected by any query either way.
 
 ### `init()`
 
@@ -45,7 +50,7 @@ expensive one-time work:
   calculator)
 - Building an index
 
-Since `init()` is only called once, keep [`query()`] as lightweight as
+Since `init()` is only called once, keep `query()` as lightweight as
 possible. Your provider holds arbitrary state — store everything you need
 in your struct fields during `init()`.
 
@@ -133,6 +138,11 @@ gets a fixed base score that the history-blending step operates on. Useful
 for entries that are always relevant regardless of query (e.g. a calculator
 result), or for entries whose scoring is handled externally.
 
+The value must lie in `0.0..=1.0`. Scores outside this range are passed
+through as-is (never normalized), so a score above `1.0` would outrank the
+best fuzzy match in the batch and a score below `0.0` would rank below an
+empty-query baseline of `0.8`.
+
 ### History tracking
 
 If an entry has a `history_key`, the daemon records launches and boosts
@@ -194,12 +204,13 @@ result as its title.
 
 ## Registering a provider
 
-Add it to [`ProviderCollection::default()`] in
-`crates/huffi/src/provider/mod.rs`:
+Add it to [`ProviderCollection::new()`] in
+`crates/huffi/src/provider/collection.rs`:
 
 ```rust
 impl Default for ProviderCollection {
-    fn default() -> Self {
+    pub fn new(data_path: impl AsRef<Path>, dry_run: bool) -> anyhow::Result<Self> {
+        let scorer = Scorer::open(data_path, dry_run)?;
         let mut providers: Vec<Box<dyn Provider>> = vec![
             Box::new(DesktopEntryProvider::default()),
             Box::new(CalculatorProvider::new()),
@@ -208,14 +219,11 @@ impl Default for ProviderCollection {
         for p in providers.iter_mut() {
             p.init();
         }
-        Self { providers }
+        Ok(Self { providers, scorer, dry_run })
     }
 }
 ```
 
-[`Provider`]: https://docs.rs/huffi/latest/huffi/provider/trait.Provider.html
-[`query()`]: https://docs.rs/huffi/latest/huffi/provider/trait.Provider.html#tymethod.query
-[`ProviderCollection`]: https://docs.rs/huffi/latest/huffi/provider/struct.ProviderCollection.html
 [`CalculatorProvider`]: ../crates/huffi/src/provider/calculator.rs
 [`entry()`]: ../crates/huffi/src/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo

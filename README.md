@@ -174,11 +174,9 @@ The project is a Rust workspace with four crates:
 | `DesktopEntryProvider` | (always active) | `freedesktop-desktop-entry` — reads `.desktop` files |
 | `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard |
 
-The [`Provider`] trait lets you plug arbitrary data sources into the
+The `Provider` trait lets you plug arbitrary data sources into the
 launcher. See **[docs/WRITING_A_PROVIDER.md](docs/WRITING_A_PROVIDER.md)**
 for the full guide with trait docs, builder API reference, and examples.
-
-[`Provider`]: https://docs.rs/huffi/latest/huffi/provider/trait.Provider.html
 
 Ranking state lives in a long-running daemon process. The daemon binds its
 Unix socket before doing slow work, so a racing client doesn't time out. On
@@ -206,24 +204,7 @@ weighting, exponential decay, the prefix trie, and adaptation behavior).
 
 **Early-stage but functional.** All four crates compile and run. The core
 loop (type → fuzzy match → blend with history → select → learn) works
-end-to-end. ~30 passing tests.
-
-### Implemented
-
-- Fuzzy matching via `nucleo` with field-weighted scoring
-- History store with exponential decay (2-week half-life), confidence-weighted
-  blending, and fan-out on write
-- Desktop entry provider (reads real `.desktop` files, filters `NoDisplay`
-  and non-`Application` types)
-- Calculator provider (`=` prefix)
-- Boost and delete (protocol, daemon, CLI, UI)
-- JSON persistence with atomic writes
-- Daemon auto-spawn (client spawns daemon on first use)
-- Wayland layershell GUI (keyboard navigation, pagination, icons, scrollbar,
-  boost/delete buttons, Catppuccin Mocha theme)
-- Nix flake + Home Manager module with optional systemd service
-- Protocol-level pagination (`offset`, `length` in queries)
-- Integration tests (spawn a real daemon, run queries)
+end-to-end.
 
 ### Planned / in discussion
 
@@ -241,7 +222,7 @@ end-to-end. ~30 passing tests.
 cargo test
 ```
 
-Runs ~30 unit tests across all crates plus integration tests that spawn a
+Runs the unit tests across all crates plus integration tests that spawn a
 real daemon.
 
 ---

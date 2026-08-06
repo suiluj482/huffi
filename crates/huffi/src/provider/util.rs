@@ -43,6 +43,7 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
     EntryBuilder {
         id: id.into(),
         title: title.into(),
+        provider_id: None,
         subtitle: None,
         comment: None,
         icon: None,
@@ -56,6 +57,7 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
 pub struct EntryBuilder {
     id: String,
     title: String,
+    provider_id: Option<String>,
     subtitle: Option<String>,
     comment: Option<String>,
     icon: Option<String>,
@@ -66,6 +68,11 @@ pub struct EntryBuilder {
 }
 
 impl EntryBuilder {
+    pub fn provider(mut self, id: impl Into<String>) -> Self {
+        self.provider_id = Some(id.into());
+        self
+    }
+
     pub fn subtitle(mut self, s: impl Into<String>) -> Self {
         self.subtitle = Some(s.into());
         self
@@ -115,6 +122,7 @@ impl EntryBuilder {
         Entry {
             entry: EntryMeta {
                 id: self.id,
+                provider_id: self.provider_id,
                 title: self.title,
                 subtitle: self.subtitle,
                 comment: self.comment,

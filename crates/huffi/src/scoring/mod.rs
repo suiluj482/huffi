@@ -25,6 +25,16 @@ pub struct Scoreable<T> {
     pub history_key: Option<String>,
 }
 
+/// A batch of entries to be fuzzy-scored against a single query.
+///
+/// Each group supplies its own needle; all groups are normalized together
+/// against the same global maximum.
+#[derive(Debug, Clone)]
+pub struct QueryGroup<T> {
+    pub query: String,
+    pub entries: Vec<Scoreable<T>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BaseScored<T> {
     pub entry: T,
@@ -57,11 +67,17 @@ impl Scorer {
         })
     }
 
-    pub fn score<T: Clone>(&self, entries: &[Scoreable<T>], query: &str) -> Vec<Scored<T>> {
+    /// Score entries, each group fuzzy-matched against its own query.
+    ///
+    /// `groups` carries the base query per group (e.g. the prefix-stripped
+    /// query for the provider whose prefix matched, the original query for
+    /// everyone else). `history_query` is used for history lookup and stays
+    /// the user's original input.
+    pub fn score<T>(&self, groups: Vec<QueryGroup<T>>, history_query: &str) -> Vec<Scored<T>> {
         let history = self.history.lock().unwrap();
         let mut base_scorer = self.base_scorer.lock().unwrap();
-        let base_scored = base_scorer.base_scoring(entries.to_vec(), query);
-        let mut scored = history.history_scoring(query, base_scored);
+        let base_scored = base_scorer.base_scoring(groups);
+        let mut scored = history.history_scoring(history_query, base_scored);
         scored.sort_by(|a, b| {
             b.combined
                 .partial_cmp(&a.combined)

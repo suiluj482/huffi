@@ -1,4 +1,4 @@
-use super::{BaseScored, MatchField, Rank, Scoreable};
+use super::{BaseScored, MatchField, QueryGroup, Rank, Scoreable};
 
 pub const EMPTY_QUERY_SCORE: f64 = 0.8;
 
@@ -19,52 +19,77 @@ impl BaseScorer {
         Self::default()
     }
 
-    pub fn base_scoring<T>(&mut self, entries: Vec<Scoreable<T>>, query: &str) -> Vec<BaseScored<T>> {
-        if query.is_empty() {
-            return entries
-                .into_iter()
-                .map(|s| BaseScored {
+    /// Score each group against its own query, then normalize globally.
+    ///
+    /// [`Rank::Score`] entries are moved straight onto the result (providers
+    /// promise a score in `0.0..=1.0`, so no normalization applies).
+    /// [`Rank::MatchFields`] entries are fuzzy-scored and normalized against
+    /// the best fuzzy match in the whole batch. Entries from a group with an
+    /// empty query keep the empty-query baseline and are exempt as well.
+    pub fn base_scoring<T>(&mut self, groups: Vec<QueryGroup<T>>) -> Vec<BaseScored<T>> {
+        let mut base_scored = Vec::new();
+        let mut raw = Vec::new();
+        for g in groups {
+            if g.query.is_empty() {
+                base_scored.extend(g.entries.into_iter().map(|s| BaseScored {
                     entry: s.entry,
                     rank: s.rank,
                     history_key: s.history_key,
                     base_score: EMPTY_QUERY_SCORE,
-                })
-                .collect();
-        }
+                }));
+                continue;
+            }
+            
+            let mut needle_buf = Vec::new();
+            let needle = nucleo::Utf32Str::new(&g.query, &mut needle_buf);
 
-        let mut needle_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new(query, &mut needle_buf);
-
-        let scored: Vec<(Scoreable<T>, f64)> = entries
-            .into_iter()
-            .filter_map(|s| {
-                let raw = match &s.rank {
-                    Rank::MatchFields(fields) => score_fields(&mut self.fuzzy_matcher, needle, fields)?,
-                    Rank::Score(score) => *score as f64,
-                };
-                if raw > 0.0 {
-                    Some((s, raw))
-                } else {
-                    None
+            for s in g.entries {
+                match s.rank {
+                    Rank::Score(score) => base_scored.push(BaseScored {
+                        entry: s.entry,
+                        rank: Rank::Score(score),
+                        history_key: s.history_key,
+                        base_score: score as f64,
+                    }),
+                    Rank::MatchFields(fields) => {
+                        if let Some(r) = score_fields(&mut self.fuzzy_matcher, needle, &fields)
+                            && r > 0.0
+                        {
+                            raw.push((
+                                Scoreable {
+                                    entry: s.entry,
+                                    rank: Rank::MatchFields(fields),
+                                    history_key: s.history_key,
+                                },
+                                r,
+                            ));
+                        }
+                    }
                 }
-            })
-            .collect();
-
-        let max_raw = scored.iter().map(|(_, s)| *s).fold(0.0f64, f64::max);
-        if max_raw <= 0.0 {
-            return vec![];
+            }
         }
 
-        scored
-            .into_iter()
-            .map(|(s, raw)| BaseScored {
-                entry: s.entry,
-                rank: s.rank,
-                history_key: s.history_key,
-                base_score: raw / max_raw,
-            })
-            .collect()
+        base_scored.extend(normalize(raw));
+        base_scored
     }
+}
+
+/// Normalize raw fuzzy scores against the batch maximum.
+///
+/// Only [`Rank::MatchFields`] entries reach this step; their base score is
+/// the raw score divided by the maximum across the whole batch, so results
+/// from different providers remain comparable.
+pub fn normalize<T>(raw: Vec<(Scoreable<T>, f64)>) -> Vec<BaseScored<T>> {
+    let max = raw.iter().map(|(_, r)| *r).fold(0.0f64, f64::max);
+
+    raw.into_iter()
+        .map(|(s, r)| BaseScored {
+            entry: s.entry,
+            rank: s.rank,
+            history_key: s.history_key,
+            base_score: if max > 0.0 { r / max } else { 0.0 },
+        })
+        .collect()
 }
 
 fn score(
@@ -166,5 +191,87 @@ mod tests {
         let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
         let fields = fields(&[]);
         assert!(score_fields(&mut fuzzy_matcher, needle, &fields).is_none());
+    }
+
+    fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {
+        Scoreable {
+            entry,
+            rank,
+            history_key: None,
+        }
+    }
+
+    #[test]
+    fn normalize_uses_global_max_for_match_fields() {
+        let mf = |v: f32| {
+            scoreable(
+                (),
+                Rank::MatchFields(vec![MatchField {
+                    text: "x".into(),
+                    weight: v,
+                }]),
+            )
+        };
+        let raw = vec![(mf(1.0), 300.0), (mf(2.0), 100.0)];
+        let scored = normalize(raw);
+        assert_eq!(scored[0].base_score, 1.0);
+        assert!((scored[1].base_score - 1.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_empty_returns_empty() {
+        assert!(normalize::<()>(vec![]).is_empty());
+    }
+
+    #[test]
+    fn base_scoring_empty_query_group_keeps_baseline() {
+        let mut bs = BaseScorer::new();
+        let groups = vec![QueryGroup {
+            query: String::new(),
+            entries: vec![scoreable((), Rank::Score(1.0))],
+        }];
+        let scored = bs.base_scoring(groups);
+        assert_eq!(scored[0].base_score, EMPTY_QUERY_SCORE);
+    }
+
+    #[test]
+    fn base_scoring_score_entries_bypass_normalization() {
+        let mut bs = BaseScorer::new();
+        let groups = vec![QueryGroup {
+            query: "fi".into(),
+            entries: vec![
+                scoreable((), Rank::Score(0.5)),
+                scoreable((), Rank::MatchFields(fields(&[("Firefox", 1.0)]))),
+            ],
+        }];
+        let scored = bs.base_scoring(groups);
+        let score = scored.iter().find(|s| matches!(s.rank, Rank::Score(_))).unwrap();
+        let fuzzy = scored.iter().find(|s| matches!(s.rank, Rank::MatchFields(_))).unwrap();
+        assert_eq!(score.base_score, 0.5, "Score entries must not be normalized");
+        assert_eq!(fuzzy.base_score, 1.0);
+    }
+
+    #[test]
+    fn base_scoring_per_group_query() {
+        let mut bs = BaseScorer::new();
+        let groups = vec![
+            QueryGroup {
+                query: "fi".into(),
+                entries: vec![scoreable(
+                    (),
+                    Rank::MatchFields(fields(&[("Firefox", 1.0)])),
+                )],
+            },
+            QueryGroup {
+                query: "==fi".into(),
+                entries: vec![scoreable(
+                    (),
+                    Rank::MatchFields(fields(&[("Firefox", 1.0)])),
+                )],
+            },
+        ];
+        let scored = bs.base_scoring(groups);
+        assert_eq!(scored.len(), 1, "only the group matching its query survives");
+        assert_eq!(scored[0].base_score, 1.0);
     }
 }
