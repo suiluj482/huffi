@@ -40,7 +40,34 @@ fn icon_widget(path: &str) -> Element<'_, Message> {
 }
 
 pub fn main() -> Result<(), iced_layershell::Error> {
+    let mut initial_query = String::new();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--query" | "-q" => {
+                if let Some(query) = args.get(i + 1) {
+                    initial_query = query.clone();
+                    i += 2;
+                } else {
+                    eprintln!("error: --query requires an argument");
+                    std::process::exit(1);
+                }
+            }
+            "--help" | "-h" => {
+                eprintln!("Usage: huffi-ui [--query <query>]");
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("error: unknown argument: {other}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     HuffiApp::run(Settings {
+        flags: initial_query,
         layer_settings: LayerShellSettings {
             anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
             layer: Layer::Overlay,
@@ -81,15 +108,16 @@ impl Application for HuffiApp {
     type Executor = iced::executor::Default;
     type Message = Message;
     type Theme = iced::Theme;
-    type Flags = ();
+    type Flags = String;
 
-    fn new(_flags: ()) -> (Self, Command<Message>) {
+    fn new(initial_query: String) -> (Self, Command<Message>) {
         let socket_path = daemon::default_socket_path();
         let socket = socket_path.clone();
         let providers_socket = socket_path.clone();
+        let query = initial_query.clone();
         (
             Self {
-                query: String::new(),
+                query,
                 active_prefix: None,
                 providers: Vec::new(),
                 entries: Vec::new(),
@@ -101,7 +129,7 @@ impl Application for HuffiApp {
             Command::batch([
                 text_input::focus("query"),
                 Command::perform(
-                    async move { daemon::query(&socket, "", 0, PAGE_SIZE).unwrap_or((None, Vec::new(), 0)) },
+                    async move { daemon::query(&socket, &initial_query, 0, PAGE_SIZE).unwrap_or((None, Vec::new(), 0)) },
                     |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
                 ),
                 Command::perform(

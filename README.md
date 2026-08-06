@@ -69,6 +69,12 @@ daemon as a child process on first use.
 A floating overlay that appears with keyboard focus. Start typing to fuzzy
 search, use arrow keys or tab to navigate, and press enter to launch.
 
+```console
+huffi-ui                        # launch empty
+huffi-ui --query fire           # start with an initial query
+huffi-ui -q "= 2 + 2"           # shorthand (note: quote for spaces)
+```
+
 | Key | Action |
 |---|---|
 | Type | Fuzzy search |
