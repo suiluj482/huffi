@@ -23,10 +23,17 @@ possibly in a later `@provider` search syntax.
 
 ### `prefixes()`
 
-Returns the trigger prefixes of this provider. `query()` is always called, 
-regardless of a prefix matches. The prefixes are intended for user transparency 
-through later features. When the user's input starts with that prefix, [`query()`] is 
-called with `prefix: Some("...")` and the text *after* the prefix as `query`.
+Returns the trigger prefixes of this provider. `query()` is always called,
+regardless of whether a prefix matches. The prefixes are intended for user
+transparency (the UI lists them and marks the active one).
+
+Prefixes are resolved once per query by the daemon: the **longest** declared
+prefix that the user's input starts with becomes the *global prefix* for that
+query — there is at most one active prefix per query. When the user's input
+starts with that prefix, [`query()`] is called with `prefix: Some("...")` and
+the text *after* the prefix as `query`. If a provider's prefixes do **not**
+contain the global prefix, it is called with `prefix: None` and the original
+full query — the same as for providers with no prefixes at all.
 
 ### `init()`
 
@@ -61,6 +68,11 @@ User types         prefix     query
 "f"                None       "f"
 "= 2 + 2"          Some("=")  " 2 + 2"
 ```
+
+The global prefix is the longest matching prefix across **all** providers. So
+if another provider declared the prefix `"=="`, typing `"== 2"` would activate
+*that* prefix; a provider only declaring `"="` would then be called with
+`prefix: None` and the full `"== 2"` query instead.
 
 A prefix-triggered provider typically returns an empty `Vec` when `prefix`
 is `None`, since it has nothing to offer for un-prefixed input. This is

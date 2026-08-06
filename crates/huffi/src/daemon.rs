@@ -2,7 +2,9 @@ use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 
 use crate::provider::ProviderCollection;
-use huffi_protocol::{read_message, write_message, ListEntry, QueryHit, Request, Response};
+use huffi_protocol::{
+    read_message, write_message, HistoryEntry, ProviderEntry, QueryHit, Request, Response,
+};
 
 const BOOST_WEIGHT: f64 = 10.0;
 const MAX_RESULTS: usize = 20;
@@ -54,12 +56,13 @@ impl Daemon {
             Request::Select { query, entry_id } => self.handle_select(&query, &entry_id),
             Request::Boost { query, history_key } => self.handle_boost(&query, &history_key),
             Request::Delete { query, history_key } => self.handle_delete(&query, &history_key),
-            Request::List { prefix } => self.handle_list(&prefix),
+            Request::History { prefix } => self.handle_history(&prefix),
+            Request::Providers => self.handle_providers(),
         }
     }
 
     fn handle_query(&self, query: &str, offset: usize, length: usize) -> Response {
-        let scored = self.provider_collection.query(query);
+        let (prefix, scored) = self.provider_collection.query(query);
         let total = scored.len();
         let length = length.min(MAX_RESULTS);
 
@@ -84,7 +87,7 @@ impl Daemon {
             })
             .collect();
 
-        Response::QueryResult { results, total }
+        Response::QueryResult { prefix, results, total }
     }
 
     fn handle_select(&self, query: &str, entry_id: &str) -> Response {
@@ -102,12 +105,12 @@ impl Daemon {
         Response::Ok
     }
 
-    fn handle_list(&self, prefix: &str) -> Response {
+    fn handle_history(&self, prefix: &str) -> Response {
         let raw = self.provider_collection.list_entries(prefix);
 
-        let entries: Vec<ListEntry> = raw
+        let entries: Vec<HistoryEntry> = raw
             .into_iter()
-            .map(|entry| ListEntry {
+            .map(|entry| HistoryEntry {
                 entry_id: entry.key,
                 score: entry.record.score,
                 n: entry.record.n,
@@ -115,6 +118,20 @@ impl Daemon {
             })
             .collect();
 
-        Response::ListResult { entries }
+        Response::History { entries }
+    }
+
+    fn handle_providers(&self) -> Response {
+        let entries: Vec<ProviderEntry> = self
+            .provider_collection
+            .providers()
+            .into_iter()
+            .map(|provider| ProviderEntry {
+                id: provider.id,
+                prefixes: provider.prefixes,
+            })
+            .collect();
+
+        Response::Providers { entries }
     }
 }

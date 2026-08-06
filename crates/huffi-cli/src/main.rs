@@ -25,7 +25,8 @@ fn print_usage() {
     eprintln!("  select <query> <entry_id>      Record a launch (trains the model)");
     eprintln!("  boost <query> <history_key>    Boost an app at a prefix (no fan-out)");
     eprintln!("  delete <query> <history_key>   Remove association at exact prefix");
-    eprintln!("  list <prefix>                  Dump raw scores for a prefix");
+    eprintln!("  history <prefix>               Dump raw scores for a prefix");
+    eprintln!("  providers                      List providers and their prefixes");
 }
 
 fn main() -> anyhow::Result<()> {
@@ -63,7 +64,10 @@ fn main() -> anyhow::Result<()> {
             let req = Request::Query { query: query.clone(), offset: 0, length: 20 };
             let resp = send_request(&socket_path, &req)?;
             match resp {
-                Response::QueryResult { results, .. } => {
+                Response::QueryResult { prefix, results, .. } => {
+                    if let Some(prefix) = prefix {
+                        println!("prefix: \"{prefix}\"");
+                    }
                     for (i, hit) in results.iter().enumerate() {
                         match &hit.comment {
                             Some(comment) => println!(
@@ -144,17 +148,17 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        "list" => {
+        "history" => {
             let prefix = positional.get(1).ok_or_else(|| {
                 print_usage();
-                anyhow::anyhow!("list requires a prefix argument")
+                anyhow::anyhow!("history requires a prefix argument")
             })?;
-            let req = Request::List {
+            let req = Request::History {
                 prefix: prefix.clone(),
             };
             let resp = send_request(&socket_path, &req)?;
             match resp {
-                Response::ListResult { entries } => {
+                Response::History { entries } => {
                     for entry in &entries {
                         println!(
                             "{:<40} score={:.3}  n={:<4}  last_update={:.0}",
@@ -163,6 +167,25 @@ fn main() -> anyhow::Result<()> {
                     }
                     if entries.is_empty() {
                         eprintln!("(no entries for prefix \"{prefix}\")");
+                    }
+                }
+                other => eprintln!("unexpected response: {other:?}"),
+            }
+        }
+
+        "providers" => {
+            let resp = send_request(&socket_path, &Request::Providers)?;
+            match resp {
+                Response::Providers { entries } => {
+                    for entry in &entries {
+                        if entry.prefixes.is_empty() {
+                            println!("{:<20} (always active)", entry.id);
+                        } else {
+                            println!("{:<20} prefixes: {}", entry.id, entry.prefixes.join(", "));
+                        }
+                    }
+                    if entries.is_empty() {
+                        eprintln!("(no providers)");
                     }
                 }
                 other => eprintln!("unexpected response: {other:?}"),

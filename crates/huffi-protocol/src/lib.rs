@@ -50,15 +50,23 @@ pub enum Request {
     Select { query: String, entry_id: String },
     Boost { query: String, history_key: String },
     Delete { query: String, history_key: String },
-    List { prefix: String },
+    History { prefix: String },
+    Providers,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Response {
-    QueryResult { results: Vec<QueryHit>, total: usize },
+    QueryResult { prefix: Option<String>, results: Vec<QueryHit>, total: usize },
     Ok,
     Error { message: String },
-    ListResult { entries: Vec<ListEntry> },
+    History { entries: Vec<HistoryEntry> },
+    Providers { entries: Vec<ProviderEntry> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderEntry {
+    pub id: String,
+    pub prefixes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -76,7 +84,7 @@ pub struct QueryHit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ListEntry {
+pub struct HistoryEntry {
     pub entry_id: String,
     pub score: f64,
     pub n: u32,
@@ -148,14 +156,21 @@ mod tests {
     }
 
     #[test]
-    fn list_round_trip_request() {
-        let req = Request::List { prefix: "f".into() };
+    fn history_round_trip_request() {
+        let req = Request::History { prefix: "f".into() };
+        assert_eq!(round_trip_request(&req), req);
+    }
+
+    #[test]
+    fn providers_round_trip_request() {
+        let req = Request::Providers;
         assert_eq!(round_trip_request(&req), req);
     }
 
     #[test]
     fn query_result_round_trip_request() {
         let resp = Response::QueryResult {
+            prefix: Some("=".into()),
             results: vec![
                 QueryHit {
                     entry_id: "firefox.desktop".into(),
@@ -199,10 +214,21 @@ mod tests {
     }
 
     #[test]
-    fn list_result_round_trip_request() {
-        let resp = Response::ListResult {
+    fn history_result_round_trip_request() {
+        let resp = Response::History {
             entries: vec![
-                ListEntry { entry_id: "firefox.desktop".into(), score: 12.4, n: 47, last_update: 1700000000.0 },
+                HistoryEntry { entry_id: "firefox.desktop".into(), score: 12.4, n: 47, last_update: 1700000000.0 },
+            ],
+        };
+        assert_eq!(round_trip_response(&resp), resp);
+    }
+
+    #[test]
+    fn providers_result_round_trip_request() {
+        let resp = Response::Providers {
+            entries: vec![
+                ProviderEntry { id: "desktop".into(), prefixes: vec![] },
+                ProviderEntry { id: "calculator".into(), prefixes: vec!["=".into()] },
             ],
         };
         assert_eq!(round_trip_response(&resp), resp);

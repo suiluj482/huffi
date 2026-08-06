@@ -141,6 +141,39 @@ fn select_then_query_changes_ranking() {
 }
 
 #[test]
+fn query_reports_active_prefix() {
+    let daemon = DaemonProcess::start();
+    let resp = daemon.send(&Request::Query {
+        query: "= 2 + 2".into(),
+        offset: 0,
+        length: 20,
+    });
+
+    match resp {
+        Response::QueryResult { prefix, results, .. } => {
+            assert_eq!(prefix.as_deref(), Some("="));
+            assert!(!results.is_empty(), "expected calculator result for '= 2 + 2'");
+        }
+        other => panic!("expected QueryResult, got {other:?}"),
+    }
+}
+
+#[test]
+fn providers_lists_entries() {
+    let daemon = DaemonProcess::start();
+    let resp = daemon.send(&Request::Providers);
+
+    match resp {
+        Response::Providers { entries } => {
+            assert!(!entries.is_empty());
+            assert!(entries.iter().any(|e| e.id == "desktop"));
+            assert!(entries.iter().any(|e| e.id == "calculator"));
+        }
+        other => panic!("expected Providers, got {other:?}"),
+    }
+}
+
+#[test]
 fn boost_moves_app_to_top() {
     let daemon = DaemonProcess::start();
 

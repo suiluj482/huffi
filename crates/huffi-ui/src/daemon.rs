@@ -2,12 +2,17 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use huffi_protocol::{
-    get_or_spawn_daemon, read_message, write_message, QueryHit, Request, Response,
+    get_or_spawn_daemon, read_message, write_message, ProviderEntry, QueryHit, Request, Response,
 };
 
 pub use huffi_protocol::default_socket_path;
 
-pub fn query(socket_path: &Path, query: &str, offset: usize, length: usize) -> anyhow::Result<(Vec<QueryHit>, usize)> {
+pub fn query(
+    socket_path: &Path,
+    query: &str,
+    offset: usize,
+    length: usize,
+) -> anyhow::Result<(Option<String>, Vec<QueryHit>, usize)> {
     let stream = get_or_spawn_daemon(socket_path)?;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
 
@@ -18,8 +23,24 @@ pub fn query(socket_path: &Path, query: &str, offset: usize, length: usize) -> a
     let resp: Option<Response> = read_message(&mut reader)?;
 
     match resp {
-        Some(Response::QueryResult { results, total }) => Ok((results, total)),
-        _ => Ok((Vec::new(), 0)),
+        Some(Response::QueryResult { prefix, results, total }) => Ok((prefix, results, total)),
+        _ => Ok((None, Vec::new(), 0)),
+    }
+}
+
+pub fn providers(socket_path: &Path) -> anyhow::Result<Vec<ProviderEntry>> {
+    let stream = get_or_spawn_daemon(socket_path)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+
+    let mut reader = BufReader::new(&stream);
+    let mut writer = BufWriter::new(&stream);
+
+    write_message(&mut writer, &Request::Providers)?;
+    let resp: Option<Response> = read_message(&mut reader)?;
+
+    match resp {
+        Some(Response::Providers { entries }) => Ok(entries),
+        _ => Ok(Vec::new()),
     }
 }
 

@@ -45,15 +45,19 @@ pub type ScoredEntry = Scored<EntryMeta>;
 ///   messages, not exposed to the user).
 /// - [`prefixes()`](Self::prefixes) — one or more string prefixes that
 ///   trigger this provider (e.g. `["="]` for the calculator). An empty
-///   slice means the provider is always active.
+///   slice means the provider is always active. Each query is preprocessed
+///   once: the longest declared prefix that the input starts with becomes
+///   the global prefix for that query.
 /// - [`init()`](Self::init) — called once at daemon startup. Use this to
 ///   do expensive work (scan directories, build data structures) so it
 ///   doesn't happen on every keystroke.
 /// - [`query()`](Self::query) — called on every keystroke with the user's
 ///   current input. Returns all entries this provider can offer. If a
-///   `prefix` matched, the prefix is passed separately and `query` is the
+///   prefix matched, the prefix is passed separately and `query` is the
 ///   text after the prefix. Otherwise `prefix` is `None` and `query` is
-///   the full typed text.
+///   the full typed text. A provider whose prefixes don't contain the
+///   global prefix is treated like an unprefixed provider: it is called
+///   with `prefix: None` and the full typed text.
 ///
 /// Entries that should participate in the scoring model must set a
 /// [`history_key`](util::EntryBuilder::history_key). Entries without one
@@ -83,7 +87,7 @@ pub trait Provider: Send + Sync {
     fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
 }
 
-pub use collection::ProviderCollection;
+pub use collection::{ProviderCollection, ProviderInfo};
 
 pub use calculator::CalculatorProvider;
 pub use desktop::DesktopEntryProvider;

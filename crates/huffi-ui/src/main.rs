@@ -53,6 +53,8 @@ pub fn main() -> Result<(), iced_layershell::Error> {
 
 struct HuffiApp {
     query: String,
+    active_prefix: Option<String>,
+    providers: Vec<huffi_protocol::ProviderEntry>,
     entries: Vec<huffi_protocol::QueryHit>,
     total: usize,
     selected: usize,
@@ -64,7 +66,8 @@ struct HuffiApp {
 #[derive(Debug, Clone)]
 enum Message {
     InputChanged(String),
-    EntriesReceived { entries: Vec<huffi_protocol::QueryHit>, total: usize },
+    EntriesReceived { prefix: Option<String>, entries: Vec<huffi_protocol::QueryHit>, total: usize },
+    ProvidersReceived { providers: Vec<huffi_protocol::ProviderEntry> },
     KeyPressed(KeyboardEvent),
     Boost(usize),
     Delete(usize),
@@ -83,9 +86,12 @@ impl Application for HuffiApp {
     fn new(_flags: ()) -> (Self, Command<Message>) {
         let socket_path = daemon::default_socket_path();
         let socket = socket_path.clone();
+        let providers_socket = socket_path.clone();
         (
             Self {
                 query: String::new(),
+                active_prefix: None,
+                providers: Vec::new(),
                 entries: Vec::new(),
                 total: 0,
                 selected: 0,
@@ -95,8 +101,12 @@ impl Application for HuffiApp {
             Command::batch([
                 text_input::focus("query"),
                 Command::perform(
-                    async move { daemon::query(&socket, "", 0, PAGE_SIZE).unwrap_or((Vec::new(), 0)) },
-                    |(entries, total)| Message::EntriesReceived { entries, total },
+                    async move { daemon::query(&socket, "", 0, PAGE_SIZE).unwrap_or((None, Vec::new(), 0)) },
+                    |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
+                ),
+                Command::perform(
+                    async move { daemon::providers(&providers_socket).unwrap_or_default() },
+                    |providers| Message::ProvidersReceived { providers },
                 ),
             ]),
         )
@@ -137,14 +147,20 @@ impl Application for HuffiApp {
                 let query = self.query.clone();
                 let socket = self.socket_path.clone();
                 Command::perform(
-                    async move { daemon::query(&socket, &query, 0, PAGE_SIZE).unwrap_or((Vec::new(), 0)) },
-                    |(entries, total)| Message::EntriesReceived { entries, total },
+                    async move { daemon::query(&socket, &query, 0, PAGE_SIZE).unwrap_or((None, Vec::new(), 0)) },
+                    |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
                 )
             }
 
-            Message::EntriesReceived { entries, total } => {
+            Message::EntriesReceived { prefix, entries, total } => {
+                self.active_prefix = prefix;
                 self.entries = entries;
                 self.total = total;
+                Command::none()
+            }
+
+            Message::ProvidersReceived { providers } => {
+                self.providers = providers;
                 Command::none()
             }
 
@@ -159,9 +175,9 @@ impl Application for HuffiApp {
                         return Command::perform(
                             async move {
                                 let _ = daemon::boost(&socket, &query, &key);
-                                daemon::query(&s, &q, offset, PAGE_SIZE).unwrap_or((Vec::new(), 0))
+                                daemon::query(&s, &q, offset, PAGE_SIZE).unwrap_or((None, Vec::new(), 0))
                             },
-                            |(entries, total)| Message::EntriesReceived { entries, total },
+                            |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
                         );
                 }
                 Command::none()
@@ -178,9 +194,9 @@ impl Application for HuffiApp {
                         return Command::perform(
                             async move {
                                 let _ = daemon::delete(&socket, &query, &key);
-                                daemon::query(&s, &q, offset, PAGE_SIZE).unwrap_or((Vec::new(), 0))
+                                daemon::query(&s, &q, offset, PAGE_SIZE).unwrap_or((None, Vec::new(), 0))
                             },
-                            |(entries, total)| Message::EntriesReceived { entries, total },
+                            |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
                         );
                 }
                 Command::none()
@@ -447,9 +463,11 @@ impl Application for HuffiApp {
         };
 
         let content = column![
-            input,
+            row![input, self.prefix_badge()].spacing(8).align_y(iced::Alignment::Center),
             horizontal_rule(1),
             row![list, rail],
+            horizontal_rule(1),
+            self.provider_footer(),
         ]
         .spacing(0)
         .width(Length::Fill)
@@ -501,10 +519,62 @@ impl HuffiApp {
         Command::perform(
             async move {
                 daemon::query(&socket, &query, offset, PAGE_SIZE)
-                    .unwrap_or((Vec::new(), 0))
+                    .unwrap_or((None, Vec::new(), 0))
             },
-            |(entries, total)| Message::EntriesReceived { entries, total },
+            |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
         )
+    }
+
+    fn prefix_badge(&self) -> Element<'_, Message> {
+        let Some(prefix) = self.active_prefix.as_deref() else {
+            return Space::new(Length::Shrink, 1).into();
+        };
+
+        let provider = self
+            .providers
+            .iter()
+            .find(|p| p.prefixes.iter().any(|pfx| pfx == prefix));
+        let label = match provider {
+            Some(p) => format!("{prefix}  {}", p.id),
+            None => prefix.to_string(),
+        };
+
+        container(text(label).size(12).color(MAUVE))
+            .padding([4, 8])
+            .style(|_theme| iced::widget::container::Style {
+                background: Some(SURFACE1.into()),
+                border: iced::Border {
+                    color: MAUVE,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn provider_footer(&self) -> Element<'_, Message> {
+        if self.providers.is_empty() {
+            return Space::new(Length::Fill, 1).into();
+        }
+
+        let parts: Vec<String> = self
+            .providers
+            .iter()
+            .map(|p| {
+                if p.prefixes.is_empty() {
+                    p.id.clone()
+                } else {
+                    format!("{}: {}", p.id, p.prefixes.join(", "))
+                }
+            })
+            .collect();
+
+        text(parts.join("  ·  "))
+            .size(11)
+            .color(SUBTEXT0)
+            .width(Length::Fill)
+            .into()
     }
 
     fn submit(&mut self) -> Command<Message> {

@@ -11,6 +11,22 @@ pub struct ProviderCollection {
     dry_run: bool,
 }
 
+/// A registered provider and its trigger prefixes.
+pub struct ProviderInfo {
+    pub id: String,
+    pub prefixes: Vec<String>,
+}
+
+/// The result of resolving the global prefix for a query.
+///
+/// The longest declared provider prefix that the query starts with wins;
+/// there is at most one active prefix per query.
+pub struct PreprocessedQuery {
+    pub original_query: String,
+    pub prefix: Option<String>,
+    pub query: String,
+}
+
 impl ProviderCollection {
     pub fn new(data_path: impl AsRef<Path>, dry_run: bool) -> anyhow::Result<Self> {
         let scorer = Scorer::open(data_path, dry_run)?;
@@ -30,25 +46,58 @@ impl ProviderCollection {
     }
 
     /// Query providers and score results.
-    pub fn query(&self, query: &str) -> Vec<Scored<EntryMeta>> {
-        let entries = self.entries(query);
-        self.scorer.score(&entries, query)
+    ///
+    /// Returns the resolved global prefix (if any) alongside the scored entries.
+    pub fn query(&self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>) {
+        let pre = self.preprocess_query(query);
+        let entries = self.entries(&pre);
+        let scored = self.scorer.score(&entries, query);
+        (pre.prefix, scored)
+    }
+
+    /// Resolve the global prefix for a query.
+    ///
+    /// Matches the longest declared provider prefix that the query starts
+    /// with. If several prefixes are tied in length, the first declared wins.
+    pub fn preprocess_query(&self, query: &str) -> PreprocessedQuery {
+        let mut longest: Option<&str> = None;
+        for provider in &self.providers {
+            for prefix in provider.prefixes() {
+                if !prefix.is_empty()
+                    && query.starts_with(prefix)
+                    && longest.is_none_or(|current| prefix.len() > current.len())
+                {
+                    longest = Some(prefix);
+                }
+            }
+        }
+
+        match longest {
+            Some(prefix) => PreprocessedQuery {
+                original_query: query.to_string(),
+                prefix: Some(prefix.to_string()),
+                query: query[prefix.len()..].to_string(),
+            },
+            None => PreprocessedQuery {
+                original_query: query.to_string(),
+                prefix: None,
+                query: query.to_string(),
+            },
+        }
     }
 
     /// Query providers without scoring (raw entries).
-    pub fn entries(&self, query: &str) -> Vec<Entry> {
+    pub fn entries(&self, pre: &PreprocessedQuery) -> Vec<Entry> {
         self.providers
             .iter()
             .flat_map(|p| {
-                let matched_prefix = p
-                    .prefixes()
-                    .iter()
-                    .find(|pfx| query.starts_with(*pfx));
-                let (prefix, stripped) = match matched_prefix {
-                    Some(pfx) => (Some(*pfx), &query[pfx.len()..]),
-                    None => (None, query),
-                };
-                p.query(prefix, stripped)
+                let matched = pre.prefix.as_deref().is_some_and(|pfx| {
+                    p.prefixes().contains(&pfx)
+                });
+                match matched {
+                    true => p.query(pre.prefix.as_deref(), &pre.query),
+                    false => p.query(None, &pre.original_query),
+                }
             })
             .collect()
     }
@@ -56,7 +105,7 @@ impl ProviderCollection {
     /// Find an entry by ID and perform a select: record the launch in history,
     /// then execute the entry's action (unless in dry-run mode).
     pub fn select(&self, query: &str, entry_id: &str) {
-        let entries = self.entries(query);
+        let entries = self.entries(&self.preprocess_query(query));
 
         if let Some(key) = entries
             .iter()
@@ -89,11 +138,136 @@ impl ProviderCollection {
         self.scorer.list_entries(prefix)
     }
 
+    /// List registered providers and their trigger prefixes.
+    pub fn providers(&self) -> Vec<ProviderInfo> {
+        self.providers
+            .iter()
+            .map(|p| ProviderInfo {
+                id: p.id().into(),
+                prefixes: p.prefixes().iter().map(|s| s.to_string()).collect(),
+            })
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.providers.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::provider::{entry, Provider};
+
+    type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
+
+    fn collection() -> ProviderCollection {
+        ProviderCollection::new("/tmp/huffi-test-preprocess.json", true).unwrap()
+    }
+
+    struct TrackingProvider {
+        id: String,
+        prefixes: Vec<&'static str>,
+        calls: CallLog,
+    }
+
+    impl TrackingProvider {
+        fn new(id: &str, prefixes: Vec<&'static str>, calls: CallLog) -> Self {
+            Self { id: id.into(), prefixes, calls }
+        }
+    }
+
+    impl Provider for TrackingProvider {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn prefixes(&self) -> &[&str] {
+            &self.prefixes
+        }
+
+        fn init(&mut self) {}
+
+        fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((self.id.clone(), prefix.map(String::from), query.to_string()));
+            vec![entry(&self.id, &self.id).history_key(&self.id).score(1.0)]
+        }
+    }
+
+    #[test]
+    fn preprocess_no_prefix_matches() {
+        let c = collection();
+        let pre = c.preprocess_query("firefox");
+        assert_eq!(pre.prefix, None);
+        assert_eq!(pre.original_query, "firefox");
+        assert_eq!(pre.query, "firefox");
+    }
+
+    #[test]
+    fn preprocess_single_prefix_matches() {
+        let c = collection();
+        let pre = c.preprocess_query("= 2 + 2");
+        assert_eq!(pre.prefix.as_deref(), Some("="));
+        assert_eq!(pre.original_query, "= 2 + 2");
+        assert_eq!(pre.query, " 2 + 2");
+    }
+
+    #[test]
+    fn preprocess_longest_prefix_wins() {
+        let mut c = collection();
+        c.add_provider(Box::new(TrackingProvider::new("long", vec!["=="], Arc::new(Mutex::new(Vec::new())))));
+        let pre = c.preprocess_query("== 2 + 2");
+        assert_eq!(pre.prefix.as_deref(), Some("=="));
+        assert_eq!(pre.query, " 2 + 2");
+    }
+
+    #[test]
+    fn preprocess_multiple_prefixes_on_one_provider() {
+        let mut c = collection();
+        c.add_provider(Box::new(TrackingProvider::new("calc", vec!["=", "=="], Arc::new(Mutex::new(Vec::new())))));
+        let pre = c.preprocess_query("== 2");
+        assert_eq!(pre.prefix.as_deref(), Some("=="));
+        assert_eq!(pre.query, " 2");
+    }
+
+    #[test]
+    fn entries_dispatch_original_query_to_provider_without_global_prefix() {
+        let mut c = collection();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::new(
+            "short",
+            vec!["="],
+            Arc::clone(&calls),
+        )));
+        c.add_provider(Box::new(TrackingProvider::new(
+            "long",
+            vec!["=="],
+            Arc::clone(&calls),
+        )));
+
+        let _ = c.entries(&c.preprocess_query("== 2"));
+
+        let log = calls.lock().unwrap();
+        let short = log.iter().find(|(id, _, _)| id == "short").unwrap();
+        let long = log.iter().find(|(id, _, _)| id == "long").unwrap();
+        assert_eq!(short, &("short".to_string(), None, "== 2".to_string()));
+        assert_eq!(long, &("long".to_string(), Some("==".to_string()), " 2".to_string()));
+    }
+
+    #[test]
+    fn providers_lists_ids_and_prefixes() {
+        let c = collection();
+        let providers = c.providers();
+        assert!(providers.iter().any(|p| p.id == "desktop" && p.prefixes.is_empty()));
+        assert!(providers.iter().any(|p| p.id == "calculator" && p.prefixes == vec!["="]));
     }
 }

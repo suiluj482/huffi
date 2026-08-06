@@ -104,7 +104,10 @@ huffi boost fi finder.desktop
 huffi delete fi firefox.desktop
 
 # Inspect raw scores for a prefix
-huffi list f
+huffi history f
+
+# List providers and their trigger prefixes
+huffi providers
 ```
 
 ---
@@ -125,6 +128,11 @@ huffi list f
 - **Boost / Delete** — correct the model in the moment. Boost is a
   synthetic 10x launch, scoped to the exact prefix. Delete removes the
   association entirely. Both are available in the CLI, UI, and protocol.
+- **Prefix resolution** — each query is preprocessed once to resolve the
+  *global prefix*: the longest declared provider prefix that the input
+  starts with. It is returned with every query result so the UI can mark it
+  (badge next to the input), and providers whose prefixes don't match are
+  still queried with the full input.
 - **Auto-spawning daemon** — no init script or manual setup. The client
   spawns the daemon as a detached child if it isn't running.
 - **Icon support** — SVG and PNG icons loaded from the desktop entry's
