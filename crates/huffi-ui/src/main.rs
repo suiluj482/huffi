@@ -4,7 +4,7 @@ mod theme;
 
 use iced::keyboard::key::Named;
 use iced::keyboard::{self, Event as KeyboardEvent};
-use iced::widget::{button, column, row, container, horizontal_rule, text, text_input, Space};
+use iced::widget::{button, column, row, container, horizontal_rule, mouse_area, text, text_input, Space};
 use iced::widget::image as iced_image;
 use iced::widget::svg as iced_svg;
 use iced::{Element, Length, Subscription, Task as Command};
@@ -18,6 +18,7 @@ use discrete_scrollbar::DiscreteScrollbar;
 
 const PAGE_SIZE: usize = 10;
 const KEY_REPEAT_INTERVAL: Duration = Duration::from_millis(80);
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(300);
 
 use theme::{BASE, ICON_SIZE, MAUVE, SUBTEXT0, SURFACE0, SURFACE1, TEXT};
 
@@ -85,6 +86,7 @@ struct HuffiApp {
     entries: Vec<huffi_protocol::QueryHit>,
     total: usize,
     selected: usize,
+    last_click: Option<(usize, Instant)>,
     last_key_time: Instant,
     socket_path: std::path::PathBuf,
 }
@@ -99,6 +101,7 @@ enum Message {
     Boost(usize),
     Delete(usize),
     Scrolled(usize),
+    RowPressed(usize),
     MouseWheel { y: f32 },
     Dismiss,
     IcedEvent(iced::Event),
@@ -123,6 +126,7 @@ impl Application for HuffiApp {
                 entries: Vec::new(),
                 total: 0,
                 selected: 0,
+                last_click: None,
                 last_key_time: Instant::now(),
                 socket_path,
             },
@@ -240,6 +244,33 @@ impl Application for HuffiApp {
                     self.fetch_page()
                 } else {
                     Command::none()
+                }
+            }
+
+            Message::RowPressed(index) => {
+                if index >= self.total {
+                    return Command::none();
+                }
+                let now = Instant::now();
+                let is_double = matches!(
+                    self.last_click,
+                    Some((prev_index, prev_time))
+                        if prev_index == index && now.duration_since(prev_time) < DOUBLE_CLICK_INTERVAL
+                );
+                self.last_click = Some((index, now));
+
+                let old_page = self.page();
+                self.selected = index;
+                let cmd = if self.page() != old_page {
+                    self.fetch_page()
+                } else {
+                    Command::none()
+                };
+
+                if is_double {
+                    self.submit()
+                } else {
+                    cmd
                 }
             }
 
@@ -479,7 +510,12 @@ impl Application for HuffiApp {
                         })
                 };
 
-            list = list.push(row);
+            let global_index = self.page() * PAGE_SIZE + i;
+            list = list.push(
+                mouse_area(row)
+                    .interaction(iced::mouse::Interaction::Pointer)
+                    .on_press(Message::RowPressed(global_index)),
+            );
         }
 
         let rail: Element<'_, Message> = if self.total == 0 {
