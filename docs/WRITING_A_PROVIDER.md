@@ -140,9 +140,8 @@ When the user selects an entry, its `Action` is performed:
 
 - **`.exec(args)`** — spawns the command as a child process with stdout and
   stderr discarded. The first element of `args` is the program to run.
-- **`.terminal_exec(args)`** — same, but the `terminal: true` flag informs
-  the daemon this should run in a terminal (the actual terminal launch
-  behaviour is not yet implemented — the flag is reserved for future use).
+- **`.terminal_exec(args)`** — same, but the command is launched inside a
+  terminal emulator (`kitty`) instead.
 
 If no action is set, selection does nothing (`Action::NoOp`).
 

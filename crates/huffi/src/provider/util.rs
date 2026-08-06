@@ -3,6 +3,8 @@ use crate::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta};
 
+const TERMINAL: &str = "kitty";
+
 #[derive(Debug, Clone)]
 pub enum Action {
     Exec { args: Vec<String>, terminal: bool },
@@ -12,16 +14,23 @@ pub enum Action {
 impl Action {
     pub fn perform(&self) {
         match self {
-            Action::Exec { args, terminal: _ } => {
+            Action::Exec { args, terminal } => {
+                let mut args = args.clone();
+                if *terminal {
+                    args.splice(0..0, [
+                        TERMINAL.to_owned(), 
+                        "--".to_owned()
+                    ]);
+                }
                 let Some(program) = args.first() else {
                     return;
                 };
-                if let Err(e) = std::process::Command::new(program)
+                let result = std::process::Command::new(program)
                     .args(&args[1..])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
+                    .spawn();
+                if let Err(e) = result {
                     eprintln!("failed to launch {program}: {e}");
                 }
             }
