@@ -31,6 +31,7 @@ in
         ExecStart = lib.getExe' cfg.package "huffi-daemon";
         Restart = "on-failure";
         RestartSec = 1;
+        KillMode = "process";
       };
 
       Install = {

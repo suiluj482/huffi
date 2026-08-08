@@ -1,3 +1,6 @@
+use std::process::{Command, Stdio};
+use std::os::unix::process::CommandExt;
+
 use crate::provider::ICON_SIZE;
 use crate::scoring::{MatchField, Rank};
 
@@ -25,10 +28,12 @@ impl Action {
                 let Some(program) = args.first() else {
                     return;
                 };
-                let result = std::process::Command::new(program)
+                let result = Command::new(program)
                     .args(&args[1..])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .process_group(0)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .spawn();
                 if let Err(e) = result {
                     eprintln!("failed to launch {program}: {e}");
