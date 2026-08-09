@@ -7,6 +7,7 @@ use crate::scoring::{MatchField, Rank};
 use super::{Entry, EntryMeta};
 
 const TERMINAL: &str = "kitty";
+const CLIPBOARD: &str = "wl-copy";
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -108,6 +109,15 @@ impl EntryBuilder {
         self
     }
 
+    /// Set the action to copy `value` to the clipboard via `wl-copy`.
+    pub fn clipboard(mut self, value: impl Into<String>) -> Self {
+        self.action = Some(Action::Exec {
+            args: vec![CLIPBOARD.to_owned(), value.into()],
+            terminal: false,
+        });
+        self
+    }
+
     pub fn history_key(mut self, key: impl Into<String>) -> Self {
         self.history_key = Some(key.into());
         self
@@ -120,6 +130,15 @@ impl EntryBuilder {
 
     pub fn match_fields(mut self, fields: Vec<MatchField>) -> Entry {
         self.rank = Some(Rank::MatchFields(fields));
+        self.build()
+    }
+
+    /// Convenience for a single fuzzy-match field at weight 1.0.
+    pub fn match_field(mut self, text: impl Into<String>) -> Entry {
+        self.rank = Some(Rank::MatchFields(vec![MatchField {
+            text: text.into(),
+            weight: 1.0,
+        }]));
         self.build()
     }
 

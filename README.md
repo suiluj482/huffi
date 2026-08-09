@@ -173,6 +173,7 @@ The project is a Rust workspace with four crates:
 |---|---|---|
 | `DesktopEntryProvider` | (always active) | `freedesktop-desktop-entry` — reads `.desktop` files |
 | `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard |
+| `MetaProvider` | `@` prefix | daemon state — uptime, socket path, pid, version (select copies the value) |
 
 The `Provider` trait lets you plug arbitrary data sources into the
 launcher. See **[docs/WRITING_A_PROVIDER.md](docs/WRITING_A_PROVIDER.md)**

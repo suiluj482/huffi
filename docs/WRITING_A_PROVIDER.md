@@ -108,9 +108,11 @@ and used to refer back to this entry (e.g. for selection).
 | `.extra(json)` | `serde_json::Value` | Arbitrary metadata forwarded to the client |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
+| `.clipboard(value)` | `String` | Copy `value` to the clipboard via `wl-copy` on selection |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
 | `.match_fields(fields)` | `Vec<MatchField>` | Fuzzy-match these weighted text fields |
+| `.match_field(text)` | `String` | Shortcut for a single fuzzy-match field at weight 1.0 |
 
 Only one of `.score()` or `.match_fields()` may be used on a single entry.
 If neither is called, the entry gets a default score of `1.0`.

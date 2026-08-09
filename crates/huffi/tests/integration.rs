@@ -162,6 +162,28 @@ fn query_reports_active_prefix() {
 }
 
 #[test]
+fn meta_provider_answers_at_prefix() {
+    let daemon = DaemonProcess::start();
+    let resp = daemon.send(&Request::Query {
+        query: "@socket".into(),
+        offset: 0,
+        length: 20,
+    });
+
+    match resp {
+        Response::QueryResult { prefix, results, .. } => {
+            assert_eq!(prefix.as_deref(), Some("@"));
+            let socket = results
+                .iter()
+                .find(|r| r.entry_id == "meta-socket")
+                .expect("meta-socket hit");
+            assert_eq!(socket.subtitle.as_deref(), daemon.socket.to_str());
+        }
+        other => panic!("expected QueryResult, got {other:?}"),
+    }
+}
+
+#[test]
 fn providers_lists_entries() {
     let daemon = DaemonProcess::start();
     let resp = daemon.send(&Request::Providers);
@@ -171,6 +193,7 @@ fn providers_lists_entries() {
             assert!(!entries.is_empty());
             assert!(entries.iter().any(|e| e.id == "desktop"));
             assert!(entries.iter().any(|e| e.id == "calculator"));
+            assert!(entries.iter().any(|e| e.id == "meta"));
         }
         other => panic!("expected Providers, got {other:?}"),
     }

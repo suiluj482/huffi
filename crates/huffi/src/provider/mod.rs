@@ -10,10 +10,12 @@
 //! |---|---|---|
 //! | [`DesktopEntryProvider`] | (always active) | `freedesktop-desktop-entry` — `.desktop` files |
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
+//! | [`MetaProvider`] | `@` prefix | daemon state — uptime, socket path, pid, version |
 
 pub mod calculator;
 pub mod collection;
 pub mod desktop;
+pub mod meta;
 pub mod test_provider;
 pub mod util;
 
@@ -101,6 +103,7 @@ pub use collection::{ProviderCollection, ProviderInfo};
 
 pub use calculator::CalculatorProvider;
 pub use desktop::DesktopEntryProvider;
+pub use meta::MetaProvider;
 pub use test_provider::TestProvider;
 pub use util::lookup_icon;
 pub use util::split_command;

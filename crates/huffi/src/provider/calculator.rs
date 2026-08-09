@@ -65,14 +65,16 @@ impl Provider for CalculatorProvider {
             one_line(ctx, query)
         };
 
-        let (title, args) = match result {
-            Ok(value) => (value.clone(), vec!["wl-copy".into(), value]),
-            Err(err) => (err, vec!["true".into()]),
+        let (title, value) = match result {
+            Ok(value) => (value.clone(), Some(value)),
+            Err(err) => (err, None),
         };
 
-        let mut e = entry("huffi-calculator", &title)
-            .exec(args)
-            .history_key("huffi-calculator");
+        let mut e = entry("huffi-calculator", &title).history_key("huffi-calculator");
+
+        if let Some(value) = value {
+            e = e.clipboard(value);
+        }
 
         if let Some(ref icon) = self.icon {
             e = e.icon(icon);

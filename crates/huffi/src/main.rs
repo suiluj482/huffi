@@ -67,6 +67,12 @@ fn main() -> anyhow::Result<()> {
     let mut provider_collection = ProviderCollection::new(&data_path, dry_run)?;
     eprintln!("history loaded from {}", data_path.display());
 
+    provider_collection.add_provider(Box::new(huffi::provider::MetaProvider::new(
+        &socket_path,
+        &data_path,
+        dry_run,
+    )));
+
     if dry_run {
         use huffi::provider::entry;
         use huffi::provider::TestProvider;
