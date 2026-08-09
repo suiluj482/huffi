@@ -83,6 +83,7 @@ impl Daemon {
                     comment: entry.comment,
                     icon: entry.icon,
                     extra: entry.extra,
+                    set_query: entry.set_query,
                 }
             })
             .collect();

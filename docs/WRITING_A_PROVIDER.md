@@ -110,6 +110,7 @@ and used to refer back to this entry (e.g. for selection).
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard via `wl-copy` on selection |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
+| `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
 | `.match_fields(fields)` | `Vec<MatchField>` | Fuzzy-match these weighted text fields |
 | `.match_field(text)` | `String` | Shortcut for a single fuzzy-match field at weight 1.0 |
@@ -158,6 +159,26 @@ from usage. This is appropriate for ephemeral or computed entries.
 The `history_key` should be stable across daemon restarts, same as `id`.
 Often they are the same value.
 
+### Query suggestions
+
+Setting `.set_query(query)` gives the entry a query suggestion. When it is the
+currently selected entry and the user presses `Tab`, the UI replaces the
+input with the suggestion and re-runs the search. Pressing `Tab` on an entry 
+without `set_query` does nothing.
+
+The suggestion doesn't have to be a completion of what the user typed — it
+can be a completely different query. This is useful for chaining entries
+that produce a value. The [`CalculatorProvider`] sets its suggestion to the
+prefix plus the computed result, so pressing `Tab` on the `= 2 + 2` result
+switches the input to `= 4` and lets you keep calculating without retyping
+the `=` prefix.
+
+```rust
+entry("my-calculator", "4")
+    .set_query("= 4")
+    .score(1.0)
+```
+
 ### Action: what happens on selection
 
 When the user selects an entry, its `Action` is performed:
@@ -202,7 +223,8 @@ impl Provider for CustomDirProvider {
 
 See [`CalculatorProvider`] in the source — it triggers on `=`, evaluates
 expressions with [`rink-core`], and returns a single entry with the computed
-result as its title.
+result as its title and a `.set_query("= …")` query suggestion so `Tab`
+chains calculations.
 
 ## Registering a provider
 

@@ -73,7 +73,8 @@ impl Provider for CalculatorProvider {
         let mut e = entry("huffi-calculator", &title).history_key("huffi-calculator");
 
         if let Some(value) = value {
-            e = e.clipboard(value);
+            e = e.clipboard(value.clone());
+            e = e.set_query(format!("={value}"));
         }
 
         if let Some(ref icon) = self.icon {

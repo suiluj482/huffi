@@ -81,6 +81,7 @@ pub struct QueryHit {
     pub comment: Option<String>,
     pub icon: Option<String>,
     pub extra: Option<serde_json::Value>,
+    pub set_query: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,6 +184,7 @@ mod tests {
                     comment: Some("Browse the World Wide Web".into()),
                     icon: Some("firefox".into()),
                     extra: None,
+                    set_query: None,
                 },
                 QueryHit {
                     entry_id: "finder.desktop".into(),
@@ -195,6 +197,7 @@ mod tests {
                     comment: None,
                     icon: Some("org.gnome.Nautilus".into()),
                     extra: None,
+                    set_query: Some("= 2 + 2".into()),
                 },
             ],
             total: 2,

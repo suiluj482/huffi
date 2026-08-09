@@ -57,6 +57,7 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
         action: None,
         rank: None,
         history_key: None,
+        set_query: None,
     }
 }
 
@@ -71,6 +72,7 @@ pub struct EntryBuilder {
     action: Option<Action>,
     rank: Option<Rank>,
     history_key: Option<String>,
+    set_query: Option<String>,
 }
 
 impl EntryBuilder {
@@ -123,6 +125,12 @@ impl EntryBuilder {
         self
     }
 
+    /// Set the query suggestion the UI applies when this entry is tab-selected.
+    pub fn set_query(mut self, query: impl Into<String>) -> Self {
+        self.set_query = Some(query.into());
+        self
+    }
+
     pub fn score(mut self, score: f32) -> Entry {
         self.rank = Some(Rank::Score(score));
         self.build()
@@ -152,6 +160,7 @@ impl EntryBuilder {
                 comment: self.comment,
                 icon: self.icon,
                 extra: self.extra,
+                set_query: self.set_query,
                 action: self.action.unwrap_or(Action::NoOp),
             },
             rank: self.rank.unwrap_or(Rank::Score(1.0)),

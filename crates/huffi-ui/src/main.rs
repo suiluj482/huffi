@@ -173,15 +173,7 @@ impl Application for HuffiApp {
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
             Message::InputChanged(text) => {
-                self.query = text;
-                self.selected = 0;
-
-                let query = self.query.clone();
-                let socket = self.socket_path.clone();
-                Command::perform(
-                    async move { daemon::query(&socket, &query, 0, PAGE_SIZE).unwrap_or((None, Vec::new(), 0)) },
-                    |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
-                )
+                self.set_query(text)
             }
 
             Message::EntriesReceived { prefix, entries, total } => {
@@ -364,24 +356,13 @@ impl Application for HuffiApp {
                             return Command::none();
                         }
                         let local = self.selected % PAGE_SIZE;
-                        let old_page = self.page();
-                        if local + 1 < self.entries.len() {
-                            self.selected += 1;
-                            Command::none()
-                        } else if self.entries.len() == PAGE_SIZE {
-                            self.selected += 1;
-                            if self.page() != old_page {
-                                self.fetch_page()
-                            } else {
-                                Command::none()
-                            }
-                        } else {
-                            self.selected = 0;
-                            if old_page != 0 {
-                                self.fetch_page()
-                            } else {
-                                Command::none()
-                            }
+                        match self
+                            .entries
+                            .get(local)
+                            .and_then(|h| h.set_query.clone())
+                        {
+                            Some(set_query) => self.set_query(set_query),
+                            None => Command::none(),
                         }
                     }
 
@@ -583,6 +564,21 @@ impl HuffiApp {
         Command::perform(
             async move {
                 daemon::query(&socket, &query, offset, PAGE_SIZE)
+                    .unwrap_or((None, Vec::new(), 0))
+            },
+            |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },
+        )
+    }
+
+    fn set_query(&mut self, text: String) -> Command<Message> {
+        self.query = text;
+        self.selected = 0;
+
+        let query = self.query.clone();
+        let socket = self.socket_path.clone();
+        Command::perform(
+            async move {
+                daemon::query(&socket, &query, 0, PAGE_SIZE)
                     .unwrap_or((None, Vec::new(), 0))
             },
             |(prefix, entries, total)| Message::EntriesReceived { prefix, entries, total },

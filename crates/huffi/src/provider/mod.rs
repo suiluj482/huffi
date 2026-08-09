@@ -36,6 +36,7 @@ pub struct EntryMeta {
     pub comment: Option<String>,
     pub icon: Option<String>,
     pub extra: Option<serde_json::Value>,
+    pub set_query: Option<String>,
     pub action: Action,
 }
 

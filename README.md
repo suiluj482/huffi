@@ -67,7 +67,8 @@ daemon as a child process on first use.
 ### `huffi-ui` — Wayland layershell GUI
 
 A floating overlay that appears with keyboard focus. Start typing to fuzzy
-search, use arrow keys or tab to navigate, and press enter to launch.
+search, use arrow keys to navigate, press tab to use the selected entry's
+query suggestion (if defined), and press enter to launch.
 
 ```console
 huffi-ui                        # launch empty
@@ -79,7 +80,7 @@ huffi-ui -q "= 2 + 2"           # shorthand (note: quote for spaces)
 |---|---|
 | Type | Fuzzy search |
 | `↓` / `↑` | Select next / previous |
-| `Tab` | Select next (wraps) |
+| `Tab` | Apply the selected entry's query suggestion (if defined) |
 | `Enter` | Launch selection |
 | `Esc` | Dismiss |
 | Mouse wheel | Scroll results |
@@ -126,7 +127,8 @@ huffi providers
   the full design.
 - **Calculator** — type `=` followed by an expression to evaluate via
   [`rink-core`](https://github.com/tiffany352/rink-rs). Results are copied
-  to the clipboard with `wl-copy`.
+  to the clipboard with `wl-copy`, and `Tab` uses its `= <result>` query
+  suggestion to chain calculations.
 - **Desktop entries** — parses `.desktop` files via
   [`freedesktop-desktop-entry`](https://crates.io/crates/freedesktop-desktop-entry),
   matching against name, keywords, generic name, and comment with field
@@ -172,7 +174,7 @@ The project is a Rust workspace with four crates:
 | Provider | Trigger | Source |
 |---|---|---|
 | `DesktopEntryProvider` | (always active) | `freedesktop-desktop-entry` — reads `.desktop` files |
-| `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard |
+| `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard, `Tab` applies its query suggestion |
 | `MetaProvider` | `@` prefix | daemon state — uptime, socket path, pid, version (select copies the value) |
 
 The `Provider` trait lets you plug arbitrary data sources into the
