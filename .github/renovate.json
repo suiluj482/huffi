@@ -1,0 +1,50 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":enableVulnerabilityAlertsWithAdditionalLabel(security)",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "schedule": ["on Monday"],
+  "labels": ["dependencies"],
+  "osvVulnerabilityAlerts": true,
+  "minimumReleaseAge": "3 days",
+
+  "nix": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on monday"]
+  },
+  "packageRules": [
+    { 
+      "matchUpdateTypes": ["lockFileMaintenance"], 
+      "minimumReleaseAge": null 
+    },
+    { 
+      "matchUpdateTypes": ["pin", "pinDigest", "digest"], 
+      "minimumReleaseAge": null 
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "cargo non-major",
+      "automerge": "true"
+    },
+    { 
+      "matchManagers": ["cargo"], 
+      "matchUpdateTypes": ["major"], 
+      "groupName": "cargo major", 
+      "addLabels": ["major"] },
+    { 
+      "matchManagers": ["nix"], 
+      "groupName": "flake inputs" 
+    },
+    { 
+      "matchManagers": ["github-actions"], 
+      "addLabels": ["github-actions"], 
+      "groupName": "GitHub Actions"
+    }
+  ]
+}
