@@ -30,7 +30,7 @@
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["patch", "minor"],
       "groupName": "cargo non-major",
-      "automerge": "true"
+      "automerge": true
     },
     { 
       "matchManagers": ["cargo"], 
