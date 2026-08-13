@@ -326,7 +326,11 @@ mod tests {
 
     #[test]
     fn entries_are_stamped_with_provider_id() {
-        let c = collection();
+        let mut c = collection();
+        c.add_provider(Box::new(TestProvider::new(
+            "desktop",
+            vec![match_fields_entry("desktop", "Firefox")],
+        )));
         let entries = c.entries(&c.preprocess_query("firefox"));
         for e in &entries {
             assert!(e.entry.provider_id.is_some());
