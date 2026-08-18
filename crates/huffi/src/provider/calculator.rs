@@ -1,12 +1,10 @@
-use std::sync::Mutex;
-
 use rink_core::{simple_context, one_line};
 
 use crate::provider::{Entry, Provider, entry, lookup_icon};
 
 pub struct CalculatorProvider {
     id: String,
-    ctx: Mutex<Option<rink_core::Context>>,
+    ctx: Option<rink_core::Context>,
     icon: Option<String>,
 }
 
@@ -20,7 +18,7 @@ impl CalculatorProvider {
     pub fn new() -> Self {
         Self {
             id: "calculator".into(),
-            ctx: Mutex::new(None),
+            ctx: None,
             icon: None,
         }
     }
@@ -39,7 +37,7 @@ impl Provider for CalculatorProvider {
         match simple_context() {
             Ok(ctx) => {
                 eprintln!("[calculator] rink context initialized");
-                *self.ctx.lock().unwrap() = Some(ctx);
+                self.ctx = Some(ctx);
             }
             Err(e) => {
                 eprintln!("[calculator] failed to init rink context: {e}");
@@ -48,13 +46,12 @@ impl Provider for CalculatorProvider {
         self.icon = lookup_icon("accessories-calculator");
     }
 
-    fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
+    fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
         let Some(_prefix) = prefix else {
             return vec![];
         };
 
-        let mut guard = self.ctx.lock().unwrap();
-        let Some(ctx) = guard.as_mut() else {
+        let Some(ctx) = self.ctx.as_mut() else {
             eprintln!("[calculator] no rink context");
             return vec![];
         };

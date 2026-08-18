@@ -48,7 +48,7 @@ impl Provider for DesktopEntryProvider {
         );
     }
 
-    fn query(&self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         self.entries.to_vec()
     }
 }

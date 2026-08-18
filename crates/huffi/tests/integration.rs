@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use huffi_protocol::{read_message, write_message, Request, Response};
 
-const DAEMON_START_RETRIES: u32 = 80;
+const DAEMON_START_RETRIES: u32 = 400;
 const DAEMON_START_DELAY_MS: u64 = 25;
-const DAEMON_READ_TIMEOUT_SECS: u64 = 5;
+const DAEMON_READ_TIMEOUT_SECS: u64 = 10;
 
 static SOCK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
