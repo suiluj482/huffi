@@ -56,7 +56,7 @@ impl Provider for MetaProvider {
 
     fn init(&mut self) {}
 
-    fn query(&self, prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         let Some(_prefix) = prefix else {
             return vec![];
         };
@@ -191,14 +191,14 @@ mod tests {
 
     #[test]
     fn empty_without_prefix() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
         assert!(p.query(None, "").is_empty());
         assert!(p.query(None, "uptime").is_empty());
     }
 
     #[test]
     fn returns_entries_with_prefix() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
         let entries = p.query(Some("@"), "");
         assert_eq!(entries.len(), 11);
         assert!(entries.iter().any(|e| e.entry.id == "meta-uptime"));
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn memory_and_threads_entries_carry_values() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
         let entries = p.query(Some("@"), "");
         let memory = entries
             .iter()
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn kill_entry_runs_kill_on_pid() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
         let entries = p.query(Some("@"), "");
         let kill = entries
             .iter()
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn open_data_entry_runs_xdg_open() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
         let entries = p.query(Some("@"), "");
         let open = entries
             .iter()
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn socket_entry_carries_value_and_copy_action() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
         let entries = p.query(Some("@"), "sock");
         let socket = entries
             .iter()
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn dry_run_reflected_in_entry() {
-        let p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
         let entries = p.query(Some("@"), "");
         let dry = entries
             .iter()
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn value_not_in_match_fields() {
-        let p = MetaProvider::new("/tmp/unlikely-path.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/unlikely-path.sock", "/tmp/data.json", false);
         let entries = p.query(Some("@"), "");
         let socket = entries
             .iter()

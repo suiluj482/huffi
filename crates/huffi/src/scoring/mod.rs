@@ -1,8 +1,6 @@
 pub mod base_scorer;
 pub mod history;
 
-use std::sync::Mutex;
-
 use base_scorer::BaseScorer;
 use history::{HistoryStore, KeyedHistoryRecord};
 
@@ -54,16 +52,16 @@ pub struct Scored<T> {
 }
 
 pub struct Scorer {
-    history: Mutex<HistoryStore>,
-    base_scorer: Mutex<BaseScorer>,
+    history: HistoryStore,
+    base_scorer: BaseScorer,
 }
 
 impl Scorer {
     pub fn open(path: impl AsRef<std::path::Path>, dry_run: bool) -> anyhow::Result<Self> {
         let history = HistoryStore::open(path, dry_run)?;
         Ok(Self {
-            history: Mutex::new(history),
-            base_scorer: Mutex::new(BaseScorer::new()),
+            history,
+            base_scorer: BaseScorer::new(),
         })
     }
 
@@ -73,11 +71,9 @@ impl Scorer {
     /// query for the provider whose prefix matched, the original query for
     /// everyone else). `history_query` is used for history lookup and stays
     /// the user's original input.
-    pub fn score<T>(&self, groups: Vec<QueryGroup<T>>, history_query: &str) -> Vec<Scored<T>> {
-        let history = self.history.lock().unwrap();
-        let mut base_scorer = self.base_scorer.lock().unwrap();
-        let base_scored = base_scorer.base_scoring(groups);
-        let mut scored = history.history_scoring(history_query, base_scored);
+    pub fn score<T>(&mut self, groups: Vec<QueryGroup<T>>, history_query: &str) -> Vec<Scored<T>> {
+        let base_scored = self.base_scorer.base_scoring(groups);
+        let mut scored = self.history.history_scoring(history_query, base_scored);
         scored.sort_by(|a, b| {
             b.combined
                 .partial_cmp(&a.combined)
@@ -86,19 +82,19 @@ impl Scorer {
         scored
     }
 
-    pub fn record_launch(&self, query: &str, history_key: &str) {
-        self.history.lock().unwrap().record_launch(query, history_key);
+    pub fn record_launch(&mut self, query: &str, history_key: &str) {
+        self.history.record_launch(query, history_key);
     }
 
-    pub fn record_boost(&self, query: &str, history_key: &str, weight: f64) {
-        self.history.lock().unwrap().record_boost(query, history_key, weight);
+    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64) {
+        self.history.record_boost(query, history_key, weight);
     }
 
-    pub fn delete(&self, query: &str, history_key: &str) {
-        self.history.lock().unwrap().delete(query, history_key);
+    pub fn delete(&mut self, query: &str, history_key: &str) {
+        self.history.delete(query, history_key);
     }
 
-    pub fn list_entries(&self, prefix: &str) -> Vec<KeyedHistoryRecord> {
-        self.history.lock().unwrap().list_entries(prefix)
+    pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
+        self.history.list_entries(prefix)
     }
 }

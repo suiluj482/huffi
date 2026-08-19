@@ -35,7 +35,7 @@ impl Provider for TestProvider {
 
     fn init(&mut self) {}
 
-    fn query(&self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         self.entries.clone()
     }
 }

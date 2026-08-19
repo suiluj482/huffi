@@ -54,9 +54,10 @@ impl ProviderCollection {
     /// query.
     ///
     /// Returns the resolved global prefix (if any) alongside the scored entries.
-    pub fn query(&self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>) {
+    pub fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>) {
         let pre = self.preprocess_query(query);
-        let scored = self.scorer.score(self.grouped_entries(&pre), query);
+        let groups = self.grouped_entries(&pre);
+        let scored = self.scorer.score(groups, query);
         (pre.prefix, scored)
     }
 
@@ -92,7 +93,7 @@ impl ProviderCollection {
     }
 
     /// Query providers without scoring (raw entries).
-    pub fn entries(&self, pre: &PreprocessedQuery) -> Vec<Entry> {
+    pub fn entries(&mut self, pre: &PreprocessedQuery) -> Vec<Entry> {
         self.grouped_entries(pre)
             .into_iter()
             .flat_map(|g| g.entries)
@@ -101,9 +102,9 @@ impl ProviderCollection {
 
     /// Query each provider and group its entries with the query they should
     /// be fuzzy-scored against. Entries are annotated with their provider id.
-    fn grouped_entries(&self, pre: &PreprocessedQuery) -> Vec<QueryGroup<EntryMeta>> {
+    fn grouped_entries(&mut self, pre: &PreprocessedQuery) -> Vec<QueryGroup<EntryMeta>> {
         self.providers
-            .iter()
+            .iter_mut()
             .map(|p| {
                 let matched = pre
                     .prefix
@@ -128,8 +129,9 @@ impl ProviderCollection {
 
     /// Find an entry by ID and perform a select: record the launch in history,
     /// then execute the entry's action (unless in dry-run mode).
-    pub fn select(&self, query: &str, entry_id: &str) {
-        let entries = self.entries(&self.preprocess_query(query));
+    pub fn select(&mut self, query: &str, entry_id: &str) {
+        let pre = self.preprocess_query(query);
+        let entries = self.entries(&pre);
 
         if let Some(key) = entries
             .iter()
@@ -146,19 +148,19 @@ impl ProviderCollection {
         }
     }
 
-    pub fn record_launch(&self, query: &str, history_key: &str) {
+    pub fn record_launch(&mut self, query: &str, history_key: &str) {
         self.scorer.record_launch(query, history_key);
     }
 
-    pub fn record_boost(&self, query: &str, history_key: &str, weight: f64) {
+    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64) {
         self.scorer.record_boost(query, history_key, weight);
     }
 
-    pub fn delete(&self, query: &str, history_key: &str) {
+    pub fn delete(&mut self, query: &str, history_key: &str) {
         self.scorer.delete(query, history_key);
     }
 
-    pub fn list_entries(&self, prefix: &str) -> Vec<KeyedHistoryRecord> {
+    pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
         self.scorer.list_entries(prefix)
     }
 
@@ -219,7 +221,7 @@ mod tests {
 
         fn init(&mut self) {}
 
-        fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
+        fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
             self.calls
                 .lock()
                 .unwrap()
@@ -279,7 +281,8 @@ mod tests {
             Arc::clone(&calls),
         )));
 
-        let _ = c.entries(&c.preprocess_query("== 2"));
+        let pre = c.preprocess_query("== 2");
+        let _ = c.entries(&pre);
 
         let log = calls.lock().unwrap();
         let short = log.iter().find(|(id, _, _)| id == "short").unwrap();
@@ -331,7 +334,8 @@ mod tests {
             "desktop",
             vec![match_fields_entry("desktop", "Firefox")],
         )));
-        let entries = c.entries(&c.preprocess_query("firefox"));
+        let pre = c.preprocess_query("firefox");
+        let entries = c.entries(&pre);
         for e in &entries {
             assert!(e.entry.provider_id.is_some());
         }

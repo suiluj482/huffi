@@ -86,18 +86,18 @@ pub type ScoredEntry = Scored<EntryMeta>;
 ///     fn id(&self) -> &str { "my" }
 ///     fn prefixes(&self) -> &[&str] { &[] }
 ///     fn init(&mut self) { /* populate self.entries */ }
-///     fn query(&self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+///     fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
 ///         self.entries.clone()
 ///     }
 /// }
 /// ```
 ///
 /// See [`CalculatorProvider`] for a real provider with a prefix trigger.
-pub trait Provider: Send + Sync {
+pub trait Provider: Send {
     fn id(&self) -> &str;
     fn prefixes(&self) -> &[&str];
     fn init(&mut self);
-    fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
+    fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
 }
 
 pub use collection::{ProviderCollection, ProviderInfo};
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_provider_returns_entries() {
-        let provider = TestProvider::new("test", sample_entries());
+        let mut provider = TestProvider::new("test", sample_entries());
         let entries = provider.query(None, "");
         assert_eq!(entries.len(), 3);
     }
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_provider_clone_entries() {
-        let provider = TestProvider::new("test", sample_entries());
+        let mut provider = TestProvider::new("test", sample_entries());
         let a = provider.query(None, "");
         let b = provider.query(None, "");
         assert_eq!(a.len(), b.len());
