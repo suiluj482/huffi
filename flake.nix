@@ -37,6 +37,7 @@
             rustfmt
             rust-analyzer
             pkg-config
+            cargo-deny
           ];
 
           buildInputs = with pkgs; [
