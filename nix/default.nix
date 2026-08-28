@@ -2,6 +2,7 @@
 , rustPlatform
 , pkg-config
 , makeBinaryWrapper
+, wrapGAppsHook4
 , wayland
 , wayland-protocols
 , libxkbcommon
@@ -11,6 +12,9 @@
 , libxcursor
 , libxrandr
 , libxi
+, gtk4
+, gtk4-layer-shell
+, librsvg
 }:
 
 rustPlatform.buildRustPackage rec {
@@ -21,7 +25,11 @@ rustPlatform.buildRustPackage rec {
 
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [ pkg-config makeBinaryWrapper ];
+  nativeBuildInputs = [
+    pkg-config
+    makeBinaryWrapper
+    wrapGAppsHook4
+  ];
 
   buildInputs = [
     wayland
@@ -33,11 +41,17 @@ rustPlatform.buildRustPackage rec {
     libxcursor
     libxrandr
     libxi
+    gtk4
+    gtk4-layer-shell
+    librsvg
   ];
 
-  postInstall = ''
+  postFixup = ''
     wrapProgram $out/bin/huffi-ui \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs}
+    wrapProgram $out/bin/huffi-ui-gtk \
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs} \
+      --set GSK_RENDERER gl
   '';
 
   meta = with lib; {

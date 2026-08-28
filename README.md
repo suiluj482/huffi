@@ -54,7 +54,7 @@ programs.huffi = {
 git clone https://github.com/suiluj482/huffi
 cd huffi
 cargo build --release
-# binaries in target/release/: huffi-daemon, huffi, huffi-ui
+# binaries in target/release/: huffi-daemon, huffi, huffi-ui, huffi-ui-gtk
 ```
 
 No root or manual daemon setup is needed — the CLI and UI auto-spawn the
@@ -85,6 +85,23 @@ huffi-ui -q "= 2 + 2"           # shorthand (note: quote for spaces)
 | `Esc` | Dismiss |
 | Mouse wheel | Scroll results |
 | `+` / `−` button | Boost / delete association |
+
+### `huffi-ui-gtk` — GTK4 GUI
+
+A GTK4 frontend with feature parity to `huffi-ui`, using
+[gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) when the compositor
+supports it (falling back to a plain floating window otherwise). Unlike
+`huffi-ui`, it stays **warm**: dismissing hides the window instead of exiting,
+and later invocations hand their query to the running instance over a private
+socket (`$XDG_RUNTIME_DIR/huffi-ui-gtk.sock`) and return immediately — so the
+next launch has no startup cost.
+
+```console
+huffi-ui-gtk                        # first run starts the resident instance
+huffi-ui-gtk --query fire           # instant: wakes the warm instance
+```
+
+Keys, scrolling, boost/delete and suggestions work exactly as in `huffi-ui`.
 
 ### `huffi-daemon` — scoring engine
 
@@ -160,7 +177,7 @@ huffi providers
 
 ## Architecture
 
-The project is a Rust workspace with four crates:
+The project is a Rust workspace with five crates:
 
 | Crate | Binary | Role |
 |---|---|---|
@@ -168,6 +185,7 @@ The project is a Rust workspace with four crates:
 | `huffi-protocol` | — | Shared NDJSON-over-Unix-socket message types and daemon auto-spawn |
 | `huffi-cli` | `huffi` | CLI client for scripting and testing |
 | `huffi-ui` | `huffi-ui` | Wayland layershell GUI built with [`iced_layershell`](https://github.com/Heufneutje/iced_layershell) |
+| `huffi-ui-gtk` | `huffi-ui-gtk` | GTK4 GUI frontend (warm single-instance, layer-shell when available) |
 
 ### Providers
 

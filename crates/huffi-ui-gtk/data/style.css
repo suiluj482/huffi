@@ -1,0 +1,98 @@
+@define-color huffi_base_color #1e1e2e;
+@define-color huffi_surface0_color #313244;
+@define-color huffi_surface1_color #45475a;
+@define-color huffi_text_color #cdd6f4;
+@define-color huffi_subtext0_color #a6adc8;
+@define-color huffi_mauve_color #cba6f7;
+
+window {
+    background: transparent;
+}
+.panel {
+    background-color: @huffi_base_color;
+    padding: 8px;
+}
+.huffi-entry {
+    background-color: @huffi_surface0_color;
+    border: 1.5px solid @huffi_surface1_color;
+    border-radius: 0px;
+    padding: 12px;
+    color: @huffi_text_color;
+    caret-color: @huffi_mauve_color;
+}
+.huffi-entry:focus-within {
+    border-color: @huffi_mauve_color;
+}
+.huffi-entry > text {
+    background-color: transparent;
+    color: @huffi_text_color;
+    caret-color: @huffi_mauve_color;
+}
+.huffi-entry > text > placeholder {
+    color: @huffi_subtext0_color;
+}
+.huffi-entry > text > selection {
+    background-color: @huffi_mauve_color;
+    color: @huffi_base_color;
+}
+.row {
+    background-color: @huffi_surface0_color;
+    padding: 8px;
+    border-bottom: 1px solid @huffi_surface1_color;
+}
+.row-selected {
+    background-color: @huffi_surface1_color;
+    padding: 8px;
+    border-bottom: 1px solid @huffi_surface1_color;
+}
+.title {
+    font-size: 15px;
+    color: @huffi_text_color;
+}
+.title-selected {
+    font-size: 15px;
+    color: @huffi_mauve_color;
+}
+.subtitle {
+    font-size: 12px;
+    font-style: italic;
+    color: @huffi_subtext0_color;
+}
+.subtitle-selected {
+    font-size: 12px;
+    font-style: italic;
+    color: @huffi_mauve_color;
+}
+.score {
+    font-size: 12px;
+    color: @huffi_subtext0_color;
+}
+.score-selected {
+    font-size: 12px;
+    color: @huffi_mauve_color;
+}
+.badge {
+    font-size: 12px;
+    color: @huffi_mauve_color;
+    background-color: @huffi_surface1_color;
+    border: 1px solid @huffi_mauve_color;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+.footer {
+    font-size: 11px;
+    color: @huffi_subtext0_color;
+}
+.flat-btn {
+    min-width: 0;
+    min-height: 0;
+    padding: 0 4px;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    font-size: 12px;
+    color: @huffi_subtext0_color;
+}
+.flat-btn:hover {
+    color: @huffi_mauve_color;
+}

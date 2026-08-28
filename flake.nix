@@ -50,6 +50,9 @@
             libxcursor
             libxrandr
             libxi
+            gtk4
+            gtk4-layer-shell
+            librsvg
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
