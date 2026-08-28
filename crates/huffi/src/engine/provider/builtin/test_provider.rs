@@ -1,4 +1,4 @@
-use crate::provider::{Entry, Provider};
+use crate::engine::provider::{Entry, Provider};
 
 pub struct TestProvider {
     id: String,

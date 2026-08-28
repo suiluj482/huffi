@@ -1,6 +1,6 @@
 use rink_core::{simple_context, one_line};
 
-use crate::provider::{Entry, Provider, entry, lookup_icon};
+use crate::engine::provider::{Entry, Provider, entry, lookup_icon};
 
 pub struct CalculatorProvider {
     id: String,

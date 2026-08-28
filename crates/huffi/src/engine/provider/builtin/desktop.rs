@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::provider::{Entry, Provider, entry, lookup_icon, split_command};
-use crate::scoring::MatchField;
+use crate::engine::provider::{Entry, Provider, entry, lookup_icon, split_command};
+use crate::engine::scoring::MatchField;
 
 pub const WEIGHT_NAME: f32 = 1.0;
 pub const WEIGHT_KEYWORD: f32 = 0.8;

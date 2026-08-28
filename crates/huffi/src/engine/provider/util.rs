@@ -1,8 +1,8 @@
 use std::process::{Command, Stdio};
 use std::os::unix::process::CommandExt;
 
-use crate::provider::ICON_SIZE;
-use crate::scoring::{MatchField, Rank};
+use crate::engine::provider::ICON_SIZE;
+use crate::engine::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta};
 

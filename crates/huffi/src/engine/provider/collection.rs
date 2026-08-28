@@ -1,14 +1,9 @@
-use std::path::Path;
-
-use crate::scoring::history::KeyedHistoryRecord;
-use crate::scoring::{QueryGroup, Scored, Scorer};
+use crate::engine::scoring::QueryGroup;
 
 use super::{CalculatorProvider, DesktopEntryProvider, Entry, EntryMeta, Provider};
 
 pub struct ProviderCollection {
     providers: Vec<Box<dyn Provider>>,
-    scorer: Scorer,
-    dry_run: bool,
 }
 
 /// A registered provider and its trigger prefixes.
@@ -28,8 +23,7 @@ pub struct PreprocessedQuery {
 }
 
 impl ProviderCollection {
-    pub fn new(data_path: impl AsRef<Path>, dry_run: bool) -> anyhow::Result<Self> {
-        let scorer = Scorer::open(data_path, dry_run)?;
+    pub fn new() -> Self {
         let mut providers: Vec<Box<dyn Provider>> = vec![
             Box::new(DesktopEntryProvider::default()),
             Box::new(CalculatorProvider::new()),
@@ -37,28 +31,21 @@ impl ProviderCollection {
         for p in providers.iter_mut() {
             p.init();
         }
-        Ok(Self { providers, scorer, dry_run })
+        Self { providers }
     }
+}
+
+impl Default for ProviderCollection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderCollection {
 
     pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) {
         provider.init();
         self.providers.push(provider);
-    }
-
-    /// Query providers and score results.
-    ///
-    /// Each provider is grouped with the query its entries should be
-    /// fuzzy-matched against: the prefix-stripped query for the provider whose
-    /// prefix matched, the original query for everyone else. All groups are
-    /// normalized together. History is always looked up with the original
-    /// query.
-    ///
-    /// Returns the resolved global prefix (if any) alongside the scored entries.
-    pub fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>) {
-        let pre = self.preprocess_query(query);
-        let groups = self.grouped_entries(&pre);
-        let scored = self.scorer.score(groups, query);
-        (pre.prefix, scored)
     }
 
     /// Resolve the global prefix for a query.
@@ -102,7 +89,11 @@ impl ProviderCollection {
 
     /// Query each provider and group its entries with the query they should
     /// be fuzzy-scored against. Entries are annotated with their provider id.
-    fn grouped_entries(&mut self, pre: &PreprocessedQuery) -> Vec<QueryGroup<EntryMeta>> {
+    ///
+    /// Scoring itself is owned by [`crate::engine::Engine`]; export the raw
+    /// groups here so the engine can hand them to the
+    /// [`Scorer`](crate::engine::scoring::Scorer).
+    pub(crate) fn grouped_entries(&mut self, pre: &PreprocessedQuery) -> Vec<QueryGroup<EntryMeta>> {
         self.providers
             .iter_mut()
             .map(|p| {
@@ -127,41 +118,12 @@ impl ProviderCollection {
             .collect()
     }
 
-    /// Find an entry by ID and perform a select: record the launch in history,
-    /// then execute the entry's action (unless in dry-run mode).
-    pub fn select(&mut self, query: &str, entry_id: &str) {
+    /// Find an entry by ID within the current query's results.
+    pub fn find(&mut self, query: &str, entry_id: &str) -> Option<Entry> {
         let pre = self.preprocess_query(query);
-        let entries = self.entries(&pre);
-
-        if let Some(key) = entries
-            .iter()
+        self.entries(&pre)
+            .into_iter()
             .find(|s| s.entry.id == entry_id)
-            .and_then(|s| s.history_key.clone())
-        {
-            self.scorer.record_launch(query, &key);
-        }
-
-        if !self.dry_run
-            && let Some(s) = entries.iter().find(|s| s.entry.id == entry_id)
-        {
-            s.entry.action.perform();
-        }
-    }
-
-    pub fn record_launch(&mut self, query: &str, history_key: &str) {
-        self.scorer.record_launch(query, history_key);
-    }
-
-    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64) {
-        self.scorer.record_boost(query, history_key, weight);
-    }
-
-    pub fn delete(&mut self, query: &str, history_key: &str) {
-        self.scorer.delete(query, history_key);
-    }
-
-    pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
-        self.scorer.list_entries(prefix)
     }
 
     /// List registered providers and their trigger prefixes.
@@ -189,13 +151,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::provider::{entry, Provider, TestProvider};
-    use crate::scoring::MatchField;
+    use crate::engine::provider::{entry, Provider, TestProvider};
+    use crate::engine::scoring::MatchField;
 
     type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
 
     fn collection() -> ProviderCollection {
-        ProviderCollection::new("/tmp/huffi-test-preprocess.json", true).unwrap()
+        ProviderCollection::new()
     }
 
     struct TrackingProvider {
@@ -298,33 +260,6 @@ mod tests {
                 text: text.into(),
                 weight: 1.0,
             }])
-    }
-
-    #[test]
-    fn prefixed_entries_scored_against_stripped_query() {
-        let mut c = collection();
-        c.add_provider(Box::new(TestProvider::with_prefixes(
-            "pfx",
-            vec!["=="],
-            vec![match_fields_entry("pfx", "Firefox")],
-        )));
-        c.add_provider(Box::new(TestProvider::new(
-            "other",
-            vec![match_fields_entry("other", "Firefox")],
-        )));
-
-        let (prefix, scored) = c.query("==fi");
-
-        assert_eq!(prefix.as_deref(), Some("=="));
-        assert!(
-            scored.iter().any(|s| s.entry.id == "pfx"),
-            "prefixed provider entry should fuzzy-match the stripped query"
-        );
-        assert!(
-            !scored.iter().any(|s| s.entry.id == "other"),
-            "unprefixed provider entry should not fuzzy-match the original query"
-        );
-        assert_eq!(scored[0].entry.provider_id.as_deref(), Some("pfx"));
     }
 
     #[test]

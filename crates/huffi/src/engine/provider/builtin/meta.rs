@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::provider::{Entry, Provider, entry};
+use crate::engine::provider::{Entry, Provider, entry};
 
 /// Provides entries that expose daemon-internal state: uptime, socket path,
 /// data path, pid, version, and dry-run mode.
@@ -245,7 +245,7 @@ mod tests {
             .expect("meta-kill entry");
         assert_eq!(kill.entry.title, "Kill daemon");
         match &kill.entry.action {
-            crate::provider::Action::Exec { args, terminal } => {
+            crate::engine::provider::Action::Exec { args, terminal } => {
                 assert!(!terminal);
                 assert_eq!(args[0], "kill");
                 assert_eq!(args[1], std::process::id().to_string());
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(open.entry.title, "Open data file");
         assert_eq!(open.entry.subtitle.as_deref(), Some("/tmp/data.json"));
         match &open.entry.action {
-            crate::provider::Action::Exec { args, terminal } => {
+            crate::engine::provider::Action::Exec { args, terminal } => {
                 assert!(!terminal);
                 assert_eq!(args, &vec!["xdg-open".to_string(), "/tmp/data.json".to_string()]);
             }
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(socket.entry.title, "Socket path");
         assert_eq!(socket.entry.subtitle.as_deref(), Some("/tmp/x.sock"));
         match &socket.entry.action {
-            crate::provider::Action::Exec { args, terminal } => {
+            crate::engine::provider::Action::Exec { args, terminal } => {
                 assert!(!terminal);
                 assert_eq!(args, &vec!["wl-copy".to_string(), "/tmp/x.sock".to_string()]);
             }
@@ -313,7 +313,7 @@ mod tests {
             .find(|e| e.entry.id == "meta-socket")
             .expect("meta-socket entry");
         match &socket.rank {
-            crate::scoring::Rank::MatchFields(fields) => {
+            crate::engine::scoring::Rank::MatchFields(fields) => {
                 assert!(
                     fields.iter().all(|f| f.text != "/tmp/unlikely-path.sock"),
                     "value should not be fuzzy-matched"

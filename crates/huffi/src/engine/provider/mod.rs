@@ -12,14 +12,11 @@
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | daemon state — uptime, socket path, pid, version |
 
-pub mod calculator;
+pub mod builtin;
 pub mod collection;
-pub mod desktop;
-pub mod meta;
-pub mod test_provider;
 pub mod util;
 
-use crate::scoring::{Scoreable, Scored};
+use crate::engine::scoring::{Scoreable, Scored};
 
 pub const ICON_SIZE: u16 = 32;
 
@@ -71,7 +68,7 @@ pub type ScoredEntry = Scored<EntryMeta>;
 /// the usage-history ranking.
 ///
 /// Entries built with [`score`](util::EntryBuilder::score) use
-/// [`Rank::Score`](crate::scoring::Rank::Score): the value is used as-is
+/// [`Rank::Score`](crate::engine::scoring::Rank::Score): the value is used as-is
 /// (provider contract: `0.0..=1.0`) and is not normalized against fuzzy
 /// matches. Entries built with
 /// [`match_fields`](util::EntryBuilder::match_fields) are fuzzy-scored and
@@ -102,10 +99,7 @@ pub trait Provider: Send {
 
 pub use collection::{ProviderCollection, ProviderInfo};
 
-pub use calculator::CalculatorProvider;
-pub use desktop::DesktopEntryProvider;
-pub use meta::MetaProvider;
-pub use test_provider::TestProvider;
+pub use builtin::{CalculatorProvider, DesktopEntryProvider, MetaProvider, TestProvider};
 pub use util::lookup_icon;
 pub use util::split_command;
 
@@ -119,15 +113,15 @@ mod tests {
                 .comment("Browse the World Wide Web")
                 .icon("firefox")
                 .history_key("firefox.desktop")
-                .match_fields(vec![crate::scoring::MatchField { text: "Firefox".into(), weight: 1.0 }]),
+                .match_fields(vec![crate::engine::scoring::MatchField { text: "Firefox".into(), weight: 1.0 }]),
             entry("org.gnome.Nautilus.desktop", "Files")
                 .comment("Access and organize files")
                 .icon("org.gnome.Nautilus")
                 .history_key("org.gnome.Nautilus.desktop")
-                .match_fields(vec![crate::scoring::MatchField { text: "Files".into(), weight: 1.0 }]),
+                .match_fields(vec![crate::engine::scoring::MatchField { text: "Files".into(), weight: 1.0 }]),
             entry("org.gnome.Calculator.desktop", "Calculator")
                 .icon("accessories-calculator")
-                .match_fields(vec![crate::scoring::MatchField { text: "Calculator".into(), weight: 1.0 }]),
+                .match_fields(vec![crate::engine::scoring::MatchField { text: "Calculator".into(), weight: 1.0 }]),
         ]
     }
 

@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::sync::Mutex;
 
-use crate::provider::ProviderCollection;
+use crate::engine::Engine;
 use huffi_protocol::{
     read_message, write_message, HistoryEntry, ProviderEntry, QueryHit, Request, Response,
 };
@@ -11,13 +11,13 @@ const BOOST_WEIGHT: f64 = 10.0;
 const MAX_RESULTS: usize = 20;
 
 pub struct Daemon {
-    provider_collection: Mutex<ProviderCollection>,
+    engine: Mutex<Engine>,
 }
 
 impl Daemon {
-    pub fn new(provider_collection: ProviderCollection) -> Self {
+    pub fn new(engine: Engine) -> Self {
         Self {
-            provider_collection: Mutex::new(provider_collection),
+            engine: Mutex::new(engine),
         }
     }
 
@@ -41,9 +41,9 @@ impl Daemon {
                 break;
             };
 
-            let mut pc = self.provider_collection.lock().unwrap();
-            let resp = Self::dispatch(&mut pc, req);
-            drop(pc);
+            let mut engine = self.engine.lock().unwrap();
+            let resp = Self::dispatch(&mut engine, req);
+            drop(engine);
 
             if let Err(e) = write_message(&mut writer, &resp) {
                 eprintln!("[{peer}] write error: {e}");
@@ -54,19 +54,19 @@ impl Daemon {
         Ok(())
     }
 
-    fn dispatch(pc: &mut ProviderCollection, req: Request) -> Response {
+    fn dispatch(engine: &mut Engine, req: Request) -> Response {
         match req {
-            Request::Query { query, offset, length } => Self::handle_query(pc, &query, offset, length),
-            Request::Select { query, entry_id } => Self::handle_select(pc, &query, &entry_id),
-            Request::Boost { query, history_key } => Self::handle_boost(pc, &query, &history_key),
-            Request::Delete { query, history_key } => Self::handle_delete(pc, &query, &history_key),
-            Request::History { prefix } => Self::handle_history(pc, &prefix),
-            Request::Providers => Self::handle_providers(pc),
+            Request::Query { query, offset, length } => Self::handle_query(engine, &query, offset, length),
+            Request::Select { query, entry_id } => Self::handle_select(engine, &query, &entry_id),
+            Request::Boost { query, history_key } => Self::handle_boost(engine, &query, &history_key),
+            Request::Delete { query, history_key } => Self::handle_delete(engine, &query, &history_key),
+            Request::History { prefix } => Self::handle_history(engine, &prefix),
+            Request::Providers => Self::handle_providers(engine),
         }
     }
 
-    fn handle_query(pc: &mut ProviderCollection, query: &str, offset: usize, length: usize) -> Response {
-        let (prefix, scored) = pc.query(query);
+    fn handle_query(engine: &mut Engine, query: &str, offset: usize, length: usize) -> Response {
+        let (prefix, scored) = engine.query(query);
         let total = scored.len();
         let length = length.min(MAX_RESULTS);
 
@@ -95,23 +95,23 @@ impl Daemon {
         Response::QueryResult { prefix, results, total }
     }
 
-    fn handle_select(pc: &mut ProviderCollection, query: &str, entry_id: &str) -> Response {
-        pc.select(query, entry_id);
+    fn handle_select(engine: &mut Engine, query: &str, entry_id: &str) -> Response {
+        engine.select(query, entry_id);
         Response::Ok
     }
 
-    fn handle_boost(pc: &mut ProviderCollection, query: &str, history_key: &str) -> Response {
-        pc.record_boost(query, history_key, BOOST_WEIGHT);
+    fn handle_boost(engine: &mut Engine, query: &str, history_key: &str) -> Response {
+        engine.record_boost(query, history_key, BOOST_WEIGHT);
         Response::Ok
     }
 
-    fn handle_delete(pc: &mut ProviderCollection, query: &str, history_key: &str) -> Response {
-        pc.delete(query, history_key);
+    fn handle_delete(engine: &mut Engine, query: &str, history_key: &str) -> Response {
+        engine.delete(query, history_key);
         Response::Ok
     }
 
-    fn handle_history(pc: &mut ProviderCollection, prefix: &str) -> Response {
-        let raw = pc.list_entries(prefix);
+    fn handle_history(engine: &mut Engine, prefix: &str) -> Response {
+        let raw = engine.list_entries(prefix);
 
         let entries: Vec<HistoryEntry> = raw
             .into_iter()
@@ -126,8 +126,8 @@ impl Daemon {
         Response::History { entries }
     }
 
-    fn handle_providers(pc: &mut ProviderCollection) -> Response {
-        let entries: Vec<ProviderEntry> = pc
+    fn handle_providers(engine: &mut Engine) -> Response {
+        let entries: Vec<ProviderEntry> = engine
             .providers()
             .into_iter()
             .map(|provider| ProviderEntry {

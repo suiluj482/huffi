@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 
 use huffi::daemon::Daemon;
-use huffi::provider::ProviderCollection;
+use huffi::engine::Engine;
 use huffi_protocol::default_socket_path;
 
 fn default_data_path() -> PathBuf {
@@ -64,19 +64,19 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(parent).expect("failed to create data directory");
     }
 
-    let mut provider_collection = ProviderCollection::new(&data_path, dry_run)?;
+    let mut engine = Engine::new(&data_path, dry_run)?;
     eprintln!("history loaded from {}", data_path.display());
 
-    provider_collection.add_provider(Box::new(huffi::provider::MetaProvider::new(
+    engine.add_provider(Box::new(huffi::engine::provider::MetaProvider::new(
         &socket_path,
         &data_path,
         dry_run,
     )));
 
     if dry_run {
-        use huffi::provider::entry;
-        use huffi::provider::TestProvider;
-        use huffi::scoring::MatchField;
+        use huffi::engine::provider::entry;
+        use huffi::engine::provider::TestProvider;
+        use huffi::engine::scoring::MatchField;
 
         let test_entries = vec![
             entry("firefox.desktop", "Firefox")
@@ -100,10 +100,10 @@ fn main() -> anyhow::Result<()> {
                 .match_fields(vec![MatchField { text: "Breeze".into(), weight: 1.0 }]),
         ];
 
-        provider_collection.add_provider(Box::new(TestProvider::new("test", test_entries)));
+        engine.add_provider(Box::new(TestProvider::new("test", test_entries)));
     }
 
-    let daemon = Arc::new(Daemon::new(provider_collection));
+    let daemon = Arc::new(Daemon::new(engine));
 
     for stream in listener.incoming() {
         match stream {
