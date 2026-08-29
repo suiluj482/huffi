@@ -6,7 +6,6 @@
 , wayland
 , wayland-protocols
 , libxkbcommon
-, vulkan-loader
 , libGL
 , mesa
 , libxcursor
@@ -35,7 +34,6 @@ rustPlatform.buildRustPackage rec {
     wayland
     wayland-protocols
     libxkbcommon
-    vulkan-loader
     libGL
     mesa
     libxcursor
@@ -47,9 +45,7 @@ rustPlatform.buildRustPackage rec {
   ];
 
   postFixup = ''
-    wrapProgram $out/bin/huffi-ui \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs}
-    wrapProgram $out/bin/huffi-ui-gtk \
+    wrapProgram $out/bin/huffi \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs} \
       --set GSK_RENDERER gl
   '';

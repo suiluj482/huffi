@@ -43,8 +43,7 @@ nixpkgs.overlays = [ inputs.huffi.overlays.default ];
 imports = [ inputs.huffi.homeManagerModules.huffi ];
 
 programs.huffi = {
-  enable = true;
-  daemon.enable = true;  # optional: always-warm systemd service
+  enable = true;  # installs huffi and preloads it via systemd --user
 };
 ```
 
@@ -53,28 +52,38 @@ programs.huffi = {
 ```console
 git clone https://github.com/suiluj482/huffi
 cd huffi
+nix develop               # provides GTK4 and the Rust toolchain
 cargo build --release
-# binaries in target/release/: huffi-daemon, huffi, huffi-ui, huffi-ui-gtk
+# binary in target/release/: huffi
 ```
-
-No root or manual daemon setup is needed — the CLI and UI auto-spawn the
-daemon as a child process on first use.
 
 ---
 
 ## Usage
 
-### `huffi-ui` — Wayland layershell GUI
+`huffi` is a GTK4 overlay that appears with keyboard focus.
+Start typing to fuzzy search, use arrow keys to navigate, press tab to use the
+selected entry's query suggestion (if defined), and press enter to launch.
 
-A floating overlay that appears with keyboard focus. Start typing to fuzzy
-search, use arrow keys to navigate, press tab to use the selected entry's
-query suggestion (if defined), and press enter to launch.
+The first instance stays **warm**: dismissing hides the window instead of
+exiting. Every other invocation talks to it over a control socket
+(`$XDG_RUNTIME_DIR/huffi.sock`) and returns immediately — so every launch
+after the first has no startup cost. With no subcommand, `huffi` behaves like
+`show`.
 
 ```console
-huffi-ui                        # launch empty
-huffi-ui --query fire           # start with an initial query
-huffi-ui -q "= 2 + 2"           # shorthand (note: quote for spaces)
+huffi                          # show: wake the resident, or start one
+huffi preload                  # ensure a hidden resident is running (for systemd)
+huffi show -q fire             # wake the resident and show query "fire"
+huffi hide                     # hide the window if it is visible
+huffi toggle -q "= 2 + 2"      # show if hidden, hide if visible
+huffi quit                     # quit the resident instance
+huffi status                   # is it running? is the window visible?
+huffi show --reload -q fire    # restart the resident and take over its socket
+huffi --socket /custom.sock show    # talk to an instance on a different socket
 ```
+
+A bare flag before a subcommand is shorthand for `show`: `huffi --socket PATH -q "= 2 + 2"` is `huffi show --socket PATH -q "= 2 + 2"`.
 
 | Key | Action |
 |---|---|
@@ -86,53 +95,26 @@ huffi-ui -q "= 2 + 2"           # shorthand (note: quote for spaces)
 | Mouse wheel | Scroll results |
 | `+` / `−` button | Boost / delete association |
 
-### `huffi-ui-gtk` — GTK4 GUI
+### Subcommands
 
-A GTK4 frontend with feature parity to `huffi-ui`, using
-[gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) when the compositor
-supports it (falling back to a plain floating window otherwise). Unlike
-`huffi-ui`, it stays **warm**: dismissing hides the window instead of exiting,
-and later invocations hand their query to the running instance over a private
-socket (`$XDG_RUNTIME_DIR/huffi-ui-gtk.sock`) and return immediately — so the
-next launch has no startup cost.
+| Subcommand | Action |
+|---|---|
+| `show` | Ensure a resident is running, then show the window (the default) |
+| `preload` | Start a hidden resident if none is running; exit 0 if one already is |
+| `hide` | Hide the window if it is visible |
+| `toggle` | Show the window if hidden, hide it if visible |
+| `quit` | Quit the resident instance |
+| `status` | Print `running` / `visible` state (exit 1 if not running) |
 
-```console
-huffi-ui-gtk                        # first run starts the resident instance
-huffi-ui-gtk --query fire           # instant: wakes the warm instance
-```
+### Options
 
-Keys, scrolling, boost/delete and suggestions work exactly as in `huffi-ui`.
-
-### `huffi-daemon` — scoring engine
-
-```console
-# Run explicitly (normally auto-spawned)
-huffi-daemon
-huffi-daemon --dry-run        # ephemeral, no disk writes
-huffi-daemon --socket /tmp/mysock --data /tmp/history.json
-```
-
-### `huffi` — CLI client
-
-```console
-# Search for apps
-huffi query fire
-
-# Record a launch (trains the model)
-huffi select fire firefox.desktop
-
-# Boost an app at the exact typed prefix (no fan-out)
-huffi boost fi finder.desktop
-
-# Delete an association at the exact prefix
-huffi delete fi firefox.desktop
-
-# Inspect raw scores for a prefix
-huffi history f
-
-# List providers and their trigger prefixes
-huffi providers
-```
+| Flag | Scope | Meaning |
+|---|---|---|
+| `-q, --query <QUERY>` | `show`, `toggle` | Query to show on wake |
+| `--data <PATH>` | `show`, `preload` | Override the history file (default `$XDG_DATA_HOME/huffi/history.json`) |
+| `--dry-run` | `show`, `preload` | Don't record history or execute actions; adds in-memory test providers |
+| `--reload` | `show`, `preload` | Quit any running instance, unlink its socket, and take it over |
+| `--socket <PATH>` | all | Override the control socket path |
 
 ---
 
@@ -150,42 +132,47 @@ huffi providers
   [`freedesktop-desktop-entry`](https://crates.io/crates/freedesktop-desktop-entry),
   matching against name, keywords, generic name, and comment with field
   weighting.
-- **Boost / Delete** — correct the model in the moment. Boost is a
-  synthetic 10x launch, scoped to the exact prefix. Delete removes the
-  association entirely. Both are available in the CLI, UI, and protocol.
+- **Boost / Delete** — correct the model in the moment. Both are scoped to the
+  exact prefix you typed and are available on result rows with a history key:
+  boost is a synthetic 10x launch, delete clears the prefix's association.
 - **Prefix resolution** — each query is preprocessed once to resolve the
   *global prefix*: the longest declared provider prefix that the input
   starts with. It is returned with every query result so the UI can mark it
   (badge next to the input), and providers whose prefixes don't match are
   still queried with the full input.
-- **Auto-spawning daemon** — no init script or manual setup. The client
-  spawns the daemon as a detached child if it isn't running.
+- **Warm resident** — the process stays resident and hidden between uses;
+  every invocation is an instant wake over the control socket (`huffi` or
+  `huffi show`). `huffi preload` starts it hidden so a `systemd --user`
+  service can keep it warm on login, `huffi quit` stops it, and `huffi
+  status` reports it.
 - **Icon support** — SVG and PNG icons loaded from the desktop entry's
-  icon path, displayed in the UI via iced.
-- **JSON-over-Unix-socket protocol** — NDJSON framing over a Unix socket.
-  The protocol boundary means alternative frontends (e.g. a dmenu-compatible
-  CLI shim, a Quickshell widget, or a third-party GUI) can drive the same
-  daemon.
+  icon path, displayed in the UI.
 - **Persistence** — history stored in `$XDG_DATA_HOME/huffi/history.json`
   with atomic writes (`.json.tmp` + rename). Two-week half-life exponential
   decay. No background jobs, no unbounded logs.
 - **Nix flake** — reproducible builds for `x86_64-linux` and
-  `aarch64-linux`, dev shell with all Wayland dependencies, and a Home
-  Manager module with optional `systemd --user` daemon service.
+  `aarch64-linux`, dev shell with all Wayland/GTK dependencies, and a Home
+  Manager module that installs `huffi` and keeps it warm on login.
 
 ---
 
 ## Architecture
 
-The project is a Rust workspace with five crates:
+The project is a Rust crate that compiles to the binary `huffi`. The scoring
+engine lives in the library (`src/engine/`) and the GTK4 frontend in the
+binary's `src/ui/`. Background work (scoring, history, launching) runs on
+worker threads and hops back to the main loop via
+`glib::spawn_future_local`.
 
-| Crate | Binary | Role |
-|---|---|---|
-| `huffi` | `huffi-daemon` | Scoring engine, history store, provider trait + implementations |
-| `huffi-protocol` | — | Shared NDJSON-over-Unix-socket message types and daemon auto-spawn |
-| `huffi-cli` | `huffi` | CLI client for scripting and testing |
-| `huffi-ui` | `huffi-ui` | Wayland layershell GUI built with [`iced_layershell`](https://github.com/Heufneutje/iced_layershell) |
-| `huffi-ui-gtk` | `huffi-ui-gtk` | GTK4 GUI frontend (warm single-instance, layer-shell when available) |
+```
+src/
+  lib.rs        # pub mod engine   (GTK-free, unit-testable)
+  main.rs       # bin: clap args, control socket, GTK init, engine bootstrap
+  engine/       # providers + scoring + history (the model)
+  ui/           # GTK4 window, control socket, background tasks, CSS theme
+data/style.css  # default stylesheet
+tests/          # in-process integration tests against the engine
+```
 
 ### Providers
 
@@ -193,15 +180,15 @@ The project is a Rust workspace with five crates:
 |---|---|---|
 | `DesktopEntryProvider` | (always active) | `freedesktop-desktop-entry` — reads `.desktop` files |
 | `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard, `Tab` applies its query suggestion |
-| `MetaProvider` | `@` prefix | daemon state — uptime, socket path, pid, version (select copies the value) |
+| `MetaProvider` | `@` prefix | launcher state — uptime, control socket path, pid, version (select copies the value) |
 
 The `Provider` trait lets you plug arbitrary data sources into the
 launcher. See **[docs/WRITING_A_PROVIDER.md](docs/WRITING_A_PROVIDER.md)**
 for the full guide with trait docs, builder API reference, and examples.
 
-Ranking state lives in a long-running daemon process. The daemon binds its
-Unix socket before doing slow work, so a racing client doesn't time out. On
-first use, the client spawns the daemon as a detached child — zero config.
+Queries page through the scored results directly; the engine's `query_hits`
+clamps page sizes to its `MAX_RESULTS` and projects results onto
+render-ready `QueryHit`s.
 
 ### Data model
 
@@ -223,7 +210,7 @@ weighting, exponential decay, the prefix trie, and adaptation behavior).
 
 ## Project status
 
-**Early-stage but functional.** All four crates compile and run. The core
+**Early-stage but functional.** The binary compiles and runs. The core
 loop (type → fuzzy match → blend with history → select → learn) works
 end-to-end.
 
@@ -232,7 +219,6 @@ end-to-end.
 - Config file
 - Rethinking the weighted sum formula (making extra match fields less
   dominant)
-- Possible simplification: merge daemon/UI into a single process
 - `xdg-desktop-portal` integration (icon lookup improvements)
 
 ---
@@ -240,11 +226,11 @@ end-to-end.
 ## Tests
 
 ```console
-cargo test
+nix develop --command cargo test
 ```
 
-Runs the unit tests across all crates plus integration tests that spawn a
-real daemon.
+Runs the engine's unit tests plus in-process integration tests that build an
+engine with test providers and page through queries.
 
 ---
 

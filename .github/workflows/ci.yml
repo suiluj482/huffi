@@ -30,12 +30,15 @@ jobs:
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
-            libvulkan-dev \
             libgl-dev \
             libxcursor-dev \
             libxrandr-dev \
-            libxi-dev
-      - run: cargo test --workspace --all-features
+            libxi-dev \
+            libgtk-4-dev \
+            libgtk-4-layer-shell-dev \
+            libgraphene-1.0-dev \
+            librsvg2-dev
+      - run: cargo test --all-features
 
   cargo-build:
     name: Build
@@ -51,19 +54,19 @@ jobs:
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
-            libvulkan-dev \
             libgl-dev \
             libxcursor-dev \
             libxrandr-dev \
-            libxi-dev
-      - run: cargo build --workspace --all-features --release
+            libxi-dev \
+            libgtk-4-dev \
+            libgtk-4-layer-shell-dev \
+            libgraphene-1.0-dev \
+            librsvg2-dev
+      - run: cargo build --all-features --release
       - uses: actions/upload-artifact@v4
         with:
           name: huffi-cargo-${{ github.sha }}
-          path: |
-            target/release/huffi
-            target/release/huffi-cli
-            target/release/huffi-ui
+          path: target/release/huffi
           retention-days: 14
 
   clippy:
@@ -82,12 +85,15 @@ jobs:
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
-            libvulkan-dev \
             libgl-dev \
             libxcursor-dev \
             libxrandr-dev \
-            libxi-dev
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+            libxi-dev \
+            libgtk-4-dev \
+            libgtk-4-layer-shell-dev \
+            libgraphene-1.0-dev \
+            librsvg2-dev
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
   cargo-deny:
     name: Deny

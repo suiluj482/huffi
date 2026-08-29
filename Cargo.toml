@@ -1,9 +1,28 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/huffi-protocol",
-    "crates/huffi",
-    "crates/huffi-cli",
-    "crates/huffi-ui",
-    "crates/huffi-ui-gtk",
-]
+[package]
+name = "huffi"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Adaptive fuzzy launcher with usage-history ranking"
+repository = "https://github.com/suiluj482/huffi"
+
+[lib]
+name = "huffi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "huffi"
+path = "src/main.rs"
+
+[dependencies]
+nucleo = "0.5"
+freedesktop-desktop-entry = "0.5"
+freedesktop-icons = "0.4"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rink-core = { version = "0.8", features = ["bundle-files"] }
+clap = { version = "4", features = ["derive"] }
+gtk4 = "0.11"
+gtk4-layer-shell = "0.8"
+async-channel = "2"

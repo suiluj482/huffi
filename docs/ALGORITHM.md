@@ -147,8 +147,6 @@ deliberate correction at "fi" shouldn't silently push an opinion onto "f":
   would from organic use, rather than being a special-cased override with
   different semantics from the rest of the model. Fan-out is skipped.
 
-Both are available in the CLI, protocol, and UI.
-
 ## Open questions
 
 - Tune `k` (or its KT/Laplace-derived equivalent) against real usage data
