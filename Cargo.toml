@@ -16,11 +16,11 @@ path = "src/main.rs"
 
 [dependencies]
 nucleo = "0.5"
-freedesktop-desktop-entry = "0.5"
+freedesktop-desktop-entry = "0.8"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rink-core = { version = "0.8", features = ["bundle-files"] }
+rink-core = { version = "0.9", features = ["bundle-files"] }
 clap = { version = "4", features = ["derive"] }
 gtk4 = "0.11"
 gtk4-layer-shell = "0.8"
