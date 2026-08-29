@@ -35,7 +35,7 @@ jobs:
             libxrandr-dev \
             libxi-dev \
             libgtk-4-dev \
-            libgtk-4-layer-shell-dev \
+            libgtk4-layer-shell-dev \
             libgraphene-1.0-dev \
             librsvg2-dev
       - run: cargo test --all-features
@@ -59,7 +59,7 @@ jobs:
             libxrandr-dev \
             libxi-dev \
             libgtk-4-dev \
-            libgtk-4-layer-shell-dev \
+            libgtk4-layer-shell-dev \
             libgraphene-1.0-dev \
             librsvg2-dev
       - run: cargo build --all-features --release
@@ -90,7 +90,7 @@ jobs:
             libxrandr-dev \
             libxi-dev \
             libgtk-4-dev \
-            libgtk-4-layer-shell-dev \
+            libgtk4-layer-shell-dev \
             libgraphene-1.0-dev \
             librsvg2-dev
       - run: cargo clippy --all-targets --all-features -- -D warnings
