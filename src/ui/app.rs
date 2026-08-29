@@ -24,7 +24,7 @@ use crate::ui::{tasks, theme};
 
 const PAGE_SIZE: usize = 10;
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(300);
-const PANEL_WIDTH: i32 = 540;
+const PANEL_WIDTH: i32 = 600;
 const PANEL_HEIGHT: i32 = 400;
 
 #[derive(Debug, Clone, Copy)]
@@ -724,7 +724,7 @@ impl Launcher {
         row.set_valign(Align::Center);
         row.add_css_class(if is_selected { "row-selected" } else { "row" });
 
-        let clickable = GBox::new(Orientation::Horizontal, 0);
+        let clickable = GBox::new(Orientation::Horizontal, 12);
         clickable.set_hexpand(true);
         clickable.set_valign(Align::Center);
 

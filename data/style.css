@@ -37,13 +37,13 @@ window {
 }
 .row {
     background-color: @huffi_surface0_color;
-    padding: 8px;
-    border-bottom: 1px solid @huffi_surface1_color;
+    padding: 6px;
+    border-bottom: 1px solid @huffi_base_color;
 }
 .row-selected {
     background-color: @huffi_surface1_color;
-    padding: 8px;
-    border-bottom: 1px solid @huffi_surface1_color;
+    padding: 6px;
+    border-bottom: 1px solid @huffi_base_color;
 }
 .title {
     font-size: 15px;
