@@ -1,18 +1,18 @@
 # Writing a huffi provider
 
 A provider is a Rust struct that implements the `Provider` trait. It acts as
-a data source for the launcher — every keystroke, the daemon calls every
+a data source for the launcher — every keystroke, the engine calls every
 registered provider's `query()` method and blends the returned entries into
 a ranked list.
 
 ## The trait
 
 ```rust
-pub trait Provider: Send + Sync {
+pub trait Provider: Send {
     fn id(&self) -> &str;
     fn prefixes(&self) -> &[&str];
     fn init(&mut self);
-    fn query(&self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
+    fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
 }
 ```
 
@@ -26,7 +26,7 @@ Returns the trigger prefixes of this provider. `query()` is always called,
 regardless of whether a prefix matches. The prefixes are intended for user
 transparency (the UI lists them and marks the active one).
 
-Prefixes are resolved once per query by the daemon: the **longest** declared
+Prefixes are resolved once per query by the engine: the **longest** declared
 prefix that the user's input starts with becomes the *global prefix* for that
 query — there is at most one active prefix per query. When the user's input
 starts with that prefix, `query()` is called with `prefix: Some("...")` and
@@ -42,7 +42,7 @@ Providers whose prefix did not match score against the full input instead. A
 
 ### `init()`
 
-Called once at daemon startup, before any queries are served. Use this for
+Called once at startup, before any queries are served. Use this for
 expensive one-time work:
 
 - Scanning `.desktop` files
@@ -59,10 +59,9 @@ in your struct fields during `init()`.
 Called on **every keystroke** while the user types. Return the entries your
 provider wants to offer for the current input.
 
-**Performance matters** — this runs synchronously inside the daemon's
-request handler. If the user types quickly, `query()` is called rapidly.
-Avoid I/O, allocations in hot paths, or expensive computation here. Cache
-everything in `init()`.
+**Performance matters** — this runs for. If the user types quickly, 
+`query()` is called rapidly. Avoid I/O, allocations in hot paths,
+or expensive computation here. Cache everything in `init()`.
 
 The `prefix` and `query` parameters:
 
@@ -95,17 +94,14 @@ entry("my-entry-id", "Display Name")
     .build()
 ```
 
-`id` must be stable across daemon restarts — it's sent through the protocol
-and used to refer back to this entry (e.g. for selection).
-
 ### Builder methods
 
 | Method | Type | Purpose |
 |---|---|---|
 | `.subtitle(s)` | `String` | Secondary text shown beside the title in the UI |
 | `.comment(s)` | `String` | Longer description (used as a fallback subtitle) |
-| `.icon(path)` | `String` | Path to an SVG or PNG icon file |
-| `.extra(json)` | `serde_json::Value` | Arbitrary metadata forwarded to the client |
+| `.icon(name\|path)` | `String` / path | Icon to show. A string maps to a themed freedesktop icon name (see `.icon_name`); a `Path` to an explicit icon file (see `.icon_path`) |
+| `.extra(json)` | `serde_json::Value` | Arbitrary metadata attached to the entry, surfaced on the query hit |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard via `wl-copy` on selection |
@@ -117,6 +113,19 @@ and used to refer back to this entry (e.g. for selection).
 
 Only one of `.score()` or `.match_fields()` may be used on a single entry.
 If neither is called, the entry gets a default score of `1.0`.
+
+### Icons
+
+`.icon()` describes the entry's icon without resolving it to an image — the
+UI turns it into a widget. There are two sources:
+
+- **`.icon_name(name)`** — a freedesktop icon theme name (e.g.
+  `"firefox"`, `"accessories-calculator"`). The UI resolves it against the
+  active icon theme, so theme fallbacks, SVG/PNG, and dark/symbolic variants
+  all work for free. Passing a `&str`/`String` to `.icon()` is shorthand for
+  this.
+- **`.icon_path(path)`** — an explicit path to a PNG or SVG file, rendered
+  verbatim. Passing a `Path`/`PathBuf` to `.icon()` is shorthand for this.
 
 ### Scoring modes
 
@@ -148,7 +157,7 @@ empty-query baseline of `0.8`.
 
 ### History tracking
 
-If an entry has a `history_key`, the daemon records launches and boosts
+If an entry has a `history_key`, the engine records launches and boosts
 against that key. Over time the ranking becomes personalised — frequently
 launched entries rise for their typed prefix.
 
@@ -156,7 +165,7 @@ Entries **without** a `history_key` still appear in results but are
 invisible to the history model: they can't be boosted, deleted, or learned
 from usage. This is appropriate for ephemeral or computed entries.
 
-The `history_key` should be stable across daemon restarts, same as `id`.
+The `history_key` should be stable across restarts, same as `id`.
 Often they are the same value.
 
 ### Query suggestions
@@ -193,8 +202,8 @@ If no action is set, selection does nothing (`Action::NoOp`).
 ## Complete example: always-active provider
 
 ```rust
-use huffi::provider::{Entry, Provider, entry};
-use huffi::scoring::MatchField;
+use huffi::engine::provider::{Entry, Provider, entry};
+use huffi::engine::scoring::MatchField;
 
 struct CustomDirProvider { entries: Vec<Entry> }
 
@@ -213,7 +222,7 @@ impl Provider for CustomDirProvider {
         ];
     }
 
-    fn query(&self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         self.entries.clone()
     }
 }
@@ -228,27 +237,21 @@ chains calculations.
 
 ## Registering a provider
 
-Add it to [`ProviderCollection::new()`] in
-`crates/huffi/src/provider/collection.rs`:
+Register it on the [`Engine`] in `src/main.rs`, after `Engine::new`:
 
 ```rust
-impl Default for ProviderCollection {
-    pub fn new(data_path: impl AsRef<Path>, dry_run: bool) -> anyhow::Result<Self> {
-        let scorer = Scorer::open(data_path, dry_run)?;
-        let mut providers: Vec<Box<dyn Provider>> = vec![
-            Box::new(DesktopEntryProvider::default()),
-            Box::new(CalculatorProvider::new()),
-            Box::new(CustomDirProvider { entries: Vec::new() }),  // <-- yours
-        ];
-        for p in providers.iter_mut() {
-            p.init();
-        }
-        Ok(Self { providers, scorer, dry_run })
-    }
-}
+let mut engine = Engine::new(&data_path, args.dry_run)?;
+engine.add_provider(Box::new(MyProvider::default()));
 ```
 
-[`CalculatorProvider`]: ../crates/huffi/src/provider/calculator.rs
-[`entry()`]: ../crates/huffi/src/provider/util.rs
+`add_provider` calls [`init()`] before the provider is queried. Built-ins are
+registered in [`ProviderCollection::new()`] in
+`src/engine/provider/collection.rs`.
+
+[`Engine`]: ../src/engine/mod.rs
+[`ProviderCollection::new()`]: ../src/engine/provider/collection.rs
+[`init()`]: #init
+[`CalculatorProvider`]: ../src/engine/provider/builtin/calculator.rs
+[`entry()`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs

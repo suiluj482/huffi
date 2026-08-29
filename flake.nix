@@ -44,18 +44,19 @@
             wayland
             wayland-protocols
             libxkbcommon
-            vulkan-loader
             libGL
             mesa
             libxcursor
             libxrandr
             libxi
+            gtk4
+            gtk4-layer-shell
+            librsvg
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.wayland
             pkgs.libxkbcommon
-            pkgs.vulkan-loader
             pkgs.libGL
             pkgs.mesa
             pkgs.libxcursor
