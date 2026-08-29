@@ -21,50 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: cachix/install-nix-action@v25
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: |
-          sudo add-apt-repository -y universe
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgl-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libgtk-4-dev \
-            libgtk4-layer-shell-dev \
-            libgraphene-1.0-dev \
-            librsvg2-dev
-      - run: cargo test --all-features
+      - run: nix develop --command cargo test --all-features
 
   cargo-build:
     name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: cachix/install-nix-action@v25
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: |
-          sudo add-apt-repository -y universe
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgl-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libgtk-4-dev \
-            libgtk4-layer-shell-dev \
-            libgraphene-1.0-dev \
-            librsvg2-dev
-      - run: cargo build --all-features --release
+      - run: nix develop --command cargo build --all-features --release
       - uses: actions/upload-artifact@v4
         with:
           name: huffi-cargo-${{ github.sha }}
@@ -76,27 +44,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - uses: cachix/install-nix-action@v25
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: |
-          sudo add-apt-repository -y universe
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgl-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libgtk-4-dev \
-            libgtk4-layer-shell-dev \
-            libgraphene-1.0-dev \
-            librsvg2-dev
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: nix develop --command cargo clippy --all-targets --all-features -- -D warnings
 
   cargo-deny:
     name: Deny
