@@ -27,7 +27,7 @@ impl DesktopEntryProvider {
 
 impl Default for DesktopEntryProvider {
     fn default() -> Self {
-        Self::new(freedesktop_desktop_entry::default_paths())
+        Self::new(freedesktop_desktop_entry::default_paths().collect())
     }
 }
 
@@ -42,7 +42,7 @@ impl Provider for DesktopEntryProvider {
 
     fn init(&mut self) {
         self.entries = Arc::from(
-            freedesktop_desktop_entry::Iter::new(self.dirs.clone())
+            freedesktop_desktop_entry::Iter::new(self.dirs.clone().into_iter())
                 .filter_map(|path| read_desktop_entry(&path))
                 .collect::<Vec<_>>(),
         );
@@ -55,7 +55,8 @@ impl Provider for DesktopEntryProvider {
 
 fn read_desktop_entry(path: &Path) -> Option<Entry> {
     let input = std::fs::read_to_string(path).ok()?;
-    let desktop = freedesktop_desktop_entry::DesktopEntry::decode(path, &input).ok()?;
+    let desktop =
+        freedesktop_desktop_entry::DesktopEntry::from_str(path, &input, None::<&[&str]>).ok()?;
 
     if desktop.no_display() {
         return None;
@@ -65,11 +66,11 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
         return None;
     }
 
-    let name = desktop.name(None)?.into_owned();
+    let name = desktop.name::<&str>(&[])?.into_owned();
     let exec = desktop.exec().map(|s| s.to_string())?;
     let terminal = desktop.terminal();
-    let generic_name = desktop.generic_name(None).map(|s| s.into_owned());
-    let comment = desktop.comment(None).map(|c| c.into_owned());
+    let generic_name = desktop.generic_name::<&str>(&[]).map(|s| s.into_owned());
+    let comment = desktop.comment::<&str>(&[]).map(|c| c.into_owned());
     let icon = desktop.icon().map(|s| s.to_owned());
     let id = desktop.id().to_string();
 
@@ -92,8 +93,8 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
         });
     }
 
-    if let Some(kw) = desktop.keywords() {
-        for word in kw.split(';') {
+    if let Some(kw) = desktop.keywords::<&str>(&[]) {
+        for word in kw {
             let word = word.trim();
             if !word.is_empty() {
                 match_fields.push(MatchField {
