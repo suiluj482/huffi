@@ -145,8 +145,8 @@ A bare flag before a subcommand is shorthand for `show`: `huffi --socket PATH -q
   `huffi show`). `huffi preload` starts it hidden so a `systemd --user`
   service can keep it warm on login, `huffi quit` stops it, and `huffi
   status` reports it.
-- **Icon support** — SVG and PNG icons loaded from the desktop entry's
-  icon path, displayed in the UI.
+- **Icon support** — themed freedesktop icon names or explicit PNG/SVG
+  paths, resolved and rendered by the UI against the active icon theme.
 - **Persistence** — history stored in `$XDG_DATA_HOME/huffi/history.json`
   with atomic writes (`.json.tmp` + rename). Two-week half-life exponential
   decay. No background jobs, no unbounded logs.
@@ -219,7 +219,6 @@ end-to-end.
 - Config file
 - Rethinking the weighted sum formula (making extra match fields less
   dominant)
-- `xdg-desktop-portal` integration (icon lookup improvements)
 
 ---
 

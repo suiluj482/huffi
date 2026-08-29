@@ -1,10 +1,10 @@
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::engine::provider::ICON_SIZE;
 use crate::engine::scoring::{MatchField, Rank};
 
-use super::{Entry, EntryMeta};
+use super::{Entry, EntryMeta, Icon};
 
 const TERMINAL: &str = "kitty";
 const CLIPBOARD: &str = "wl-copy";
@@ -64,7 +64,7 @@ pub struct EntryBuilder {
     provider_id: Option<String>,
     subtitle: Option<String>,
     comment: Option<String>,
-    icon: Option<String>,
+    icon: Option<Icon>,
     extra: Option<serde_json::Value>,
     action: Option<Action>,
     rank: Option<Rank>,
@@ -88,8 +88,22 @@ impl EntryBuilder {
         self
     }
 
-    pub fn icon(mut self, s: impl Into<String>) -> Self {
-        self.icon = Some(s.into());
+    /// Set the icon to a themed icon name (default `impl Into<Icon>` maps
+    /// strings to [`Icon::Name`]).
+    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Set the icon to a themed icon name (freedesktop icon theme).
+    pub fn icon_name(mut self, name: impl Into<String>) -> Self {
+        self.icon = Some(Icon::Name(name.into()));
+        self
+    }
+
+    /// Set the icon to an explicit file path (PNG or SVG).
+    pub fn icon_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.icon = Some(Icon::Path(path.as_ref().to_owned()));
         self
     }
 
@@ -170,13 +184,6 @@ impl EntryBuilder {
             history_key: self.history_key,
         }
     }
-}
-
-pub fn lookup_icon(name: &str) -> Option<String> {
-    freedesktop_icons::lookup(name)
-        .with_size(ICON_SIZE)
-        .find()
-        .map(|p| p.to_string_lossy().into_owned())
 }
 
 pub fn split_command(s: &str) -> Vec<String> {

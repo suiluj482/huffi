@@ -100,7 +100,7 @@ entry("my-entry-id", "Display Name")
 |---|---|---|
 | `.subtitle(s)` | `String` | Secondary text shown beside the title in the UI |
 | `.comment(s)` | `String` | Longer description (used as a fallback subtitle) |
-| `.icon(path)` | `String` | Path to an SVG or PNG icon file |
+| `.icon(name\|path)` | `String` / path | Icon to show. A string maps to a themed freedesktop icon name (see `.icon_name`); a `Path` to an explicit icon file (see `.icon_path`) |
 | `.extra(json)` | `serde_json::Value` | Arbitrary metadata attached to the entry, surfaced on the query hit |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
@@ -113,6 +113,19 @@ entry("my-entry-id", "Display Name")
 
 Only one of `.score()` or `.match_fields()` may be used on a single entry.
 If neither is called, the entry gets a default score of `1.0`.
+
+### Icons
+
+`.icon()` describes the entry's icon without resolving it to an image — the
+UI turns it into a widget. There are two sources:
+
+- **`.icon_name(name)`** — a freedesktop icon theme name (e.g.
+  `"firefox"`, `"accessories-calculator"`). The UI resolves it against the
+  active icon theme, so theme fallbacks, SVG/PNG, and dark/symbolic variants
+  all work for free. Passing a `&str`/`String` to `.icon()` is shorthand for
+  this.
+- **`.icon_path(path)`** — an explicit path to a PNG or SVG file, rendered
+  verbatim. Passing a `Path`/`PathBuf` to `.icon()` is shorthand for this.
 
 ### Scoring modes
 

@@ -16,11 +16,47 @@ pub mod builtin;
 pub mod collection;
 pub mod util;
 
+use std::path::PathBuf;
+
 use crate::engine::scoring::{Scoreable, Scored};
 
-pub const ICON_SIZE: u16 = 32;
-
 pub use util::{Action, EntryBuilder, entry};
+
+/// A source for an entry's icon. Providers describe *what* to show without
+/// resolving it to a concrete image; the UI is responsible for turning this
+/// into a renderable widget (e.g. via the active GTK icon theme).
+#[derive(Debug, Clone)]
+pub enum Icon {
+    /// A freedesktop icon theme name (e.g. `"firefox"`,
+    /// `"accessories-calculator"`). Resolved against the active icon theme.
+    Name(String),
+    /// An explicit path to an icon file (e.g. a PNG or SVG).
+    Path(PathBuf),
+}
+
+impl From<&str> for Icon {
+    fn from(name: &str) -> Self {
+        Icon::Name(name.to_owned())
+    }
+}
+
+impl From<String> for Icon {
+    fn from(name: String) -> Self {
+        Icon::Name(name)
+    }
+}
+
+impl From<PathBuf> for Icon {
+    fn from(path: PathBuf) -> Self {
+        Icon::Path(path)
+    }
+}
+
+impl From<&std::path::Path> for Icon {
+    fn from(path: &std::path::Path) -> Self {
+        Icon::Path(path.to_owned())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EntryMeta {
@@ -31,7 +67,7 @@ pub struct EntryMeta {
     pub title: String,
     pub subtitle: Option<String>,
     pub comment: Option<String>,
-    pub icon: Option<String>,
+    pub icon: Option<Icon>,
     pub extra: Option<serde_json::Value>,
     pub set_query: Option<String>,
     pub action: Action,
@@ -100,7 +136,6 @@ pub trait Provider: Send {
 pub use collection::{ProviderCollection, ProviderInfo};
 
 pub use builtin::{CalculatorProvider, DesktopEntryProvider, MetaProvider, TestProvider};
-pub use util::lookup_icon;
 pub use util::split_command;
 
 #[cfg(test)]

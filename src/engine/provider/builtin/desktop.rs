@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::engine::provider::{Entry, Provider, entry, lookup_icon, split_command};
+use crate::engine::provider::{Entry, Provider, entry, split_command};
 use crate::engine::scoring::MatchField;
 
 pub const WEIGHT_NAME: f32 = 1.0;
@@ -70,7 +70,7 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
     let terminal = desktop.terminal();
     let generic_name = desktop.generic_name(None).map(|s| s.into_owned());
     let comment = desktop.comment(None).map(|c| c.into_owned());
-    let icon = desktop.icon().and_then(lookup_icon);
+    let icon = desktop.icon().map(|s| s.to_owned());
     let id = desktop.id().to_string();
 
     let mut match_fields = vec![MatchField {
@@ -125,7 +125,7 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
         e = e.subtitle(g);
     }
     if let Some(i) = icon {
-        e = e.icon(i);
+        e = e.icon_name(i);
     }
 
     Some(e.match_fields(match_fields))

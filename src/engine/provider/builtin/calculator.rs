@@ -1,11 +1,11 @@
 use rink_core::{one_line, simple_context};
 
-use crate::engine::provider::{Entry, Provider, entry, lookup_icon};
+use crate::engine::provider::{Entry, Icon, Provider, entry};
 
 pub struct CalculatorProvider {
     id: String,
     ctx: Option<rink_core::Context>,
-    icon: Option<String>,
+    icon: Option<Icon>,
 }
 
 impl Default for CalculatorProvider {
@@ -43,7 +43,7 @@ impl Provider for CalculatorProvider {
                 eprintln!("[calculator] failed to init rink context: {e}");
             }
         }
-        self.icon = lookup_icon("accessories-calculator");
+        self.icon = Some(Icon::Name("accessories-calculator".into()));
     }
 
     fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
@@ -75,7 +75,7 @@ impl Provider for CalculatorProvider {
         }
 
         if let Some(ref icon) = self.icon {
-            e = e.icon(icon);
+            e = e.icon(icon.clone());
         }
 
         vec![e.score(1.0)]

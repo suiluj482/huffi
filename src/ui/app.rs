@@ -16,6 +16,7 @@ use gtk4::{
     Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use huffi::engine::provider::Icon;
 use huffi::engine::{Engine, ProviderEntry, QueryHit};
 
 use crate::ui::control::{self, ControlRequest};
@@ -727,7 +728,7 @@ impl Launcher {
         clickable.set_hexpand(true);
         clickable.set_valign(Align::Center);
 
-        match load_icon(hit.icon.as_deref()) {
+        match hit.icon.as_ref().and_then(load_icon) {
             Some(icon) => clickable.append(&icon),
             None => clickable.append(&spacer(theme::ICON_SIZE)),
         }
@@ -872,19 +873,27 @@ fn spacer(size: i32) -> GBox {
     box_
 }
 
-fn load_icon(path: Option<&str>) -> Option<Image> {
-    let path = path?;
-    if !std::path::Path::new(path).exists() {
-        return None;
-    }
-    let file = gtk4::gio::File::for_path(path);
-    match gdk::Texture::from_file(&file) {
-        Ok(texture) => {
-            let image = Image::from_paintable(Some(&texture));
+fn load_icon(icon: &Icon) -> Option<Image> {
+    match icon {
+        Icon::Name(name) => {
+            let image = Image::from_icon_name(name);
             image.set_pixel_size(theme::ICON_SIZE);
             Some(image)
         }
-        Err(_) => None,
+        Icon::Path(path) => {
+            if !path.exists() {
+                return None;
+            }
+            let file = gtk4::gio::File::for_path(path);
+            match gdk::Texture::from_file(&file) {
+                Ok(texture) => {
+                    let image = Image::from_paintable(Some(&texture));
+                    image.set_pixel_size(theme::ICON_SIZE);
+                    Some(image)
+                }
+                Err(_) => None,
+            }
+        }
     }
 }
 

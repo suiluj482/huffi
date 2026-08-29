@@ -11,7 +11,7 @@ pub mod scoring;
 
 use std::path::Path;
 
-use crate::engine::provider::{EntryMeta, Provider, ProviderCollection, ProviderInfo};
+use crate::engine::provider::{EntryMeta, Icon, Provider, ProviderCollection, ProviderInfo};
 use crate::engine::scoring::history::KeyedHistoryRecord;
 use crate::engine::scoring::{Scored, Scorer};
 
@@ -32,7 +32,7 @@ pub struct QueryHit {
     pub title: String,
     pub subtitle: Option<String>,
     pub comment: Option<String>,
-    pub icon: Option<String>,
+    pub icon: Option<Icon>,
     pub extra: Option<serde_json::Value>,
     pub set_query: Option<String>,
 }
