@@ -1,22 +1,25 @@
+use super::config::ScoringConfig;
 use super::{BaseScored, MatchField, QueryGroup, Rank, Scoreable};
-
-pub const EMPTY_QUERY_SCORE: f64 = 0.8;
 
 pub struct BaseScorer {
     fuzzy_matcher: nucleo::Matcher,
+    empty_query_score: f64,
 }
 
 impl Default for BaseScorer {
     fn default() -> Self {
-        BaseScorer {
-            fuzzy_matcher: nucleo::Matcher::new(nucleo::Config::DEFAULT),
-        }
+        Self::new(ScoringConfig::default().empty_query_score)
     }
 }
 
 impl BaseScorer {
-    pub fn new() -> Self {
-        Self::default()
+    /// Construct a scorer that assigns `empty_query_score` to entries
+    /// queried with an empty query.
+    pub fn new(empty_query_score: f64) -> Self {
+        Self {
+            fuzzy_matcher: nucleo::Matcher::new(nucleo::Config::DEFAULT),
+            empty_query_score,
+        }
     }
 
     /// Score each group against its own query, then normalize globally.
@@ -35,7 +38,7 @@ impl BaseScorer {
                     entry: s.entry,
                     rank: s.rank,
                     history_key: s.history_key,
-                    base_score: EMPTY_QUERY_SCORE,
+                    base_score: self.empty_query_score,
                 }));
                 continue;
             }
@@ -228,18 +231,21 @@ mod tests {
 
     #[test]
     fn base_scoring_empty_query_group_keeps_baseline() {
-        let mut bs = BaseScorer::new();
+        let mut bs = BaseScorer::default();
         let groups = vec![QueryGroup {
             query: String::new(),
             entries: vec![scoreable((), Rank::Score(1.0))],
         }];
         let scored = bs.base_scoring(groups);
-        assert_eq!(scored[0].base_score, EMPTY_QUERY_SCORE);
+        assert_eq!(
+            scored[0].base_score,
+            ScoringConfig::default().empty_query_score
+        );
     }
 
     #[test]
     fn base_scoring_score_entries_bypass_normalization() {
-        let mut bs = BaseScorer::new();
+        let mut bs = BaseScorer::default();
         let groups = vec![QueryGroup {
             query: "fi".into(),
             entries: vec![
@@ -265,7 +271,7 @@ mod tests {
 
     #[test]
     fn base_scoring_per_group_query() {
-        let mut bs = BaseScorer::new();
+        let mut bs = BaseScorer::default();
         let groups = vec![
             QueryGroup {
                 query: "fi".into(),

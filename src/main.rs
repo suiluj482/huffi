@@ -1,23 +1,30 @@
+mod config;
 mod ui;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand};
+use clap::error::ErrorKind;
+use clap::parser::ValueSource;
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use gtk4::glib;
 use huffi::engine::Engine;
 
+use crate::config::Config;
 use ui::control::{self, ControlRequest};
 
-fn default_data_path() -> PathBuf {
-    let data = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".local/share")
-        });
-    data.join("huffi/history.json")
+/// Arguments valid at every level: how to reach the daemon, and which config file
+/// to load.
+#[derive(Args)]
+struct AppArgs {
+    /// Single-instance wake socket path
+    #[arg(long, global = true, value_name = "PATH", env = "HUFFI_SOCKET")]
+    socket: Option<PathBuf>,
+
+    /// Path to a config file (default $XDG_CONFIG_HOME/huffi/config.toml)
+    #[arg(long, global = true, value_name = "PATH", env = "HUFFI_CONFIG")]
+    config: Option<PathBuf>,
 }
 
 /// Arguments shared by the subcommands that can start an instance.
@@ -27,12 +34,12 @@ struct SpawnArgs {
     #[arg(short, long)]
     query: Option<String>,
 
-    /// History file path
-    #[arg(long, value_name = "PATH")]
+    /// Huffi data directory (history and per-provider state)
+    #[arg(long, value_name = "PATH", env = "HUFFI_DATA")]
     data: Option<PathBuf>,
 
     /// Don't record history or execute actions (enables test providers)
-    #[arg(long)]
+    #[arg(long, env = "HUFFI_DRY_RUN")]
     dry_run: bool,
 
     /// Quit any running instance and take over its control socket
@@ -40,12 +47,19 @@ struct SpawnArgs {
     reload: bool,
 }
 
-/// Arguments shared by every subcommand (which socket to talk to).
-#[derive(Args)]
-struct SocketArgs {
-    /// Single-instance wake socket path
-    #[arg(long, value_name = "PATH")]
-    socket: Option<PathBuf>,
+/// Whether any top-level spawn flag was typed on the command line.
+///
+/// Ids are derived from the `SpawnArgs` schema so the check stays in sync when
+/// a spawn flag is added. Queried against the top-level `Cli` matches, this
+/// distinguishes a spawn flag given *before* an explicit subcommand from one
+/// given *after* it.
+///
+/// We do this instead of `args_conflicts_with_subcommands(true)`, which would
+/// also reject the globals `--socket`/`--config` before a subcommand.
+fn any_spawn_flag_on_cli(matches: &clap::ArgMatches) -> bool {
+    SpawnArgs::augment_args(clap::Command::new("huffi"))
+        .get_arguments()
+        .any(|arg| matches.value_source(arg.get_id().as_str()) == Some(ValueSource::CommandLine))
 }
 
 #[derive(Subcommand)]
@@ -54,38 +68,23 @@ enum Command {
     Preload {
         #[command(flatten)]
         spawn: SpawnArgs,
-        #[command(flatten)]
-        socket: SocketArgs,
     },
     /// Ensure a resident is running, then show the window
     Show {
         #[command(flatten)]
         spawn: SpawnArgs,
-        #[command(flatten)]
-        socket: SocketArgs,
     },
     /// Hide the window if it is visible
-    Hide {
-        #[command(flatten)]
-        socket: SocketArgs,
-    },
+    Hide,
     /// Show the window if hidden, hide it if visible
     Toggle {
         #[command(flatten)]
         spawn: SpawnArgs,
-        #[command(flatten)]
-        socket: SocketArgs,
     },
     /// Quit the running instance
-    Quit {
-        #[command(flatten)]
-        socket: SocketArgs,
-    },
+    Quit,
     /// Report whether an instance is running and its window state
-    Status {
-        #[command(flatten)]
-        socket: SocketArgs,
-    },
+    Status,
 }
 
 #[derive(Parser)]
@@ -95,42 +94,58 @@ enum Command {
     about = "launcher with query-dependent history"
 )]
 struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
+    #[command(flatten)]
+    app: AppArgs,
 
-/// Mangle argv so a missing subcommand defaults to `show`: `huffi --socket X`
-/// becomes `huffi show --socket X`. Help/version stay top-level.
-fn cli_args() -> Vec<std::ffi::OsString> {
-    let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let first = args.get(1).and_then(|a| a.to_str());
-    let is_flag = first.is_some_and(|f| f.starts_with('-'));
-    let is_help = first.is_some_and(|f| matches!(f, "-h" | "--help" | "-V" | "--version"));
-    if (first.is_none() || is_flag) && !is_help {
-        args.insert(1, "show".into());
-    }
-    args
+    /// Belong to the implicit subcommand `show`; in front of
+    /// an explicit subcommand they are rejected.
+    #[command(flatten)]
+    spawn: SpawnArgs,
+
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Cli::parse_from(cli_args());
-    run_command(args.command)
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
+    let config = Config::load(cli.app.config.as_deref()).context("failed to load configuration")?;
+    run_command(cli, &matches, config)
 }
 
-fn run_command(command: Command) -> anyhow::Result<()> {
+fn run_command(cli: Cli, matches: &clap::ArgMatches, config: Config) -> anyhow::Result<()> {
+    let Cli {
+        app,
+        spawn,
+        command,
+    } = cli;
+    let command = match command {
+        Some(command) => {
+            if any_spawn_flag_on_cli(matches) {
+                Cli::command()
+                    .error(
+                        ErrorKind::ArgumentConflict,
+                        "leading flags for a subcommand before the subcommand are not accepted; pass them after the subcommand",
+                    )
+                    .exit();
+            }
+            command
+        }
+        None => Command::Show { spawn },
+    };
     match command {
-        Command::Hide { socket } => {
-            let path = socket_path(socket.socket);
+        Command::Hide => {
+            let path = resolve_socket(app.socket, &config);
             control::send_request(&path, &ControlRequest::Hide)?;
             Ok(())
         }
-        Command::Toggle { spawn, socket } => {
-            let path = socket_path(socket.socket);
+        Command::Toggle { spawn } => {
+            let path = resolve_socket(app.socket, &config);
             control::send_request(&path, &ControlRequest::Toggle { query: spawn.query })?;
             Ok(())
         }
-        Command::Quit { socket } => {
-            let path = socket_path(socket.socket);
+        Command::Quit => {
+            let path = resolve_socket(app.socket, &config);
             match control::quit_running_instance(&path) {
                 Ok(true) => Ok(()),
                 Ok(false) => {
@@ -143,8 +158,8 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 }
             }
         }
-        Command::Status { socket } => {
-            let path = socket_path(socket.socket);
+        Command::Status => {
+            let path = resolve_socket(app.socket, &config);
             match control::request_status(&path) {
                 Ok(Some(resp)) => {
                     println!("running: yes");
@@ -161,18 +176,26 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 }
             }
         }
-        Command::Preload { spawn, socket } => spawn_instance(spawn, socket, true),
-        Command::Show { spawn, socket } => spawn_instance(spawn, socket, false),
+        Command::Preload { spawn } => spawn_instance(spawn, app.socket, true, &config),
+        Command::Show { spawn } => spawn_instance(spawn, app.socket, false, &config),
     }
 }
 
-fn socket_path(socket: Option<PathBuf>) -> PathBuf {
-    socket.unwrap_or_else(control::default_socket_path)
+fn resolve_socket(socket: Option<PathBuf>, config: &Config) -> PathBuf {
+    socket.unwrap_or_else(|| config.paths.socket.clone())
 }
 
-fn spawn_instance(spawn: SpawnArgs, socket: SocketArgs, hidden: bool) -> anyhow::Result<()> {
-    let data_path = spawn.data.unwrap_or_else(default_data_path);
-    let control_socket = socket_path(socket.socket);
+fn spawn_instance(
+    spawn: SpawnArgs,
+    socket: Option<PathBuf>,
+    hidden: bool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    let data_dir = spawn
+        .data
+        .clone()
+        .unwrap_or_else(|| config.paths.data_dir.clone());
+    let control_socket = resolve_socket(socket, config);
 
     if spawn.reload {
         // Tell any resident to quit, unlink its socket, and take over.
@@ -204,16 +227,12 @@ fn spawn_instance(spawn: SpawnArgs, socket: SocketArgs, hidden: bool) -> anyhow:
         return Ok(());
     };
 
-    if let Some(parent) = data_path.parent() {
-        std::fs::create_dir_all(parent).expect("failed to create data directory");
-    }
-
-    let mut engine = Engine::new(&data_path, spawn.dry_run)?;
+    let mut engine = Engine::new_with_config(&data_dir, spawn.dry_run, &config.engine)?;
     engine.add_provider(Box::new(huffi::engine::provider::MetaProvider::new(
         &control_socket,
-        &data_path,
+        &data_dir,
         spawn.dry_run,
-    )));
+    )))?;
 
     if spawn.dry_run {
         use huffi::engine::provider::TestProvider;
@@ -254,16 +273,154 @@ fn spawn_instance(spawn: SpawnArgs, socket: SocketArgs, hidden: bool) -> anyhow:
                 }]),
         ];
 
-        engine.add_provider(Box::new(TestProvider::new("test", test_entries)));
+        engine.add_provider(Box::new(TestProvider::new("test", test_entries)))?;
     }
 
     let main_loop = glib::MainLoop::new(None::<&glib::MainContext>, false);
-    let launcher =
-        ui::app::Launcher::new(listener, Arc::new(Mutex::new(engine)), main_loop.clone());
+    let launcher = ui::app::Launcher::new(
+        listener,
+        Arc::new(Mutex::new(engine)),
+        main_loop.clone(),
+        config.ui.clone(),
+    );
     if !hidden {
         launcher.show_with_query(spawn.query.unwrap_or_default());
     }
 
     main_loop.run();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> (Cli, clap::ArgMatches) {
+        let matches = Cli::command().get_matches_from(args);
+        let cli = Cli::from_arg_matches(&matches).unwrap();
+        (cli, matches)
+    }
+
+    #[test]
+    fn bare_flags_default_to_show() {
+        let (cli, _) = parse(&["huffi", "-q", "fire", "--dry-run"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.spawn.query.as_deref(), Some("fire"));
+        assert!(cli.spawn.dry_run);
+    }
+
+    #[test]
+    fn leading_flags_detected_before_explicit_subcommand() {
+        let (cli, matches) = parse(&[
+            "huffi", "-q", "leading", "--socket", "/x.sock", "show", "-q", "trailing",
+        ]);
+        assert!(cli.command.is_some());
+        assert!(any_spawn_flag_on_cli(&matches));
+        assert_eq!(
+            cli.app.socket.as_deref(),
+            Some(std::path::Path::new("/x.sock"))
+        );
+    }
+
+    #[test]
+    fn leading_flags_detected_before_non_start_subcommand() {
+        let (cli, matches) = parse(&["huffi", "-q", "fire", "--reload", "quit"]);
+        assert!(matches!(cli.command, Some(Command::Quit)));
+        assert!(any_spawn_flag_on_cli(&matches));
+    }
+
+    #[test]
+    fn spawn_flags_after_subcommand_not_treated_as_leading() {
+        let (cli, matches) = parse(&["huffi", "show", "-q", "fire", "--dry-run"]);
+        assert!(matches!(cli.command, Some(Command::Show { .. })));
+        assert!(!any_spawn_flag_on_cli(&matches));
+    }
+
+    #[test]
+    fn global_socket_before_subcommand_still_allowed() {
+        let (cli, matches) = parse(&["huffi", "--socket", "/x.sock", "quit"]);
+        assert!(matches!(cli.command, Some(Command::Quit)));
+        assert!(!any_spawn_flag_on_cli(&matches));
+        assert_eq!(
+            cli.app.socket.as_deref(),
+            Some(std::path::Path::new("/x.sock"))
+        );
+    }
+
+    #[test]
+    fn non_start_scope_rejects_query() {
+        let err = Cli::try_parse_from(["huffi", "quit", "-q", "fire"])
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn quit_accepts_global_socket() {
+        let (cli, _) = parse(&["huffi", "quit", "--socket", "/x.sock"]);
+        assert!(matches!(cli.command, Some(Command::Quit)));
+        assert_eq!(
+            cli.app.socket.as_deref(),
+            Some(std::path::Path::new("/x.sock"))
+        );
+    }
+
+    #[test]
+    fn env_provides_data_and_dry_run() {
+        for (key, val) in [("HUFFI_DATA", "/env/data"), ("HUFFI_DRY_RUN", "true")] {
+            unsafe { std::env::set_var(key, val) };
+        }
+        let (cli, matches) = parse(&["huffi", "preload"]);
+        unsafe {
+            std::env::remove_var("HUFFI_DATA");
+            std::env::remove_var("HUFFI_DRY_RUN");
+        }
+
+        assert_eq!(
+            cli.spawn.data.as_deref(),
+            Some(std::path::Path::new("/env/data"))
+        );
+        assert!(cli.spawn.dry_run);
+        assert!(!any_spawn_flag_on_cli(&matches));
+    }
+
+    #[test]
+    fn env_provides_socket_and_config() {
+        for (key, val) in [
+            ("HUFFI_SOCKET", "/env/huffi.sock"),
+            ("HUFFI_CONFIG", "/env/config.toml"),
+        ] {
+            unsafe { std::env::set_var(key, val) };
+        }
+        let (cli, _) = parse(&["huffi", "status"]);
+        unsafe {
+            std::env::remove_var("HUFFI_SOCKET");
+            std::env::remove_var("HUFFI_CONFIG");
+        }
+
+        assert_eq!(
+            cli.app.socket.as_deref(),
+            Some(std::path::Path::new("/env/huffi.sock"))
+        );
+        assert_eq!(
+            cli.app.config.as_deref(),
+            Some(std::path::Path::new("/env/config.toml"))
+        );
+    }
+
+    #[test]
+    fn env_spawn_vars_do_not_error_before_subcommand() {
+        unsafe {
+            std::env::set_var("HUFFI_DATA", "/env/data");
+            std::env::set_var("HUFFI_DRY_RUN", "true");
+        }
+        let (cli, matches) = parse(&["huffi", "quit"]);
+        unsafe {
+            std::env::remove_var("HUFFI_DATA");
+            std::env::remove_var("HUFFI_DRY_RUN");
+        }
+
+        assert!(matches!(cli.command, Some(Command::Quit)));
+        assert!(!any_spawn_flag_on_cli(&matches));
+    }
 }

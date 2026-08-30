@@ -20,8 +20,9 @@ freedesktop-desktop-entry = "0.8"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 rink-core = { version = "0.9", features = ["bundle-files"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 gtk4 = "0.11"
 gtk4-layer-shell = "0.8"
 async-channel = "2"

@@ -1,13 +1,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::config::ScoringConfig;
+
 use super::{BaseScored, Scored};
 
 pub type HistoryKey = String;
 
-const HALF_LIFE_SECS: f64 = 14.0 * 24.0 * 3600.0;
-const LAMBDA: f64 = std::f64::consts::LN_2 / HALF_LIFE_SECS;
-const CONFIDENCE_K: f64 = 3.0;
+/// Name of the history file inside the huffi data folder.
+pub const HISTORY_FILE: &str = "history.json";
+
+/// Decay constant for a half-life in days: `λ = ln(2) / half_life_secs`.
+fn half_life_lambda(half_life_days: f64) -> f64 {
+    std::f64::consts::LN_2 / (half_life_days * 86400.0)
+}
 
 /// A time-decayed record for a (prefix, application) pair.
 ///
@@ -22,21 +28,21 @@ pub struct HistoryRecord {
 }
 
 impl HistoryRecord {
-    fn effective(&self, now: f64) -> f64 {
+    fn effective(&self, now: f64, lambda: f64) -> f64 {
         let dt = (now - self.last_update).max(0.0);
-        self.score * (-LAMBDA * dt).exp()
+        self.score * (-lambda * dt).exp()
     }
 
-    fn record_launch(&mut self, now: f64) {
-        self.score = self.effective(now) + 1.0;
+    fn record_launch(&mut self, now: f64, lambda: f64) {
+        self.score = self.effective(now, lambda) + 1.0;
         self.last_update = now;
         self.n += 1;
     }
 
-    fn record_boost(&mut self, now: f64, weight: f64) {
-        self.score = self.effective(now) + weight;
+    fn record_boost(&mut self, now: f64, weight: f64, samples: u32, lambda: f64) {
+        self.score = self.effective(now, lambda) + weight;
         self.last_update = now;
-        self.n += weight as u32;
+        self.n += samples;
     }
 }
 
@@ -45,19 +51,34 @@ pub struct KeyedHistoryRecord {
     pub record: HistoryRecord,
 }
 
-#[derive(Default)]
 pub struct HistoryStore {
     data: HashMap<String, HashMap<HistoryKey, HistoryRecord>>,
     path: Option<PathBuf>,
+    lambda: f64,
+    confidence_k: f64,
+}
+
+impl Default for HistoryStore {
+    fn default() -> Self {
+        let scoring = ScoringConfig::default();
+        Self {
+            data: HashMap::new(),
+            path: None,
+            lambda: half_life_lambda(scoring.half_life_days),
+            confidence_k: scoring.confidence_k,
+        }
+    }
 }
 
 impl HistoryStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn open(path: impl AsRef<Path>, dry_run: bool) -> anyhow::Result<Self> {
-        let path = path.as_ref().to_path_buf();
+    /// Create the history store backed by `data_dir.join(HISTORY_FILE)`. The
+    /// file is only read (and later written) when not in dry-run mode.
+    pub fn new_with_config(
+        data_dir: impl AsRef<Path>,
+        dry_run: bool,
+        scoring: &ScoringConfig,
+    ) -> anyhow::Result<Self> {
+        let path = data_dir.as_ref().join(HISTORY_FILE);
         let data = if !dry_run && path.exists() {
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("failed to read history file: {e}"))?;
@@ -69,6 +90,8 @@ impl HistoryStore {
         Ok(HistoryStore {
             data,
             path: if dry_run { None } else { Some(path) },
+            lambda: half_life_lambda(scoring.half_life_days),
+            confidence_k: scoring.confidence_k,
         })
     }
 
@@ -116,12 +139,12 @@ impl HistoryStore {
                     last_update: now,
                     n: 0,
                 })
-                .record_launch(now);
+                .record_launch(now, self.lambda);
         }
         self.flush_to_disk();
     }
 
-    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64) {
+    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64, samples: u32) {
         let now = timestamp();
         self.data
             .entry(query.to_string())
@@ -132,7 +155,7 @@ impl HistoryStore {
                 last_update: now,
                 n: 0,
             })
-            .record_boost(now, weight);
+            .record_boost(now, weight, samples, self.lambda);
         self.flush_to_disk();
     }
 
@@ -157,7 +180,7 @@ impl HistoryStore {
                     .sum::<f64>()
             })
             .unwrap_or(0.0);
-        n / (n + CONFIDENCE_K)
+        n / (n + self.confidence_k)
     }
 
     pub fn history_score(&self, query: &str, history_key: &str) -> f64 {
@@ -167,14 +190,14 @@ impl HistoryStore {
         };
         let max_effective = history_keys
             .values()
-            .map(|record| record.effective(now))
+            .map(|record| record.effective(now, self.lambda))
             .fold(0.0f64, f64::max);
         if max_effective <= 0.0 {
             return 0.0;
         }
         let raw = history_keys
             .get(history_key)
-            .map(|record| record.effective(now))
+            .map(|record| record.effective(now, self.lambda))
             .unwrap_or(0.0);
         raw / max_effective
     }
@@ -188,7 +211,7 @@ impl HistoryStore {
                     .iter()
                     .map(|(history_key, record)| {
                         let mut entry = record.clone();
-                        entry.score = record.effective(now);
+                        entry.score = record.effective(now, self.lambda);
                         KeyedHistoryRecord {
                             key: history_key.clone(),
                             record: entry,
@@ -243,14 +266,14 @@ mod tests {
 
     #[test]
     fn untrained_prefix_falls_through_to_query_score() {
-        let history = HistoryStore::new();
+        let history = HistoryStore::default();
         let score = history.history_score("fi", "Firefox");
         assert_eq!(score, 0.0);
     }
 
     #[test]
     fn trained_prefix_has_score() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         for _ in 0..10 {
             history.record_launch("fi", "Firefox");
         }
@@ -260,7 +283,7 @@ mod tests {
 
     #[test]
     fn fan_out_trains_shorter_prefix() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         for _ in 0..5 {
             history.record_launch("fire", "Firefox");
         }
@@ -272,7 +295,7 @@ mod tests {
 
     #[test]
     fn migration_scenario() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         for _ in 0..20 {
             history.record_launch("f", "Firefox");
         }
@@ -294,11 +317,11 @@ mod tests {
 
     #[test]
     fn boost_changes_ranking() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         for _ in 0..5 {
             history.record_launch("f", "Firefox");
         }
-        history.record_boost("f", "Finder", 10.0);
+        history.record_boost("f", "Finder", 10.0, 5);
 
         let score_firefox = history.history_score("f", "Firefox");
         let score_finder = history.history_score("f", "Finder");
@@ -307,15 +330,15 @@ mod tests {
 
     #[test]
     fn boost_does_not_fan_out() {
-        let mut history = HistoryStore::new();
-        history.record_boost("fi", "Finder", 10.0);
+        let mut history = HistoryStore::default();
+        history.record_boost("fi", "Finder", 10.0, 5);
         let confidence = history.confidence("f");
         assert_eq!(confidence, 0.0);
     }
 
     #[test]
     fn delete_removes_association() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         for _ in 0..5 {
             history.record_launch("f", "Firefox");
         }
@@ -326,7 +349,7 @@ mod tests {
 
     #[test]
     fn list_entries_returns_data() {
-        let mut history = HistoryStore::new();
+        let mut history = HistoryStore::default();
         history.record_launch("f", "Firefox");
         history.record_launch("f", "Firefox");
         let entries = history.list_entries("f");
@@ -337,7 +360,7 @@ mod tests {
 
     #[test]
     fn list_entries_empty_for_unknown_prefix() {
-        let history = HistoryStore::new();
+        let history = HistoryStore::default();
         let entries = history.list_entries("zzz");
         assert!(entries.is_empty());
     }

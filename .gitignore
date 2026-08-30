@@ -3,4 +3,5 @@
 .direnv
 .local
 /target
+.worktrees
 result

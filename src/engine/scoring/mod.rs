@@ -1,5 +1,8 @@
 pub mod base_scorer;
+pub mod config;
 pub mod history;
+
+pub use config::ScoringConfig;
 
 use base_scorer::BaseScorer;
 use history::{HistoryStore, KeyedHistoryRecord};
@@ -54,14 +57,29 @@ pub struct Scored<T> {
 pub struct Scorer {
     history: HistoryStore,
     base_scorer: BaseScorer,
+    /// Weight of a manual boost relative to a normal launch (see
+    /// [`ScoringConfig::boost_weight`]).
+    boost_weight: f64,
+    /// Synthetic launch samples a boost counts as toward confidence (see
+    /// [`ScoringConfig::boost_samples`]).
+    boost_samples: u32,
 }
 
 impl Scorer {
-    pub fn open(path: impl AsRef<std::path::Path>, dry_run: bool) -> anyhow::Result<Self> {
-        let history = HistoryStore::open(path, dry_run)?;
+    /// Create the scorer backed by the history file inside `data_dir` (the
+    /// filename is a [`history`] concern). In dry-run mode history stays
+    /// in-memory.
+    pub fn new_with_config(
+        data_dir: impl AsRef<std::path::Path>,
+        dry_run: bool,
+        scoring: &ScoringConfig,
+    ) -> anyhow::Result<Self> {
+        let history = HistoryStore::new_with_config(data_dir, dry_run, scoring)?;
         Ok(Self {
             history,
-            base_scorer: BaseScorer::new(),
+            base_scorer: BaseScorer::new(scoring.empty_query_score),
+            boost_weight: scoring.boost_weight,
+            boost_samples: scoring.boost_samples,
         })
     }
 
@@ -86,8 +104,9 @@ impl Scorer {
         self.history.record_launch(query, history_key);
     }
 
-    pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64) {
-        self.history.record_boost(query, history_key, weight);
+    pub fn record_boost(&mut self, query: &str, history_key: &str) {
+        self.history
+            .record_boost(query, history_key, self.boost_weight, self.boost_samples);
     }
 
     pub fn delete(&mut self, query: &str, history_key: &str) {

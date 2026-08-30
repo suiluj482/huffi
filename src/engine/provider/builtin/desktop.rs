@@ -1,25 +1,46 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 use crate::engine::provider::{Entry, Provider, entry, split_command};
 use crate::engine::scoring::MatchField;
 
-pub const WEIGHT_NAME: f32 = 1.0;
-pub const WEIGHT_KEYWORD: f32 = 0.8;
-pub const WEIGHT_GENERIC_NAME: f32 = 0.7;
-pub const WEIGHT_COMMENT: f32 = 0.5;
+/// Fuzzy-match field weights for this provider, loaded from the
+/// `[engine.provider.desktop]` table of the config file.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct DesktopConfig {
+    pub weight_name: f32,
+    pub weight_keyword: f32,
+    pub weight_generic_name: f32,
+    pub weight_comment: f32,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            weight_name: 1.0,
+            weight_keyword: 0.8,
+            weight_generic_name: 0.7,
+            weight_comment: 0.5,
+        }
+    }
+}
 
 pub struct DesktopEntryProvider {
     id: String,
     dirs: Vec<PathBuf>,
+    weights: DesktopConfig,
     entries: Arc<[Entry]>,
 }
 
 impl DesktopEntryProvider {
-    pub fn new(dirs: Vec<PathBuf>) -> Self {
+    pub fn new(dirs: Vec<PathBuf>, weights: DesktopConfig) -> Self {
         Self {
             id: "desktop".into(),
             dirs,
+            weights,
             entries: Arc::from([]),
         }
     }
@@ -27,7 +48,10 @@ impl DesktopEntryProvider {
 
 impl Default for DesktopEntryProvider {
     fn default() -> Self {
-        Self::new(freedesktop_desktop_entry::default_paths().collect())
+        Self::new(
+            freedesktop_desktop_entry::default_paths().collect(),
+            DesktopConfig::default(),
+        )
     }
 }
 
@@ -40,10 +64,11 @@ impl Provider for DesktopEntryProvider {
         &[]
     }
 
-    fn init(&mut self) {
+    fn init(&mut self, _data_dir: &Path) {
+        let weights = self.weights;
         self.entries = Arc::from(
             freedesktop_desktop_entry::Iter::new(self.dirs.clone().into_iter())
-                .filter_map(|path| read_desktop_entry(&path))
+                .filter_map(|path| read_desktop_entry(&path, weights))
                 .collect::<Vec<_>>(),
         );
     }
@@ -53,7 +78,7 @@ impl Provider for DesktopEntryProvider {
     }
 }
 
-fn read_desktop_entry(path: &Path) -> Option<Entry> {
+fn read_desktop_entry(path: &Path, weights: DesktopConfig) -> Option<Entry> {
     let input = std::fs::read_to_string(path).ok()?;
     let desktop =
         freedesktop_desktop_entry::DesktopEntry::from_str(path, &input, None::<&[&str]>).ok()?;
@@ -76,20 +101,20 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
 
     let mut match_fields = vec![MatchField {
         text: name.clone(),
-        weight: WEIGHT_NAME,
+        weight: weights.weight_name,
     }];
 
     if let Some(ref c) = comment {
         match_fields.push(MatchField {
             text: c.clone(),
-            weight: WEIGHT_COMMENT,
+            weight: weights.weight_comment,
         });
     }
 
     if let Some(ref g) = generic_name {
         match_fields.push(MatchField {
             text: g.clone(),
-            weight: WEIGHT_GENERIC_NAME,
+            weight: weights.weight_generic_name,
         });
     }
 
@@ -99,7 +124,7 @@ fn read_desktop_entry(path: &Path) -> Option<Entry> {
             if !word.is_empty() {
                 match_fields.push(MatchField {
                     text: word.to_string(),
-                    weight: WEIGHT_KEYWORD,
+                    weight: weights.weight_keyword,
                 });
             }
         }

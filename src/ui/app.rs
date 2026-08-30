@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::ui::config::UiConfig;
 use gtk4::cairo;
 use gtk4::gdk;
 use gtk4::glib;
@@ -16,16 +17,14 @@ use gtk4::{
     Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use huffi::engine::provider::Icon;
-use huffi::engine::{Engine, ProviderEntry, QueryHit};
+use huffi::engine::provider::{EntryMeta, Icon};
+use huffi::engine::scoring::Scored;
+use huffi::engine::{Engine, ProviderEntry};
 
 use crate::ui::control::{self, ControlRequest};
 use crate::ui::{tasks, theme};
 
-const PAGE_SIZE: usize = 10;
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(300);
-const PANEL_WIDTH: i32 = 600;
-const PANEL_HEIGHT: i32 = 400;
 
 #[derive(Debug, Clone, Copy)]
 enum Step {
@@ -47,11 +46,52 @@ enum ControlMsg {
     Quit,
 }
 
+/// A render-ready row, cut from the engine's full ranked result set as the
+/// `page_size` window around the current selection.
+#[derive(Debug, Clone)]
+struct Row {
+    entry_id: String,
+    history_key: Option<String>,
+    base_score: f64,
+    history_score: Option<f64>,
+    title: String,
+    subtitle: Option<String>,
+    icon: Option<Icon>,
+    set_query: Option<String>,
+}
+
+impl From<Scored<EntryMeta>> for Row {
+    fn from(scored: Scored<EntryMeta>) -> Self {
+        let entry = scored.entry;
+        Self {
+            entry_id: entry.id,
+            history_key: scored.history_key,
+            base_score: scored.base_score,
+            history_score: scored.history_score,
+            title: entry.title,
+            subtitle: entry.subtitle,
+            icon: entry.icon,
+            set_query: entry.set_query,
+        }
+    }
+}
+
+/// Widgets of one rendered row that change appearance with selection, kept so
+/// selection moves can toggle CSS classes in place instead of rebuilding every
+/// row on each step.
+struct BuiltRow {
+    row: GBox,
+    title: Label,
+    sub: Option<Label>,
+    scores: Vec<Label>,
+}
+
 struct State {
     query: String,
     active_prefix: Option<String>,
     providers: Vec<ProviderEntry>,
-    entries: Vec<QueryHit>,
+    entries: Vec<Row>,
+    rows: Vec<BuiltRow>,
     total: usize,
     selected: usize,
     last_click: Option<(usize, Instant)>,
@@ -70,6 +110,8 @@ pub struct Launcher {
     engine: Arc<Mutex<Engine>>,
     visible: Arc<AtomicBool>,
     state: RefCell<State>,
+    page_size: usize,
+    icon_size: i32,
 }
 
 impl Launcher {
@@ -77,6 +119,7 @@ impl Launcher {
         listener: UnixListener,
         engine: Arc<Mutex<Engine>>,
         main_loop: glib::MainLoop,
+        ui: UiConfig,
     ) -> Rc<Self> {
         if let Some(display) = gdk::Display::default() {
             theme::load_css(&display);
@@ -134,7 +177,7 @@ impl Launcher {
         panel.append(&middle);
         panel.append(&sep2);
         panel.append(&footer);
-        panel.set_size_request(PANEL_WIDTH, PANEL_HEIGHT);
+        panel.set_size_request(ui.width, ui.height);
         panel.set_hexpand(false);
         panel.set_vexpand(false);
         panel.set_halign(Align::Center);
@@ -158,7 +201,7 @@ impl Launcher {
                 window.set_anchor(edge, true);
             }
         } else {
-            window.set_default_size(PANEL_WIDTH, PANEL_HEIGHT);
+            window.set_default_size(ui.width, ui.height);
         }
 
         let this = Rc::new(Self {
@@ -177,11 +220,14 @@ impl Launcher {
                 active_prefix: None,
                 providers: Vec::new(),
                 entries: Vec::new(),
+                rows: Vec::new(),
                 total: 0,
                 selected: 0,
                 last_click: None,
                 fetch_id: 0,
             }),
+            page_size: ui.page_size,
+            icon_size: ui.icon_size,
         });
 
         this.attach_handlers(listener, main_loop);
@@ -196,7 +242,7 @@ impl Launcher {
                 move |providers| {
                     if let Some(this) = weak.upgrade() {
                         this.state.borrow_mut().providers = providers;
-                        this.refresh_results();
+                        this.render_list();
                     }
                 }
             },
@@ -219,7 +265,7 @@ impl Launcher {
             self.entry.set_text(&query);
             self.entry.set_position(-1);
         }
-        self.refresh_results();
+        self.render_list();
         self.visible.store(true, Ordering::Relaxed);
         self.window.present();
         self.entry.grab_focus();
@@ -409,7 +455,7 @@ impl Launcher {
     }
 
     fn page(&self) -> usize {
-        self.state.borrow().selected / PAGE_SIZE
+        self.state.borrow().selected / self.page_size
     }
 
     fn set_query(self: &Rc<Self>, text: String) {
@@ -420,13 +466,38 @@ impl Launcher {
             }
             st.query = text.clone();
             st.selected = 0;
+            st.entries.clear();
         }
         if self.entry.text() != text {
             self.entry.set_text(&text);
             self.entry.set_position(-1);
         }
-        self.refresh_results();
+        self.render_list();
         self.fetch_page();
+    }
+
+    /// Move the selection and refresh only what needs to change: the window is
+    /// refetched when the selection lands on a different page, otherwise just
+    /// the highlight classes are updated.
+    fn move_selection(self: &Rc<Self>, new_selected: usize) {
+        let old_selected = {
+            let st = self.state.borrow();
+            st.selected
+        };
+        if old_selected == new_selected {
+            return;
+        }
+        let old_page = old_selected / self.page_size;
+        self.state.borrow_mut().selected = new_selected;
+        if self.page() != old_page {
+            // Clear the current window so a stale page is never shown (and
+            // never submitted) while the new one is being fetched.
+            self.state.borrow_mut().entries.clear();
+            self.render_list();
+            self.fetch_page();
+        } else {
+            self.apply_selection();
+        }
     }
 
     fn select_step(self: &Rc<Self>, dir: Step) {
@@ -437,7 +508,6 @@ impl Launcher {
         if len == 0 {
             return;
         }
-        let old_page = self.page();
         let new_selected = match dir {
             Step::Next => {
                 if selected + 1 < total {
@@ -453,12 +523,7 @@ impl Launcher {
                 selected - 1
             }
         };
-        self.state.borrow_mut().selected = new_selected;
-        if self.page() != old_page {
-            self.fetch_page();
-        } else {
-            self.refresh_results();
-        }
+        self.move_selection(new_selected);
     }
 
     fn scroll_step(self: &Rc<Self>, dy: f64) {
@@ -480,13 +545,7 @@ impl Launcher {
         } else {
             return;
         };
-        let old_page = self.page();
-        self.state.borrow_mut().selected = new_selected;
-        if self.page() != old_page {
-            self.fetch_page();
-        } else {
-            self.refresh_results();
-        }
+        self.move_selection(new_selected);
     }
 
     fn apply_suggestion(self: &Rc<Self>) {
@@ -497,7 +556,7 @@ impl Launcher {
         if len == 0 {
             return;
         }
-        let local = selected % PAGE_SIZE;
+        let local = selected % self.page_size;
         let suggestion = {
             let st = self.state.borrow();
             st.entries.get(local).and_then(|h| h.set_query.clone())
@@ -518,26 +577,18 @@ impl Launcher {
             Some((prev_index, prev_time))
                 if prev_index == index && now.duration_since(prev_time) < DOUBLE_CLICK_INTERVAL
         );
-        let old_page = self.page();
-        {
-            let mut st = self.state.borrow_mut();
-            st.last_click = Some((index, now));
-            st.selected = index;
-        }
+        self.state.borrow_mut().last_click = Some((index, now));
+        self.move_selection(index);
 
         if is_double {
             self.submit();
-        } else if self.page() != old_page {
-            self.fetch_page();
-        } else {
-            self.refresh_results();
         }
     }
 
     fn submit(self: &Rc<Self>) {
         let hit = {
             let st = self.state.borrow();
-            let local = st.selected % PAGE_SIZE;
+            let local = st.selected % self.page_size;
             st.entries.get(local).cloned()
         };
         if let Some(hit) = hit {
@@ -569,7 +620,8 @@ impl Launcher {
         };
 
         let query = self.state.borrow().query.clone();
-        let offset = self.page() * PAGE_SIZE;
+        let offset = self.page() * self.page_size;
+        let page_size = self.page_size;
         let id = {
             let mut st = self.state.borrow_mut();
             st.fetch_id += 1;
@@ -589,7 +641,7 @@ impl Launcher {
                             engine.delete(&query, &history_key);
                         }
                     }
-                    engine.query_hits(&query, offset, PAGE_SIZE)
+                    Self::fetch_window(&mut engine, &query, offset, page_size)
                 }
             },
             move |(prefix, entries, total)| {
@@ -600,21 +652,48 @@ impl Launcher {
                 }
             },
         );
+    }
+
+    /// Run the query and cut the `page_size` window at `offset` out of the
+    /// full ranked result set.
+    fn fetch_window(
+        engine: &mut Engine,
+        query: &str,
+        offset: usize,
+        page_size: usize,
+    ) -> (Option<String>, Vec<Row>, usize) {
+        let (prefix, scored) = engine.query(query);
+        let total = scored.len();
+        let entries = scored
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .map(Row::from)
+            .collect();
+        (prefix, entries, total)
     }
 
     fn fetch_page(self: &Rc<Self>) {
         let (query, offset, id) = {
             let mut st = self.state.borrow_mut();
-            (st.query.clone(), (st.selected / PAGE_SIZE) * PAGE_SIZE, {
-                st.fetch_id += 1;
-                st.fetch_id
-            })
+            (
+                st.query.clone(),
+                (st.selected / self.page_size) * self.page_size,
+                {
+                    st.fetch_id += 1;
+                    st.fetch_id
+                },
+            )
         };
+        let page_size = self.page_size;
         let weak = Rc::downgrade(self);
         tasks::run_blocking(
             {
                 let engine = Arc::clone(&self.engine);
-                move || engine.lock().unwrap().query_hits(&query, offset, PAGE_SIZE)
+                move || {
+                    let mut engine = engine.lock().unwrap();
+                    Self::fetch_window(&mut engine, &query, offset, page_size)
+                }
             },
             move |(prefix, entries, total)| {
                 if let Some(this) = weak.upgrade()
@@ -626,41 +705,44 @@ impl Launcher {
         );
     }
 
-    fn apply_entries(
-        self: &Rc<Self>,
-        prefix: Option<String>,
-        entries: Vec<QueryHit>,
-        total: usize,
-    ) {
+    fn apply_entries(self: &Rc<Self>, prefix: Option<String>, entries: Vec<Row>, total: usize) {
         {
             let mut st = self.state.borrow_mut();
             st.active_prefix = prefix;
             st.entries = entries;
             st.total = total;
         }
-        self.refresh_results();
+        self.render_list();
     }
 
-    fn refresh_results(self: &Rc<Self>) {
-        let (page_base, entries, local_sel, prefix, providers) = {
+    fn render_list(self: &Rc<Self>) {
+        let (page_base, entries, selected) = {
             let st = self.state.borrow();
             (
-                (st.selected / PAGE_SIZE) * PAGE_SIZE,
+                (st.selected / self.page_size) * self.page_size,
                 st.entries.clone(),
-                st.selected % PAGE_SIZE,
-                st.active_prefix.clone(),
-                st.providers.clone(),
+                st.selected,
             )
         };
 
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
+        let local_sel = selected
+            .checked_sub(page_base)
+            .filter(|local| *local < entries.len());
+        let mut rows = Vec::with_capacity(entries.len());
         for (i, hit) in entries.iter().enumerate() {
-            let row = self.build_row(hit, i == local_sel, page_base + i, i);
-            self.list.append(&row);
+            let row = self.build_row(hit, local_sel == Some(i), page_base + i, i);
+            self.list.append(&row.row);
+            rows.push(row);
         }
+        self.state.borrow_mut().rows = rows;
 
+        let (prefix, providers) = {
+            let st = self.state.borrow();
+            (st.active_prefix.clone(), st.providers.clone())
+        };
         match &prefix {
             Some(pfx) => {
                 let label = match providers
@@ -697,29 +779,36 @@ impl Launcher {
         self.rail.queue_draw();
     }
 
+    /// Toggle the selection CSS classes on the already-built rows. Called on
+    /// any in-page selection move, avoiding a full widget rebuild per step.
+    fn apply_selection(self: &Rc<Self>) {
+        let (page_base, selected) = {
+            let st = self.state.borrow();
+            ((st.selected / self.page_size) * self.page_size, st.selected)
+        };
+        let rows = self.state.borrow();
+        for (i, row) in rows.rows.iter().enumerate() {
+            let selected = page_base + i == selected;
+            toggle_class(&row.row, selected, "row-selected", "row");
+            toggle_class(&row.title, selected, "title-selected", "title");
+            if let Some(sub) = &row.sub {
+                toggle_class(sub, selected, "subtitle-selected", "subtitle");
+            }
+            for score in &row.scores {
+                toggle_class(score, selected, "score-selected", "score");
+            }
+        }
+        drop(rows);
+        self.rail.queue_draw();
+    }
+
     fn build_row(
         self: &Rc<Self>,
-        hit: &QueryHit,
+        hit: &Row,
         is_selected: bool,
         global_index: usize,
         local_index: usize,
-    ) -> GBox {
-        let title_class = if is_selected {
-            "title-selected"
-        } else {
-            "title"
-        };
-        let sub_class = if is_selected {
-            "subtitle-selected"
-        } else {
-            "subtitle"
-        };
-        let score_class = if is_selected {
-            "score-selected"
-        } else {
-            "score"
-        };
-
+    ) -> BuiltRow {
         let row = GBox::new(Orientation::Horizontal, 8);
         row.set_valign(Align::Center);
         row.add_css_class(if is_selected { "row-selected" } else { "row" });
@@ -728,41 +817,65 @@ impl Launcher {
         clickable.set_hexpand(true);
         clickable.set_valign(Align::Center);
 
-        match hit.icon.as_ref().and_then(load_icon) {
+        match hit
+            .icon
+            .as_ref()
+            .and_then(|icon| load_icon(icon, self.icon_size))
+        {
             Some(icon) => clickable.append(&icon),
-            None => clickable.append(&spacer(theme::ICON_SIZE)),
+            None => clickable.append(&spacer(self.icon_size)),
         }
 
         let title_area = GBox::new(Orientation::Horizontal, 12);
         title_area.set_hexpand(true);
 
         let title = Label::new(Some(&hit.title));
-        title.add_css_class(title_class);
+        title.add_css_class(if is_selected {
+            "title-selected"
+        } else {
+            "title"
+        });
         title.set_ellipsize(pango::EllipsizeMode::End);
         title.set_halign(Align::Start);
         title.set_xalign(0.0);
         title_area.append(&title);
 
-        if let Some(sub) = &hit.subtitle {
+        let sub = if let Some(sub) = &hit.subtitle {
             title.set_hexpand(false);
             let sub_label = Label::new(Some(&format!("({sub})")));
-            sub_label.add_css_class(sub_class);
+            sub_label.add_css_class(if is_selected {
+                "subtitle-selected"
+            } else {
+                "subtitle"
+            });
             sub_label.set_halign(Align::Start);
             title_area.append(&sub_label);
+            Some(sub_label)
         } else {
             title.set_hexpand(true);
-        }
+            None
+        };
         clickable.append(&title_area);
 
         let scores = GBox::new(Orientation::Horizontal, 6);
         scores.set_valign(Align::Center);
         let base_score = Label::new(Some(&format!("{:.2}", hit.base_score)));
-        base_score.add_css_class(score_class);
+        base_score.add_css_class(if is_selected {
+            "score-selected"
+        } else {
+            "score"
+        });
         scores.append(&base_score);
+        let mut score_labels = vec![base_score];
         if let Some(h) = hit.history_score {
             let history_score = Label::new(Some(&format!("{h:.2}")));
-            history_score.add_css_class(score_class);
+            history_score.add_css_class(if is_selected {
+                "score-selected"
+            } else {
+                "score"
+            });
             scores.append(&history_score);
+            score_labels.push(history_score);
         }
         clickable.append(&scores);
 
@@ -808,7 +921,12 @@ impl Launcher {
             row.append(&delete_btn);
         }
 
-        row
+        BuiltRow {
+            row,
+            title,
+            sub,
+            scores: score_labels,
+        }
     }
 
     fn draw_rail(&self, cr: &cairo::Context, width: i32, height: i32) {
@@ -835,10 +953,7 @@ impl Launcher {
     }
 
     fn rail_clicked(self: &Rc<Self>, y: f64) {
-        let (total, selected) = {
-            let st = self.state.borrow();
-            (st.total, st.selected)
-        };
+        let total = self.state.borrow().total;
         if total == 0 {
             return;
         }
@@ -853,16 +968,22 @@ impl Launcher {
         }
         let pos = (y - bar_height * 0.5).clamp(0.0, max_pos);
         let new_selected = ((pos / max_pos * (total - 1) as f64).round() as usize).min(total - 1);
-        if new_selected == selected {
-            return;
-        }
-        let old_page = selected / PAGE_SIZE;
-        self.state.borrow_mut().selected = new_selected;
-        if new_selected / PAGE_SIZE != old_page {
-            self.fetch_page();
-        } else {
-            self.refresh_results();
-        }
+        self.move_selection(new_selected);
+    }
+}
+
+fn toggle_class(
+    widget: &impl IsA<gtk4::Widget>,
+    selected: bool,
+    selected_class: &str,
+    base_class: &str,
+) {
+    if selected {
+        widget.add_css_class(selected_class);
+        widget.remove_css_class(base_class);
+    } else {
+        widget.add_css_class(base_class);
+        widget.remove_css_class(selected_class);
     }
 }
 
@@ -873,11 +994,11 @@ fn spacer(size: i32) -> GBox {
     box_
 }
 
-fn load_icon(icon: &Icon) -> Option<Image> {
+fn load_icon(icon: &Icon, size: i32) -> Option<Image> {
     match icon {
         Icon::Name(name) => {
             let image = Image::from_icon_name(name);
-            image.set_pixel_size(theme::ICON_SIZE);
+            image.set_pixel_size(size);
             Some(image)
         }
         Icon::Path(path) => {
@@ -888,7 +1009,7 @@ fn load_icon(icon: &Icon) -> Option<Image> {
             match gdk::Texture::from_file(&file) {
                 Ok(texture) => {
                     let image = Image::from_paintable(Some(&texture));
-                    image.set_pixel_size(theme::ICON_SIZE);
+                    image.set_pixel_size(size);
                     Some(image)
                 }
                 Err(_) => None,

@@ -11,7 +11,7 @@ a ranked list.
 pub trait Provider: Send {
     fn id(&self) -> &str;
     fn prefixes(&self) -> &[&str];
-    fn init(&mut self);
+    fn init(&mut self, data_dir: &Path);
     fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
 }
 ```
@@ -40,15 +40,21 @@ fuzzy-matches the provider's entries against `" 2 + 2"`, not the full input.
 Providers whose prefix did not match score against the full input instead. A
 `.score()`-based entry isn't affected by any query either way.
 
-### `init()`
+### `init(data_dir)`
 
-Called once at startup, before any queries are served. Use this for
-expensive one-time work:
+Called once at startup, before any queries are served. `data_dir` is this
+provider's **own** data folder: `<data dir>/providers/<provider id>/`, created by the
+engine before `init()` runs (unless running in `--dry-run`). Use it to keep
+per-provider state (caches, indices, logs) without colliding with other
+providers — huffi never needs to know what you put there, and you never need
+to locate or create the folder yourself.
+
+Use this for expensive one-time work:
 
 - Scanning `.desktop` files
 - Initialising a parser context (e.g. loading unit definitions for a
   calculator)
-- Building an index
+- Building an index, opening your own storage under `data_dir`
 
 Since `init()` is only called once, keep `query()` as lightweight as
 possible. Your provider holds arbitrary state — store everything you need
@@ -104,7 +110,7 @@ entry("my-entry-id", "Display Name")
 | `.extra(json)` | `serde_json::Value` | Arbitrary metadata attached to the entry, surfaced on the query hit |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
-| `.clipboard(value)` | `String` | Copy `value` to the clipboard via `wl-copy` on selection |
+| `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
@@ -195,7 +201,7 @@ When the user selects an entry, its `Action` is performed:
 - **`.exec(args)`** — spawns the command as a child process with stdout and
   stderr discarded. The first element of `args` is the program to run.
 - **`.terminal_exec(args)`** — same, but the command is launched inside a
-  terminal emulator (`kitty`) instead.
+  terminal emulator (configurable default `kitty`) instead.
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
@@ -211,7 +217,7 @@ impl Provider for CustomDirProvider {
     fn id(&self) -> &str { "custom-dirs" }
     fn prefixes(&self) -> &[&str] { &[] }
 
-    fn init(&mut self) {
+    fn init(&mut self, _data_dir: &Path) {
         self.entries = vec![
             entry("projects", "Projects")
                 .exec(vec!["xdg-open".into(), "/home/me/projects".into()])
@@ -240,16 +246,17 @@ chains calculations.
 Register it on the [`Engine`] in `src/main.rs`, after `Engine::new`:
 
 ```rust
-let mut engine = Engine::new(&data_path, args.dry_run)?;
+let mut engine = Engine::new(&data_dir, args.dry_run)?;
 engine.add_provider(Box::new(MyProvider::default()));
 ```
 
-`add_provider` calls [`init()`] before the provider is queried. Built-ins are
-registered in [`ProviderCollection::new()`] in
+`add_provider` creates the provider's `<data_dir>/providers/<id>/` folder (when not in
+dry-run mode) and calls [`init(&data_dir)`][`init()`] before the provider is
+queried. Built-ins are registered in [`ProviderCollection::new_with_config()`] in
 `src/engine/provider/collection.rs`.
 
 [`Engine`]: ../src/engine/mod.rs
-[`ProviderCollection::new()`]: ../src/engine/provider/collection.rs
+[`ProviderCollection::new_with_config()`]: ../src/engine/provider/collection.rs
 [`init()`]: #init
 [`CalculatorProvider`]: ../src/engine/provider/builtin/calculator.rs
 [`entry()`]: ../src/engine/provider/util.rs
