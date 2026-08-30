@@ -1,9 +1,18 @@
+use std::path::Path;
+
+use anyhow::Context;
+
 use crate::engine::scoring::QueryGroup;
 
+use super::config::ProviderConfig;
 use super::{CalculatorProvider, DesktopEntryProvider, Entry, EntryMeta, Provider};
 
 pub struct ProviderCollection {
     providers: Vec<Box<dyn Provider>>,
+    /// Huffi's data folder; each provider gets `data_dir/providers/<id>/`.
+    data_dir: std::path::PathBuf,
+    /// Skip creating on-disk state when true.
+    dry_run: bool,
 }
 
 /// A registered provider and its trigger prefixes.
@@ -23,28 +32,39 @@ pub struct PreprocessedQuery {
 }
 
 impl ProviderCollection {
-    pub fn new() -> Self {
-        let mut providers: Vec<Box<dyn Provider>> = vec![
-            Box::new(DesktopEntryProvider::default()),
-            Box::new(CalculatorProvider::new()),
-        ];
-        for p in providers.iter_mut() {
-            p.init();
-        }
-        Self { providers }
-    }
-}
-
-impl Default for ProviderCollection {
-    fn default() -> Self {
-        Self::new()
+    /// Construct the collection with the built-in providers configured from
+    /// `config`. Each provider is registered with `add_provider`, which
+    /// provisions its `<data_dir>/providers/<provider id>/` folder (when
+    /// not in dry-run mode) and calls its [`init`](Provider::init).
+    pub fn new_with_config(
+        data_dir: impl AsRef<Path>,
+        dry_run: bool,
+        config: &ProviderConfig,
+    ) -> anyhow::Result<Self> {
+        let mut collection = Self {
+            providers: Vec::new(),
+            data_dir: data_dir.as_ref().to_path_buf(),
+            dry_run,
+        };
+        collection.add_provider(Box::new(DesktopEntryProvider::new(
+            freedesktop_desktop_entry::default_paths().collect(),
+            config.desktop,
+        )))?;
+        collection.add_provider(Box::new(CalculatorProvider::new()))?;
+        Ok(collection)
     }
 }
 
 impl ProviderCollection {
-    pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) {
-        provider.init();
+    pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) -> anyhow::Result<()> {
+        let dir = self.data_dir.join("providers").join(provider.id());
+        if !self.dry_run {
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("failed to create data dir {}", dir.display()))?;
+        }
+        provider.init(&dir);
         self.providers.push(provider);
+        Ok(())
     }
 
     /// Resolve the global prefix for a query.
@@ -158,8 +178,11 @@ mod tests {
 
     type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
 
+    /// Tests only: a dry-run collection against an ephemeral folder, so no
+    /// providers can touch the real data dir.
     fn collection() -> ProviderCollection {
-        ProviderCollection::new()
+        let dir = std::env::temp_dir().join(format!("huffi-providers-{}", std::process::id()));
+        ProviderCollection::new_with_config(dir, true, &ProviderConfig::default()).unwrap()
     }
 
     struct TrackingProvider {
@@ -187,7 +210,7 @@ mod tests {
             &self.prefixes
         }
 
-        fn init(&mut self) {}
+        fn init(&mut self, _data_dir: &Path) {}
 
         fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
             self.calls.lock().unwrap().push((
@@ -224,7 +247,8 @@ mod tests {
             "long",
             vec!["=="],
             Arc::new(Mutex::new(Vec::new())),
-        )));
+        )))
+        .unwrap();
         let pre = c.preprocess_query("== 2 + 2");
         assert_eq!(pre.prefix.as_deref(), Some("=="));
         assert_eq!(pre.query, " 2 + 2");
@@ -237,7 +261,8 @@ mod tests {
             "calc",
             vec!["=", "=="],
             Arc::new(Mutex::new(Vec::new())),
-        )));
+        )))
+        .unwrap();
         let pre = c.preprocess_query("== 2");
         assert_eq!(pre.prefix.as_deref(), Some("=="));
         assert_eq!(pre.query, " 2");
@@ -251,12 +276,14 @@ mod tests {
             "short",
             vec!["="],
             Arc::clone(&calls),
-        )));
+        )))
+        .unwrap();
         c.add_provider(Box::new(TrackingProvider::new(
             "long",
             vec!["=="],
             Arc::clone(&calls),
-        )));
+        )))
+        .unwrap();
 
         let pre = c.preprocess_query("== 2");
         let _ = c.entries(&pre);
@@ -284,7 +311,8 @@ mod tests {
         c.add_provider(Box::new(TestProvider::new(
             "desktop",
             vec![match_fields_entry("desktop", "Firefox")],
-        )));
+        )))
+        .unwrap();
         let pre = c.preprocess_query("firefox");
         let entries = c.entries(&pre);
         for e in &entries {

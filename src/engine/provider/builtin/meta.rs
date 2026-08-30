@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::engine::provider::{Entry, Provider, entry};
@@ -10,8 +10,10 @@ use crate::engine::provider::{Entry, Provider, entry};
 /// selected, so typing `@socket` and pressing enter puts the control socket
 /// path on your clipboard.
 pub struct MetaProvider {
-    control_socket: std::path::PathBuf,
-    data_path: std::path::PathBuf,
+    control_socket: PathBuf,
+    /// Huffi's data folder (see [`Engine::new_with_config`], e.g.
+    /// `~/.local/share/huffi`), surfaced by the `meta-data` entry.
+    data_dir: PathBuf,
     dry_run: bool,
     started: Instant,
     started_at: SystemTime,
@@ -20,12 +22,12 @@ pub struct MetaProvider {
 impl MetaProvider {
     pub fn new(
         control_socket: impl AsRef<Path>,
-        data_path: impl AsRef<Path>,
+        data_dir: impl AsRef<Path>,
         dry_run: bool,
     ) -> Self {
         Self {
             control_socket: control_socket.as_ref().to_path_buf(),
-            data_path: data_path.as_ref().to_path_buf(),
+            data_dir: data_dir.as_ref().to_path_buf(),
             dry_run,
             started: Instant::now(),
             started_at: SystemTime::now(),
@@ -54,7 +56,7 @@ impl Provider for MetaProvider {
         &["@"]
     }
 
-    fn init(&mut self) {}
+    fn init(&mut self, _data_dir: &Path) {}
 
     fn query(&mut self, prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         let Some(_prefix) = prefix else {
@@ -63,7 +65,7 @@ impl Provider for MetaProvider {
 
         let uptime = format_uptime(self.uptime());
         let socket = self.control_socket.to_string_lossy().into_owned();
-        let data = self.data_path.to_string_lossy().into_owned();
+        let data = self.data_dir.to_string_lossy().into_owned();
         let pid = self.pid().to_string();
         let version = self.version().to_string();
         let dry_run = if self.dry_run { "on" } else { "off" };
@@ -72,7 +74,7 @@ impl Provider for MetaProvider {
         let mut entries = vec![
             meta_entry("meta-uptime", "Uptime", uptime),
             meta_entry("meta-socket", "Control socket", socket),
-            meta_entry("meta-data", "Data file", data.clone()),
+            meta_entry("meta-data", "Data path", data.clone()),
             meta_entry("meta-pid", "PID", pid.clone()),
             meta_entry("meta-version", "Version", version),
             meta_entry("meta-dry-run", "Dry-run", dry_run.to_string()),
@@ -97,10 +99,10 @@ impl Provider for MetaProvider {
                 .match_field("Quit huffi"),
         );
         entries.push(
-            entry("meta-open-data", "Open data file")
+            entry("meta-open-data", "Open data folder")
                 .subtitle(data.clone())
                 .exec(vec!["xdg-open".into(), data])
-                .match_field("Open data file"),
+                .match_field("Open data folder"),
         );
 
         entries
@@ -193,16 +195,21 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
 
+    fn provider(dir: &str) -> MetaProvider {
+        let mut p = MetaProvider::new("/tmp/x.sock", dir, false);
+        p.init(Path::new(dir));
+        p
+    }
+
     #[test]
     fn empty_without_prefix() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
-        assert!(p.query(None, "").is_empty());
-        assert!(p.query(None, "uptime").is_empty());
+        assert!(provider("/tmp/data").query(None, "").is_empty());
+        assert!(provider("/tmp/data").query(None, "uptime").is_empty());
     }
 
     #[test]
     fn returns_entries_with_prefix() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
+        let mut p = provider("/tmp/data");
         let entries = p.query(Some("@"), "");
         assert_eq!(entries.len(), 11);
         assert!(entries.iter().any(|e| e.entry.id == "meta-uptime"));
@@ -217,7 +224,7 @@ mod tests {
 
     #[test]
     fn memory_and_threads_entries_carry_values() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = provider("/tmp/data");
         let entries = p.query(Some("@"), "");
         let memory = entries
             .iter()
@@ -249,7 +256,7 @@ mod tests {
 
     #[test]
     fn kill_entry_runs_kill_on_pid() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = provider("/tmp/data");
         let entries = p.query(Some("@"), "");
         let kill = entries
             .iter()
@@ -267,22 +274,19 @@ mod tests {
     }
 
     #[test]
-    fn open_data_entry_runs_xdg_open() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+    fn open_data_entry_runs_xdg_open_on_folder() {
+        let mut p = provider("/tmp/data");
         let entries = p.query(Some("@"), "");
         let open = entries
             .iter()
             .find(|e| e.entry.id == "meta-open-data")
             .expect("meta-open-data entry");
-        assert_eq!(open.entry.title, "Open data file");
-        assert_eq!(open.entry.subtitle.as_deref(), Some("/tmp/data.json"));
+        assert_eq!(open.entry.title, "Open data folder");
+        assert_eq!(open.entry.subtitle.as_deref(), Some("/tmp/data"));
         match &open.entry.action {
             crate::engine::provider::Action::Exec { args, terminal } => {
                 assert!(!terminal);
-                assert_eq!(
-                    args,
-                    &vec!["xdg-open".to_string(), "/tmp/data.json".to_string()]
-                );
+                assert_eq!(args, &vec!["xdg-open".to_string(), "/tmp/data".to_string()]);
             }
             _ => panic!("expected Exec action"),
         }
@@ -290,7 +294,7 @@ mod tests {
 
     #[test]
     fn socket_entry_carries_value_and_copy_action() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", false);
+        let mut p = provider("/tmp/data");
         let entries = p.query(Some("@"), "sock");
         let socket = entries
             .iter()
@@ -299,20 +303,17 @@ mod tests {
         assert_eq!(socket.entry.title, "Control socket");
         assert_eq!(socket.entry.subtitle.as_deref(), Some("/tmp/x.sock"));
         match &socket.entry.action {
-            crate::engine::provider::Action::Exec { args, terminal } => {
-                assert!(!terminal);
-                assert_eq!(
-                    args,
-                    &vec!["wl-copy".to_string(), "/tmp/x.sock".to_string()]
-                );
+            crate::engine::provider::Action::Clipboard { value } => {
+                assert_eq!(value, "/tmp/x.sock");
             }
-            _ => panic!("expected Exec action"),
+            other => panic!("expected Clipboard action, got {other:?}"),
         }
     }
 
     #[test]
     fn dry_run_reflected_in_entry() {
-        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data.json", true);
+        let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data", true);
+        p.init(Path::new("/tmp/data"));
         let entries = p.query(Some("@"), "");
         let dry = entries
             .iter()
@@ -324,7 +325,8 @@ mod tests {
 
     #[test]
     fn value_not_in_match_fields() {
-        let mut p = MetaProvider::new("/tmp/unlikely-path.sock", "/tmp/data.json", false);
+        let mut p = MetaProvider::new("/tmp/unlikely-path.sock", "/tmp/data", false);
+        p.init(Path::new("/tmp/data"));
         let entries = p.query(Some("@"), "");
         let socket = entries
             .iter()

@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::{mpsc, OnceLock};
+use std::sync::{OnceLock, mpsc};
 
 use gtk4::glib;
 

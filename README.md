@@ -44,6 +44,11 @@ imports = [ inputs.huffi.homeManagerModules.huffi ];
 
 programs.huffi = {
   enable = true;  # installs huffi and preloads it via systemd --user
+  settings = {    # optionally write ~/.config/huffi/config.toml
+    ui.width = 700;
+    engine.scoring.boost_weight = 4.0;
+  };
+  # …or configFile = ./huffi.toml; for a checked-in config instead.
 };
 ```
 
@@ -80,10 +85,8 @@ huffi toggle -q "= 2 + 2"      # show if hidden, hide if visible
 huffi quit                     # quit the resident instance
 huffi status                   # is it running? is the window visible?
 huffi show --reload -q fire    # restart the resident and take over its socket
-huffi --socket /custom.sock show    # talk to an instance on a different socket
+huffi show --socket /custom.sock   # talk to an instance on a different socket
 ```
-
-A bare flag before a subcommand is shorthand for `show`: `huffi --socket PATH -q "= 2 + 2"` is `huffi show --socket PATH -q "= 2 + 2"`.
 
 | Key | Action |
 |---|---|
@@ -111,10 +114,45 @@ A bare flag before a subcommand is shorthand for `show`: `huffi --socket PATH -q
 | Flag | Scope | Meaning |
 |---|---|---|
 | `-q, --query <QUERY>` | `show`, `toggle` | Query to show on wake |
-| `--data <PATH>` | `show`, `preload` | Override the history file (default `$XDG_DATA_HOME/huffi/history.json`) |
+| `--data <PATH>` | `show`, `preload` | Override the data folder (default `$XDG_DATA_HOME/huffi`) |
 | `--dry-run` | `show`, `preload` | Don't record history or execute actions; adds in-memory test providers |
 | `--reload` | `show`, `preload` | Quit any running instance, unlink its socket, and take it over |
 | `--socket <PATH>` | all | Override the control socket path |
+| `--config <PATH>` | all | Override the config file path |
+
+### Environment variables
+
+A few options can instead be supplied through the environment, useful for a
+systemd service or shell profile. A flag on the command line always wins over
+an environment variable, which wins over the config file.
+
+| Variable | Equivalent flag | Meaning |
+|---|---|---|
+| `HUFFI_SOCKET` | `--socket` | Override the control socket path |
+| `HUFFI_CONFIG` | `--config` | Override the config file path |
+| `HUFFI_DATA` | `--data` | Override the data folder |
+| `HUFFI_DRY_RUN` | `--dry-run` | Don't record history or execute actions |
+
+### Config file
+
+Options live in `$XDG_CONFIG_HOME/huffi/config.toml` (default
+`~/.config/huffi/config.toml`), overridable per invocation with flags.
+Precedence: **flags > config file > defaults**. See
+**[docs/CONFIG.md](docs/CONFIG.md)** for the full reference. Example:
+
+```toml
+# ~/.config/huffi/config.toml
+[ui]
+width     = 700
+page_size = 15
+
+[engine.scoring]
+boost_weight = 4.0        # less aggressive + / − boosts
+half_life_days = 7        # faster decay
+
+[engine.provider.desktop]
+weight_comment = 0.9      # comments match a bit harder
+```
 
 ---
 
@@ -148,8 +186,14 @@ A bare flag before a subcommand is shorthand for `show`: `huffi --socket PATH -q
 - **Icon support** — themed freedesktop icon names or explicit PNG/SVG
   paths, resolved and rendered by the UI against the active icon theme.
 - **Persistence** — history stored in `$XDG_DATA_HOME/huffi/history.json`
-  with atomic writes (`.json.tmp` + rename). Two-week half-life exponential
-  decay. No background jobs, no unbounded logs.
+  (default; the data folder is configurable) with atomic writes
+  (`.json.tmp` + rename). Each provider keeps its state in
+  `<data_dir>/providers/<provider id>/`. Two-week half-life exponential decay. No
+  background jobs, no unbounded logs.
+- **Config file** — TOML at `$XDG_CONFIG_HOME/huffi/config.toml` controlling
+  paths and UI size plus `[engine.*]` tables for scoring constants, provider
+  settings, and external binaries; flags always override it. See
+  [docs/CONFIG.md](docs/CONFIG.md).
 - **Nix flake** — reproducible builds for `x86_64-linux` and
   `aarch64-linux`, dev shell with all Wayland/GTK dependencies, and a Home
   Manager module that installs `huffi` and keeps it warm on login.
@@ -186,9 +230,8 @@ The `Provider` trait lets you plug arbitrary data sources into the
 launcher. See **[docs/WRITING_A_PROVIDER.md](docs/WRITING_A_PROVIDER.md)**
 for the full guide with trait docs, builder API reference, and examples.
 
-Queries page through the scored results directly; the engine's `query_hits`
-clamps page sizes to its `MAX_RESULTS` and projects results onto
-render-ready `QueryHit`s.
+The engine ranks the full result set on every query; the UI cuts its
+`page_size`-sized window out of it around the current selection.
 
 ### Data model
 
@@ -216,7 +259,6 @@ end-to-end.
 
 ### Planned / in discussion
 
-- Config file
 - Rethinking the weighted sum formula (making extra match fields less
   dominant)
 

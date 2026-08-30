@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -25,14 +25,6 @@ pub enum ControlRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ControlResponse {
     pub visible: bool,
-}
-
-/// The default single-instance wake socket, under the user runtime dir.
-pub fn default_socket_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    runtime.join("huffi.sock")
 }
 
 /// Connect to the resident instance, send `req`, and report whether a
@@ -118,6 +110,8 @@ fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn temp_socket_path(tag: &str) -> PathBuf {

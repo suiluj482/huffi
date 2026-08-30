@@ -2,42 +2,59 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::engine::config::ExternalConfig;
 use crate::engine::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta, Icon};
 
-const TERMINAL: &str = "kitty";
-const CLIPBOARD: &str = "wl-copy";
-
 #[derive(Debug, Clone)]
 pub enum Action {
-    Exec { args: Vec<String>, terminal: bool },
+    Exec {
+        args: Vec<String>,
+        terminal: bool,
+    },
+    /// Copy `value` to the clipboard on selection. The clipboard binary is
+    /// resolved from config when the action is performed.
+    Clipboard {
+        value: String,
+    },
     NoOp,
 }
 
 impl Action {
-    pub fn perform(&self) {
-        match self {
-            Action::Exec { args, terminal } => {
-                let mut args = args.clone();
-                if *terminal {
-                    args.splice(0..0, [TERMINAL.to_owned(), "--".to_owned()]);
-                }
-                let Some(program) = args.first() else {
-                    return;
-                };
-                let result = Command::new(program)
-                    .args(&args[1..])
-                    .process_group(0)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-                if let Err(e) = result {
-                    eprintln!("failed to launch {program}: {e}");
-                }
+    /// Perform the action, resolving external binaries (terminal wrapper,
+    /// clipboard tool) from `external`.
+    pub fn perform(&self, external: &ExternalConfig) {
+        let args: Vec<String> = match self {
+            Action::Exec {
+                args,
+                terminal: false,
+            } => args.clone(),
+            Action::Exec {
+                args,
+                terminal: true,
+            } => {
+                let mut cmd = external.terminal.clone();
+                cmd.extend(args.iter().cloned());
+                cmd
             }
-            Action::NoOp => {}
+            Action::Clipboard { value } => {
+                vec![external.clipboard.clone(), value.clone()]
+            }
+            Action::NoOp => return,
+        };
+        let Some(program) = args.first() else {
+            return;
+        };
+        let result = Command::new(program)
+            .args(&args[1..])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Err(e) = result {
+            eprintln!("failed to launch {program}: {e}");
         }
     }
 }
@@ -128,11 +145,11 @@ impl EntryBuilder {
         self
     }
 
-    /// Set the action to copy `value` to the clipboard via `wl-copy`.
+    /// Set the action to copy `value` to the clipboard on selection. The
+    /// clipboard binary comes from config at perform time.
     pub fn clipboard(mut self, value: impl Into<String>) -> Self {
-        self.action = Some(Action::Exec {
-            args: vec![CLIPBOARD.to_owned(), value.into()],
-            terminal: false,
+        self.action = Some(Action::Clipboard {
+            value: value.into(),
         });
         self
     }

@@ -33,7 +33,7 @@ impl Provider for CalculatorProvider {
         &["="]
     }
 
-    fn init(&mut self) {
+    fn init(&mut self, _data_dir: &std::path::Path) {
         match simple_context() {
             Ok(ctx) => {
                 eprintln!("[calculator] rink context initialized");

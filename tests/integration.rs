@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use huffi::engine::Engine;
-use huffi::engine::provider::{Entry, MetaProvider, TestProvider, entry};
-use huffi::engine::scoring::MatchField;
+use huffi::engine::provider::{Entry, EntryMeta, MetaProvider, TestProvider, entry};
+use huffi::engine::scoring::{MatchField, Scored};
 
 static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -11,40 +11,41 @@ const CONTROL_SOCKET: &str = "/tmp/huffi-int.sock";
 
 struct TestEngine {
     engine: Engine,
-    data_file: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl TestEngine {
     fn new() -> Self {
         let id = DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = PathBuf::from(format!("/tmp/huffi-int-{}-{}", std::process::id(), id));
-        let data_file = dir.join("history.json");
 
-        let mut engine = Engine::new(&data_file, true).expect("engine failed to open");
-        engine.add_provider(Box::new(MetaProvider::new(
-            CONTROL_SOCKET,
-            &data_file,
-            true,
-        )));
-        engine.add_provider(Box::new(TestProvider::with_prefixes(
-            "test",
-            vec!["~~"],
-            test_entries(),
-        )));
-        Self { engine, data_file }
+        let mut engine = Engine::new(&dir, true).expect("engine failed to open");
+        engine
+            .add_provider(Box::new(MetaProvider::new(CONTROL_SOCKET, &dir, true)))
+            .expect("meta provider");
+        engine
+            .add_provider(Box::new(TestProvider::with_prefixes(
+                "test",
+                vec!["~~"],
+                test_entries(),
+            )))
+            .expect("test provider");
+        Self {
+            engine,
+            data_dir: dir,
+        }
     }
 
-    fn query(&mut self, query: &str) -> (Option<String>, Vec<huffi::engine::QueryHit>, usize) {
-        self.engine.query_hits(query, 0, 20)
+    fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>, usize) {
+        let (prefix, scored) = self.engine.query(query);
+        let total = scored.len();
+        (prefix, scored, total)
     }
 }
 
 impl Drop for TestEngine {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.data_file);
-        if let Some(dir) = self.data_file.parent() {
-            let _ = std::fs::remove_dir_all(dir);
-        }
+        let _ = std::fs::remove_dir_all(&self.data_dir);
     }
 }
 
@@ -91,7 +92,7 @@ fn query_returns_results() {
     assert!(!results.is_empty(), "expected some results for 'fire'");
     assert!(total >= results.len());
     for hit in &results {
-        assert!(hit.score > 0.0);
+        assert!(hit.combined > 0.0);
     }
 }
 
@@ -104,14 +105,14 @@ fn select_then_query_changes_ranking() {
 
     if let Some(top) = first_results.first() {
         for _ in 0..5 {
-            engine.engine.select("~~calc", &top.entry_id);
+            engine.engine.select("~~calc", &top.entry.id);
         }
     }
 
     let (_, second_results, _) = engine.query("~~calc");
     assert!(!second_results.is_empty());
     if let Some(top_before) = first_results.first() {
-        assert_eq!(second_results[0].entry_id, top_before.entry_id);
+        assert_eq!(second_results[0].entry.id, top_before.entry.id);
     }
 }
 
@@ -133,9 +134,9 @@ fn meta_provider_answers_at_prefix() {
     assert_eq!(prefix.as_deref(), Some("@"));
     let socket = results
         .iter()
-        .find(|r| r.entry_id == "meta-socket")
+        .find(|r| r.entry.id == "meta-socket")
         .expect("meta-socket hit");
-    assert_eq!(socket.subtitle.as_deref(), Some(CONTROL_SOCKET));
+    assert_eq!(socket.entry.subtitle.as_deref(), Some(CONTROL_SOCKET));
 }
 
 #[test]
@@ -159,7 +160,7 @@ fn boost_moves_app_to_top() {
     let target = before[1]
         .history_key
         .clone()
-        .unwrap_or(before[1].entry_id.clone());
+        .unwrap_or(before[1].entry.id.clone());
     for _ in 0..10 {
         engine.engine.boost("~~br", &target);
     }
@@ -168,6 +169,6 @@ fn boost_moves_app_to_top() {
     let top_key = after[0]
         .history_key
         .clone()
-        .unwrap_or(after[0].entry_id.clone());
+        .unwrap_or(after[0].entry.id.clone());
     assert_eq!(top_key, target);
 }

@@ -14,8 +14,10 @@
 
 pub mod builtin;
 pub mod collection;
+pub mod config;
 pub mod util;
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::engine::scoring::{Scoreable, Scored};
@@ -87,9 +89,12 @@ pub type ScoredEntry = Scored<EntryMeta>;
 ///   slice means the provider is always active. Each query is preprocessed
 ///   once: the longest declared prefix that the input starts with becomes
 ///   the global prefix for that query.
-/// - [`init()`](Self::init) — called once at startup. Use this to
-///   do expensive work (scan directories, build data structures) so it
-///   doesn't happen on every keystroke.
+/// - [`init()`](Self::init) — called once at startup with the provider's own
+///   data folder (`<data dir>/providers/<provider id>/`, created unless
+///   running in dry-run mode). Use this to do expensive work (scan
+///   directories, build
+///   data structures, open storage) so it doesn't happen on every keystroke.
+///   Providers never need to locate or create their own folders.
 /// - [`query()`](Self::query) — called on every keystroke with the user's
 ///   current input. Returns all entries this provider can offer. If a
 ///   prefix matched, the prefix is passed separately and `query` is the
@@ -118,7 +123,7 @@ pub type ScoredEntry = Scored<EntryMeta>;
 /// impl Provider for MyProvider {
 ///     fn id(&self) -> &str { "my" }
 ///     fn prefixes(&self) -> &[&str] { &[] }
-///     fn init(&mut self) { /* populate self.entries */ }
+///     fn init(&mut self, _data_dir: &Path) { /* populate self.entries */ }
 ///     fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
 ///         self.entries.clone()
 ///     }
@@ -129,7 +134,7 @@ pub type ScoredEntry = Scored<EntryMeta>;
 pub trait Provider: Send {
     fn id(&self) -> &str;
     fn prefixes(&self) -> &[&str];
-    fn init(&mut self);
+    fn init(&mut self, data_dir: &Path);
     fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
 }
 

@@ -33,7 +33,7 @@ impl Provider for TestProvider {
         &self.prefixes
     }
 
-    fn init(&mut self) {}
+    fn init(&mut self, _data_dir: &std::path::Path) {}
 
     fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
         self.entries.clone()
