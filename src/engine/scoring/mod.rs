@@ -57,11 +57,7 @@ pub struct Scored<T> {
 pub struct Scorer {
     history: HistoryStore,
     base_scorer: BaseScorer,
-    /// Weight of a manual boost relative to a normal launch (see
-    /// [`ScoringConfig::boost_weight`]).
     boost_weight: f64,
-    /// Synthetic launch samples a boost counts as toward confidence (see
-    /// [`ScoringConfig::boost_samples`]).
     boost_samples: u32,
 }
 

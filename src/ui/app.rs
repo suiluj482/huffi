@@ -17,9 +17,10 @@ use gtk4::{
     Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use huffi::engine::Engine;
+use huffi::engine::provider::ProviderMeta;
 use huffi::engine::provider::{EntryMeta, Icon};
 use huffi::engine::scoring::Scored;
-use huffi::engine::{Engine, ProviderEntry};
 
 use crate::ui::control::{self, ControlRequest};
 use crate::ui::{tasks, theme};
@@ -89,7 +90,7 @@ struct BuiltRow {
 struct State {
     query: String,
     active_prefix: Option<String>,
-    providers: Vec<ProviderEntry>,
+    providers: Vec<ProviderMeta>,
     entries: Vec<Row>,
     rows: Vec<BuiltRow>,
     total: usize,
@@ -655,22 +656,25 @@ impl Launcher {
     }
 
     /// Run the query and cut the `page_size` window at `offset` out of the
-    /// full ranked result set.
+    /// full ranked result set. Repeated queries for the same input are served
+    /// from the engine's cache, so only the visible rows are cloned.
     fn fetch_window(
         engine: &mut Engine,
         query: &str,
         offset: usize,
         page_size: usize,
     ) -> (Option<String>, Vec<Row>, usize) {
-        let (prefix, scored) = engine.query(query);
-        let total = scored.len();
-        let entries = scored
-            .into_iter()
+        let reply = engine.query(query);
+        let total = reply.scored.len();
+        let entries = reply
+            .scored
+            .iter()
             .skip(offset)
             .take(page_size)
+            .cloned()
             .map(Row::from)
             .collect();
-        (prefix, entries, total)
+        (reply.pre.prefix.clone(), entries, total)
     }
 
     fn fetch_page(self: &Rc<Self>) {

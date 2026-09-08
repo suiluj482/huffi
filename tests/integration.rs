@@ -37,9 +37,9 @@ impl TestEngine {
     }
 
     fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>, usize) {
-        let (prefix, scored) = self.engine.query(query);
-        let total = scored.len();
-        (prefix, scored, total)
+        let reply = self.engine.query(query);
+        let total = reply.scored.len();
+        (reply.pre.prefix.clone(), reply.scored.to_vec(), total)
     }
 }
 

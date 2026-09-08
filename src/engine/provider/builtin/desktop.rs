@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::engine::provider::{Entry, Provider, entry, split_command};
+use crate::engine::provider::{
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, split_command,
+};
 use crate::engine::scoring::MatchField;
 
 /// Fuzzy-match field weights for this provider, loaded from the
@@ -29,7 +31,6 @@ impl Default for DesktopConfig {
 }
 
 pub struct DesktopEntryProvider {
-    id: String,
     dirs: Vec<PathBuf>,
     weights: DesktopConfig,
     entries: Arc<[Entry]>,
@@ -38,7 +39,6 @@ pub struct DesktopEntryProvider {
 impl DesktopEntryProvider {
     pub fn new(dirs: Vec<PathBuf>, weights: DesktopConfig) -> Self {
         Self {
-            id: "desktop".into(),
             dirs,
             weights,
             entries: Arc::from([]),
@@ -56,24 +56,25 @@ impl Default for DesktopEntryProvider {
 }
 
 impl Provider for DesktopEntryProvider {
-    fn id(&self) -> &str {
-        &self.id
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta {
+            id: "desktop".into(),
+            prefixes: vec![],
+            enabled: true,
+        }
     }
 
-    fn prefixes(&self) -> &[&str] {
-        &[]
-    }
-
-    fn init(&mut self, _data_dir: &Path) {
+    fn init(&mut self, _ctx: InitContext) -> ProviderResult {
         let weights = self.weights;
         self.entries = Arc::from(
             freedesktop_desktop_entry::Iter::new(self.dirs.clone().into_iter())
                 .filter_map(|path| read_desktop_entry(&path, weights))
                 .collect::<Vec<_>>(),
         );
+        ProviderResult::Ok
     }
 
-    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         self.entries.to_vec()
     }
 }

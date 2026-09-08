@@ -5,26 +5,26 @@ use anyhow::Context;
 use crate::engine::scoring::QueryGroup;
 
 use super::config::ProviderConfig;
-use super::{CalculatorProvider, DesktopEntryProvider, Entry, EntryMeta, Provider};
+use super::{
+    CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext, Provider,
+    ProviderMeta, ProviderResult, QueryContext,
+};
 
 pub struct ProviderCollection {
-    providers: Vec<Box<dyn Provider>>,
+    /// Registered providers in insertion order, with the metadata used for
+    /// them (the `enabled` flag may be flipped by a failed init).
+    providers: Vec<(Box<dyn Provider>, ProviderMeta)>,
     /// Huffi's data folder; each provider gets `data_dir/providers/<id>/`.
     data_dir: std::path::PathBuf,
     /// Skip creating on-disk state when true.
     dry_run: bool,
 }
 
-/// A registered provider and its trigger prefixes.
-pub struct ProviderInfo {
-    pub id: String,
-    pub prefixes: Vec<String>,
-}
-
 /// The result of resolving the global prefix for a query.
 ///
 /// The longest declared provider prefix that the query starts with wins;
 /// there is at most one active prefix per query.
+#[derive(Debug, Clone)]
 pub struct PreprocessedQuery {
     pub original_query: String,
     pub prefix: Option<String>,
@@ -57,13 +57,24 @@ impl ProviderCollection {
 
 impl ProviderCollection {
     pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) -> anyhow::Result<()> {
-        let dir = self.data_dir.join("providers").join(provider.id());
+        let mut meta = provider.meta();
+        let dir = self.data_dir.join("providers").join(&meta.id);
         if !self.dry_run {
             std::fs::create_dir_all(&dir)
                 .with_context(|| format!("failed to create data dir {}", dir.display()))?;
         }
-        provider.init(&dir);
-        self.providers.push(provider);
+        match provider.init(InitContext { data_dir: &dir }) {
+            ProviderResult::Ok => {}
+            ProviderResult::Unsupported(msg) => {
+                eprintln!("[provider] {} unsupported: {msg}", meta.id);
+                meta.enabled = false;
+            }
+            ProviderResult::Other(msg) => {
+                eprintln!("[provider] {} disabled: {msg}", meta.id);
+                meta.enabled = false;
+            }
+        }
+        self.providers.push((provider, meta));
         Ok(())
     }
 
@@ -72,14 +83,19 @@ impl ProviderCollection {
     /// Matches the longest declared provider prefix that the query starts
     /// with. If several prefixes are tied in length, the first declared wins.
     pub fn preprocess_query(&self, query: &str) -> PreprocessedQuery {
-        let mut longest: Option<&str> = None;
-        for provider in &self.providers {
-            for prefix in provider.prefixes() {
+        let mut longest: Option<String> = None;
+        for (_, meta) in &self.providers {
+            if !meta.enabled {
+                continue;
+            }
+            for prefix in &meta.prefixes {
                 if !prefix.is_empty()
                     && query.starts_with(prefix)
-                    && longest.is_none_or(|current| prefix.len() > current.len())
+                    && longest
+                        .as_deref()
+                        .is_none_or(|current| prefix.len() > current.len())
                 {
-                    longest = Some(prefix);
+                    longest = Some(prefix.clone());
                 }
             }
         }
@@ -87,7 +103,7 @@ impl ProviderCollection {
         match longest {
             Some(prefix) => PreprocessedQuery {
                 original_query: query.to_string(),
-                prefix: Some(prefix.to_string()),
+                prefix: Some(prefix.clone()),
                 query: query[prefix.len()..].to_string(),
             },
             None => PreprocessedQuery {
@@ -98,12 +114,30 @@ impl ProviderCollection {
         }
     }
 
-    /// Query providers without scoring (raw entries).
-    pub fn entries(&mut self, pre: &PreprocessedQuery) -> Vec<Entry> {
-        self.grouped_entries(pre)
-            .into_iter()
-            .flat_map(|g| g.entries)
-            .collect()
+    /// The provider-relative [`QueryContext`] for `meta`: prefix kept and
+    /// text stripped when this provider declared the query's global prefix,
+    /// otherwise prefix dropped and the full query kept.
+    fn provider_query_context<'a>(
+        meta: &ProviderMeta,
+        pre: &'a PreprocessedQuery,
+    ) -> QueryContext<'a> {
+        if pre
+            .prefix
+            .as_deref()
+            .is_some_and(|pfx| meta.prefixes.iter().any(|m| m == pfx))
+        {
+            QueryContext {
+                prefix: pre.prefix.as_deref(),
+                query: &pre.query,
+                original: &pre.original_query,
+            }
+        } else {
+            QueryContext {
+                prefix: None,
+                query: &pre.original_query,
+                original: &pre.original_query,
+            }
+        }
     }
 
     /// Query each provider and group its entries with the query they should
@@ -118,47 +152,50 @@ impl ProviderCollection {
     ) -> Vec<QueryGroup<EntryMeta>> {
         self.providers
             .iter_mut()
-            .map(|p| {
-                let matched = pre
-                    .prefix
-                    .as_deref()
-                    .is_some_and(|pfx| p.prefixes().contains(&pfx));
-                let (prefix, query) = if matched {
-                    (pre.prefix.as_deref(), &pre.query)
-                } else {
-                    (None, &pre.original_query)
-                };
-                let mut entries = p.query(prefix, query);
+            .filter_map(|(p, meta)| {
+                if !meta.enabled {
+                    return None;
+                }
+                let ctx = Self::provider_query_context(meta, pre);
+                let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
-                    e.entry.provider_id = Some(p.id().to_string());
+                    e.entry.provider_id = Some(meta.id.clone());
                 }
-                QueryGroup {
-                    query: query.to_string(),
+                Some(QueryGroup {
+                    query: ctx.query.to_string(),
                     entries,
-                }
+                })
             })
             .collect()
     }
 
-    /// Find an entry by ID within the current query's results.
-    pub fn find(&mut self, query: &str, entry_id: &str) -> Option<Entry> {
-        let pre = self.preprocess_query(query);
-        self.entries(&pre)
-            .into_iter()
-            .find(|s| s.entry.id == entry_id)
+    /// Notify the provider that produced `entry_id` that the entry was
+    /// selected. The [`QueryContext`] built for the provider is
+    /// provider-relative: `prefix` is `Some` only when the global prefix is
+    /// in the provider's own prefix list. No-op when the provider is no
+    /// longer registered.
+    pub fn handle(&mut self, provider_id: &str, entry_id: &str, pre: &PreprocessedQuery) {
+        for (provider, meta) in &mut self.providers {
+            if meta.id != provider_id {
+                continue;
+            }
+            provider.handle(HandleContext {
+                entry_id,
+                query: Self::provider_query_context(meta, pre),
+            });
+            break;
+        }
     }
 
     /// List registered providers and their trigger prefixes.
-    pub fn providers(&self) -> Vec<ProviderInfo> {
+    pub fn providers(&self) -> Vec<ProviderMeta> {
         self.providers
             .iter()
-            .map(|p| ProviderInfo {
-                id: p.id().into(),
-                prefixes: p.prefixes().iter().map(|s| s.to_string()).collect(),
-            })
+            .map(|(_, meta)| meta.clone())
             .collect()
     }
 
+    /// The number of registered providers.
     pub fn len(&self) -> usize {
         self.providers.len()
     }
@@ -173,10 +210,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::engine::provider::{Provider, TestProvider, entry};
+    use crate::engine::provider::{
+        Entry, HandleContext, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext,
+        TestProvider, entry,
+    };
     use crate::engine::scoring::MatchField;
 
     type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
+    type HandleLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
 
     /// Tests only: a dry-run collection against an ephemeral folder, so no
     /// providers can touch the real data dir.
@@ -189,36 +230,57 @@ mod tests {
         id: String,
         prefixes: Vec<&'static str>,
         calls: CallLog,
+        handles: HandleLog,
     }
 
     impl TrackingProvider {
         fn new(id: &str, prefixes: Vec<&'static str>, calls: CallLog) -> Self {
+            Self::with_handle_log(id, prefixes, calls, Arc::new(Mutex::new(Vec::new())))
+        }
+
+        fn with_handle_log(
+            id: &str,
+            prefixes: Vec<&'static str>,
+            calls: CallLog,
+            handles: HandleLog,
+        ) -> Self {
             Self {
                 id: id.into(),
                 prefixes,
                 calls,
+                handles,
             }
         }
     }
 
     impl Provider for TrackingProvider {
-        fn id(&self) -> &str {
-            &self.id
+        fn meta(&self) -> ProviderMeta {
+            ProviderMeta {
+                id: self.id.clone(),
+                prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
+                enabled: true,
+            }
         }
 
-        fn prefixes(&self) -> &[&str] {
-            &self.prefixes
+        fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+            ProviderResult::Ok
         }
 
-        fn init(&mut self, _data_dir: &Path) {}
-
-        fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
+        fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
             self.calls.lock().unwrap().push((
                 self.id.clone(),
-                prefix.map(String::from),
-                query.to_string(),
+                ctx.prefix.map(String::from),
+                ctx.query.to_string(),
             ));
             vec![entry(&self.id, &self.id).history_key(&self.id).score(1.0)]
+        }
+
+        fn handle(&mut self, ctx: HandleContext) {
+            self.handles.lock().unwrap().push((
+                ctx.entry_id.to_string(),
+                ctx.query.prefix.map(String::from),
+                ctx.query.query.to_string(),
+            ));
         }
     }
 
@@ -286,7 +348,7 @@ mod tests {
         .unwrap();
 
         let pre = c.preprocess_query("== 2");
-        let _ = c.entries(&pre);
+        let _ = c.grouped_entries(&pre);
 
         let log = calls.lock().unwrap();
         let short = log.iter().find(|(id, _, _)| id == "short").unwrap();
@@ -314,14 +376,19 @@ mod tests {
         )))
         .unwrap();
         let pre = c.preprocess_query("firefox");
-        let entries = c.entries(&pre);
+        let entries: Vec<_> = c
+            .grouped_entries(&pre)
+            .into_iter()
+            .flat_map(|g| g.entries)
+            .map(|s| s.entry)
+            .collect();
         for e in &entries {
-            assert!(e.entry.provider_id.is_some());
+            assert!(e.provider_id.is_some());
         }
         assert!(
             entries
                 .iter()
-                .any(|e| e.entry.provider_id.as_deref() == Some("desktop"))
+                .any(|e| e.provider_id.as_deref() == Some("desktop"))
         );
     }
 
@@ -338,6 +405,74 @@ mod tests {
             providers
                 .iter()
                 .any(|p| p.id == "calculator" && p.prefixes == vec!["="])
+        );
+    }
+
+    #[test]
+    fn handle_dispatches_to_matching_provider_only() {
+        let mut c = collection();
+        let a_handles: HandleLog = Arc::new(Mutex::new(Vec::new()));
+        let b_handles: HandleLog = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::with_handle_log(
+            "a",
+            vec![],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&a_handles),
+        )))
+        .unwrap();
+        c.add_provider(Box::new(TrackingProvider::with_handle_log(
+            "b",
+            vec![],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&b_handles),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("");
+        c.handle("b", "b-entry", &pre);
+        c.handle("missing", "ignored", &pre);
+
+        assert!(a_handles.lock().unwrap().is_empty());
+        assert_eq!(
+            *b_handles.lock().unwrap(),
+            vec![("b-entry".to_string(), None, "".to_string())]
+        );
+    }
+
+    #[test]
+    fn handle_passes_provider_relative_context() {
+        let mut c = collection();
+        let prefixed: HandleLog = Arc::new(Mutex::new(Vec::new()));
+        let unprefixed: HandleLog = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::with_handle_log(
+            "calc",
+            vec!["="],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&prefixed),
+        )))
+        .unwrap();
+        c.add_provider(Box::new(TrackingProvider::with_handle_log(
+            "desk",
+            vec![],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&unprefixed),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("= fi");
+        assert_eq!(pre.prefix.as_deref(), Some("="));
+        c.handle("calc", "calc-entry", &pre);
+        c.handle("desk", "desk-entry", &pre);
+
+        assert_eq!(
+            *prefixed.lock().unwrap(),
+            vec![("calc-entry".to_string(), Some("=".into()), " fi".into())],
+            "a provider whose prefix matched sees Some(prefix) and the stripped query"
+        );
+        assert_eq!(
+            *unprefixed.lock().unwrap(),
+            vec![("desk-entry".to_string(), None, "= fi".into())],
+            "a provider whose prefixes don't contain the global prefix sees None and the full query"
         );
     }
 }

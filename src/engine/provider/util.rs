@@ -9,15 +9,13 @@ use super::{Entry, EntryMeta, Icon};
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    Exec {
-        args: Vec<String>,
-        terminal: bool,
-    },
+    /// Run `args` as a program. With `terminal`, the args are appended to
+    /// the configured terminal wrapper before spawning.
+    Exec { args: Vec<String>, terminal: bool },
     /// Copy `value` to the clipboard on selection. The clipboard binary is
     /// resolved from config when the action is performed.
-    Clipboard {
-        value: String,
-    },
+    Clipboard { value: String },
+    /// Do nothing; the default for entries that never set an action.
     NoOp,
 }
 
