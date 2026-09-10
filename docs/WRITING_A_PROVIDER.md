@@ -12,6 +12,7 @@ pub trait Provider: Send {
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
+    fn handle(&mut self, ctx: HandleContext); // has a default no-op impl
 }
 ```
 
@@ -27,17 +28,14 @@ The remaining fields are overwritable by user config under
 `[engine.provider.builtin.<id>]`: the display `name`, trigger `prefixes`,
 the `enabled` flag, and `prefix_only`.
 
-[`ProviderMeta`] implements [`Default`], so a provider only spells out what
-differs. Filling in `id` plus anything non-default is all that is needed:
-an empty `name` resolves to the `id` at registration, the provider starts
-enabled, has no prefixes, and is queried for every input.
+Use [`ProviderMeta::builder`] to construct it: the `id` is the only
+required field, and everything else has sensible defaults. An empty `name`
+resolves to the `id` at registration, the provider starts enabled, has no
+prefixes, and is queried for every input.
 
 ```rust
 fn meta(&self) -> ProviderMeta {
-    ProviderMeta {
-        id: "my-provider".into(),
-        ..Default::default()
-    }
+    ProviderMeta::builder("my-provider").build()
 }
 ```
 
@@ -129,6 +127,20 @@ is `None`, since it has nothing to offer for un-prefixed input. This is
 exactly what [`CalculatorProvider`] does — it returns `vec![]` at the top
 of `query()` when no prefix matched, staying performant and out of the way for normal app
 searching.
+
+### `handle(ctx)`
+
+Called when one of your provider's entries is selected by the user, in
+addition to the entry's action. The `HandleContext` carries:
+
+- `entry_id` — the id of the entry that was selected.
+- `query` — the provider-relative [`QueryContext`] the selection was made
+  under (same semantics as in `query()`).
+
+The default implementation does nothing; override it to update provider
+state or trigger behavior on selection. Since the engine reuses its cached
+query reply for the selection, `handle()` will not see a fresh `query()`
+call.
 
 ## Entries and `EntryBuilder`
 
@@ -255,11 +267,7 @@ struct CustomDirProvider { entries: Vec<Entry> }
 
 impl Provider for CustomDirProvider {
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            id: "custom-dirs".into(),
-            name: "Custom Dirs".into(),
-            ..Default::default()
-        }
+        ProviderMeta::builder("custom-dirs").name("Custom Dirs").build()
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {

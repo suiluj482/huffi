@@ -126,18 +126,18 @@ pub struct ProviderMeta {
 }
 
 impl ProviderMeta {
-    /// Validate that an id is set and resolve an empty `name` to the id.
-    ///
-    /// Called by the engine when a provider is registered. A provider that
-    /// returns an empty id is a bug — most likely copied from an example
-    /// that forgot the field — and is refused loudly rather than silently
-    /// breaking config lookup, logs, and select dispatch.
     /// Create a [`ProviderMetaBuilder`] for this type. The `id` is the
     /// only required field; everything else has sensible defaults.
     pub fn builder(id: impl Into<String>) -> ProviderMetaBuilder {
         ProviderMetaBuilder::new(id)
     }
 
+    /// Validate that an id is set and resolve an empty `name` to the id.
+    ///
+    /// Called by the engine when a provider is registered. A provider that
+    /// returns an empty id is a bug — most likely copied from an example
+    /// that forgot the field — and is refused loudly rather than silently
+    /// breaking config lookup, logs, and select dispatch.
     pub(crate) fn resolved(mut self) -> anyhow::Result<Self> {
         if self.id.is_empty() {
             anyhow::bail!("provider returned an empty id");
