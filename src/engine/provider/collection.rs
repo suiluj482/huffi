@@ -74,6 +74,14 @@ impl ProviderCollection {
             if let Some(ref prefixes) = ov.prefixes {
                 meta.prefixes = prefixes.clone();
             }
+            if let Some(prefix_only) = ov.prefix_only {
+                meta.prefix_only = prefix_only;
+            }
+        }
+
+        // An empty name falls back to the provider id.
+        if meta.name.is_empty() {
+            meta.name = id.clone();
         }
 
         let extra = self.overrides.get(&id).and_then(|ov| ov.extra.clone());
@@ -188,6 +196,9 @@ impl ProviderCollection {
                     return None;
                 }
                 let ctx = Self::provider_query_context(meta, pre);
+                if meta.prefix_only && ctx.prefix.is_none() {
+                    return None;
+                }
                 let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
                     e.entry.provider_id = Some(p.id().to_string());
@@ -291,9 +302,8 @@ mod tests {
 
         fn meta(&self) -> ProviderMeta {
             ProviderMeta {
-                name: self.id.clone(),
                 prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
-                enabled: true,
+                ..Default::default()
             }
         }
 
@@ -524,6 +534,7 @@ mod tests {
                 name: Some("Calc".to_string()),
                 enabled: Some(false),
                 prefixes: Some(vec!["::".to_string()]),
+                prefix_only: None,
                 extra: None,
             },
         );
@@ -548,11 +559,7 @@ mod tests {
                 "extra-capture"
             }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    name: "extra-capture".into(),
-                    prefixes: vec![],
-                    enabled: true,
-                }
+                ProviderMeta::default()
             }
             fn init(&mut self, ctx: InitContext) -> ProviderResult {
                 *self.received.lock().unwrap() = ctx.extra.clone();
@@ -571,6 +578,7 @@ mod tests {
                     name: None,
                     enabled: None,
                     prefixes: None,
+                    prefix_only: None,
                     extra: Some(serde_json::json!({ "precision": 2 })),
                 },
             )]),
@@ -594,11 +602,7 @@ mod tests {
                 "failing"
             }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    name: "failing".into(),
-                    prefixes: vec![],
-                    enabled: true,
-                }
+                ProviderMeta::default()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Config {
@@ -616,5 +620,107 @@ mod tests {
         c.add_provider(Box::new(FailingInit)).unwrap();
         let providers = c.providers();
         assert!(!providers.iter().any(|p| p.name == "failing" && p.enabled));
+    }
+
+    #[test]
+    fn prefix_only_provider_skipped_without_prefix() {
+        let calls: CallLog = Arc::new(Mutex::new(Vec::new()));
+
+        struct PrefixOnlyProvider {
+            calls: CallLog,
+        }
+        impl Provider for PrefixOnlyProvider {
+            fn id(&self) -> &str {
+                "prefixed"
+            }
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta {
+                    prefixes: vec!["::".into()],
+                    prefix_only: true,
+                    ..Default::default()
+                }
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                ProviderResult::Ok
+            }
+            fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+                self.calls.lock().unwrap().push((
+                    "prefixed".to_string(),
+                    ctx.prefix.map(String::from),
+                    ctx.query.to_string(),
+                ));
+                vec![entry("prefixed", "prefixed").history_key("prefixed").score(1.0)]
+            }
+        }
+
+        let mut c = collection();
+        c.add_provider(Box::new(PrefixOnlyProvider {
+            calls: Arc::clone(&calls),
+        }))
+        .unwrap();
+
+        let _ = c.grouped_entries(&c.preprocess_query("firefox"));
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "prefix_only provider must not be queried when its prefix is absent"
+        );
+
+        let _ = c.grouped_entries(&c.preprocess_query(":: 2"));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![("prefixed".to_string(), Some("::".into()), " 2".into())],
+            "prefix_only provider is queried when its prefix matches"
+        );
+    }
+
+    #[test]
+    fn empty_meta_name_resolves_to_id() {
+        struct NameLessProvider;
+        impl Provider for NameLessProvider {
+            fn id(&self) -> &str {
+                "nameless"
+            }
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta::default()
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                ProviderResult::Ok
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let mut c = collection();
+        c.add_provider(Box::new(NameLessProvider)).unwrap();
+        let providers = c.providers();
+        assert!(
+            providers.iter().any(|p| p.name == "nameless"),
+            "an empty meta name should fall back to the provider id"
+        );
+    }
+
+    #[test]
+    fn config_overrides_prefix_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "huffi-providers-prefix-only-{}",
+            std::process::id()
+        ));
+        let override_cfg = ProviderConfig {
+            builtin: HashMap::from([(
+                "desktop".to_string(),
+                ProviderOverride {
+                    name: None,
+                    enabled: None,
+                    prefixes: None,
+                    prefix_only: Some(true),
+                    extra: None,
+                },
+            )]),
+        };
+        let c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
+        let providers = c.providers();
+        let desktop = providers.iter().find(|p| p.name == "desktop").unwrap();
+        assert!(desktop.prefix_only);
     }
 }

@@ -190,11 +190,7 @@ mod tests {
             &self.id
         }
         fn meta(&self) -> ProviderMeta {
-            ProviderMeta {
-                name: self.id.clone(),
-                prefixes: vec![],
-                enabled: true,
-            }
+            ProviderMeta::default()
         }
         fn init(&mut self, _ctx: InitContext) -> ProviderResult {
             ProviderResult::Ok
@@ -360,11 +356,7 @@ mod tests {
                 &self.id
             }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    name: self.id.clone(),
-                    prefixes: vec![],
-                    enabled: true,
-                }
+                ProviderMeta::default()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok

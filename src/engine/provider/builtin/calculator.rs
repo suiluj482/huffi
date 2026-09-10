@@ -31,9 +31,9 @@ impl Provider for CalculatorProvider {
 
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
-            name: "calculator".into(),
             prefixes: vec!["=".into()],
-            enabled: true,
+            prefix_only: true,
+            ..Default::default()
         }
     }
 

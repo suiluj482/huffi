@@ -34,6 +34,9 @@ pub struct ProviderOverride {
     /// Override the trigger prefixes. Empty disables prefix-based activation.
     #[serde(default)]
     pub prefixes: Option<Vec<String>>,
+    /// Override whether the provider is only queried when a prefix matches.
+    #[serde(default)]
+    pub prefix_only: Option<bool>,
     /// Arbitrary per-provider config, passed through as-is to the provider
     /// in [`InitContext::extra`](super::InitContext::extra). Not schema
     /// checked — the provider is responsible for interpreting it.

@@ -89,13 +89,21 @@ pub type Entry = Scoreable<EntryMeta>;
 pub type ScoredEntry = Scored<EntryMeta>;
 
 /// Static metadata describing a provider: its display name, the string
-/// prefixes that trigger it, and whether it is active. All fields are
-/// overwritable by user config — the provider supplies defaults, the
-/// config file can override them.
+/// prefixes that trigger it, whether it is active, and whether it only
+/// wants to be queried after a prefix. All fields are overwritable by user
+/// config — the provider supplies defaults, the config file can override
+/// them.
+///
+/// [`Default`] gives sensible values: empty `name` (resolved to the
+/// provider's [`id`](Provider::id) at registration), no prefixes, enabled,
+/// and queried for every input. Providers only need to spell out what
+/// differs, e.g.
+/// `ProviderMeta { prefixes: vec!["=".into()], prefix_only: true, ..Default::default() }`.
 #[derive(Debug, Clone)]
 pub struct ProviderMeta {
-    /// Human-readable display name for the UI. Defaults to the provider's
-    /// [`id`](Provider::id) when not overridden by config.
+    /// Human-readable display name for the UI. An empty string resolves to
+    /// the provider's [`id`](Provider::id) at registration, unless the name
+    /// is overridden by config.
     pub name: String,
     /// Query prefixes that trigger this provider, e.g. `["="]` for the
     /// calculator. Empty means the provider handles every query.
@@ -104,6 +112,23 @@ pub struct ProviderMeta {
     /// enabled; the flag exists as a hook for future user-config
     /// overrides, and init failures clear it.
     pub enabled: bool,
+    /// When set, [`ProviderCollection`] only calls [`Provider::query`] if
+    /// the query matched one of this provider's prefixes; otherwise the
+    /// provider is skipped entirely. Mirrors what prefix-triggered
+    /// providers do manually by returning `vec![]` for unprefixed input,
+    /// without the per-keystroke call.
+    pub prefix_only: bool,
+}
+
+impl Default for ProviderMeta {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            prefixes: Vec::new(),
+            enabled: true,
+            prefix_only: false,
+        }
+    }
 }
 
 /// The outcome of initializing a provider.
@@ -241,7 +266,7 @@ pub struct HandleContext<'a> {
 /// impl Provider for MyProvider {
 ///     fn id(&self) -> &str { "my" }
 ///     fn meta(&self) -> ProviderMeta {
-///         ProviderMeta { name: "My Provider".into(), prefixes: vec![], enabled: true }
+///         ProviderMeta { ..Default::default() }
 ///     }
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */

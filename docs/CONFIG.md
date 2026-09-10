@@ -62,6 +62,8 @@ empty_query_score = 0.8
 # enabled = true
 # Override trigger prefixes (empty = always active).
 # prefixes = []
+# Only call the provider when a query matches one of its prefixes.
+# prefix_only = false
 
 [engine.provider.builtin.desktop.extra]
 # Fuzzy-match field weights for the desktop-entry provider.

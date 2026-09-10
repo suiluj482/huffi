@@ -33,9 +33,8 @@ impl Provider for TestProvider {
 
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
-            name: self.id.clone(),
             prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
-            enabled: true,
+            ..Default::default()
         }
     }
 

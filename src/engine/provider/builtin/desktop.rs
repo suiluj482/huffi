@@ -59,11 +59,7 @@ impl Provider for DesktopEntryProvider {
     }
 
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            name: "desktop".into(),
-            prefixes: vec![],
-            enabled: true,
-        }
+        ProviderMeta::default()
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {

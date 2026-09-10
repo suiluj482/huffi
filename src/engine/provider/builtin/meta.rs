@@ -54,9 +54,9 @@ impl Provider for MetaProvider {
 
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
-            name: "meta".into(),
             prefixes: vec!["@".into()],
-            enabled: true,
+            prefix_only: true,
+            ..Default::default()
         }
     }
 

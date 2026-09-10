@@ -24,9 +24,25 @@ identity — it is never overridden by user config.
 
 ### `meta()`
 
-Returns a [`ProviderMeta`] with the display name, trigger prefixes, and
-enabled flag. All fields are overwritable by user config under
-`[engine.provider.builtin.<id>]`.
+Returns a [`ProviderMeta`] with the display name, trigger prefixes, enabled
+flag, and a `prefix_only` flag. All fields are overwritable by user config
+under `[engine.provider.builtin.<id>]`.
+
+[`ProviderMeta`] implements [`Default`], so a provider only spells out what
+differs from the defaults (empty name — resolved to the provider `id()` at
+registration — no prefixes, enabled, queried for every input):
+
+```rust
+fn meta(&self) -> ProviderMeta {
+    ProviderMeta { ..Default::default() }
+}
+```
+
+**`prefix_only`** — when `true`, the engine never calls your `query()`
+unless the user's input matched one of your prefixes; the provider is
+skipped entirely otherwise. Prefix-triggered providers can declare this
+instead of returning `vec![]` for unprefixed input, saving a call per
+keystroke. [`CalculatorProvider`] and [`MetaProvider`] do this.
 
 Prefixes are resolved once per query by the engine: the **longest** declared
 prefix that the user's input starts with becomes the *global prefix* for that
