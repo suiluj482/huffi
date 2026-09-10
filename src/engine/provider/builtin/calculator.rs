@@ -26,12 +26,10 @@ impl CalculatorProvider {
 
 impl Provider for CalculatorProvider {
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            id: "calculator".into(),
-            prefixes: vec!["=".into()],
-            prefix_only: true,
-            ..Default::default()
-        }
+        ProviderMeta::builder("calculator")
+            .prefix("=")
+            .prefix_only(true)
+            .build()
     }
 
     fn init(&mut self, _ctx: InitContext) -> ProviderResult {

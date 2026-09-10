@@ -72,8 +72,8 @@ mod tests {
             id: "calc".into(),
             name: "Calculator".into(),
             prefixes: vec!["=".into()],
+            enabled: true,
             prefix_only: true,
-            ..Default::default()
         };
         let out = ProviderOverride::default().apply(meta.clone());
         assert_eq!(out.id, "calc");
@@ -89,8 +89,8 @@ mod tests {
             id: "calc".into(),
             name: "Calculator".into(),
             prefixes: vec!["=".into()],
+            enabled: true,
             prefix_only: true,
-            ..Default::default()
         };
         let ov = ProviderOverride {
             name: Some("Calc".into()),

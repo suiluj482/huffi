@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use crate::engine::config::ExternalConfig;
 use crate::engine::scoring::{MatchField, Rank};
 
-use super::{Entry, EntryMeta, Icon};
+use super::{Entry, EntryMeta, Icon, ProviderMeta};
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -229,4 +229,73 @@ pub fn split_command(s: &str) -> Vec<String> {
     }
 
     result
+}
+
+/// Ergonomic builder for [`ProviderMeta`]. Start with
+/// [`ProviderMeta::builder`], chain optional setters, and finish with
+/// [`.build()`](ProviderMetaBuilder::build).
+pub struct ProviderMetaBuilder {
+    id: String,
+    name: String,
+    prefixes: Vec<String>,
+    enabled: bool,
+    prefix_only: bool,
+}
+
+impl ProviderMetaBuilder {
+    pub(crate) fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: String::new(),
+            prefixes: Vec::new(),
+            enabled: true,
+            prefix_only: false,
+        }
+    }
+
+    /// Human-readable display name. Defaults to the provider id.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Add a trigger prefix (e.g. `"="` for the calculator). Call
+    /// multiple times for multiple prefixes.
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefixes.push(prefix.into());
+        self
+    }
+
+    /// Set the trigger prefixes at once.
+    pub fn prefixes<I, S>(mut self, prefixes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.prefixes.extend(prefixes.into_iter().map(Into::into));
+        self
+    }
+
+    /// When `true`, the provider is only queried when a prefix matches.
+    /// Defaults to `false`.
+    pub fn prefix_only(mut self, prefix_only: bool) -> Self {
+        self.prefix_only = prefix_only;
+        self
+    }
+
+    /// Whether the provider participates in queries. Defaults to `true`.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn build(self) -> ProviderMeta {
+        ProviderMeta {
+            id: self.id,
+            name: self.name,
+            prefixes: self.prefixes,
+            enabled: self.enabled,
+            prefix_only: self.prefix_only,
+        }
+    }
 }

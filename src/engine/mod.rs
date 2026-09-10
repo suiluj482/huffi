@@ -187,10 +187,7 @@ mod tests {
 
     impl Provider for CountingProvider {
         fn meta(&self) -> ProviderMeta {
-            ProviderMeta {
-                id: self.id.clone(),
-                ..Default::default()
-            }
+            ProviderMeta::builder(&self.id).build()
         }
         fn init(&mut self, _ctx: InitContext) -> ProviderResult {
             ProviderResult::Ok
@@ -353,10 +350,7 @@ mod tests {
 
         impl Provider for HandleTrackingProvider {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    id: self.id.clone(),
-                    ..Default::default()
-                }
+                ProviderMeta::builder(&self.id).build()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok

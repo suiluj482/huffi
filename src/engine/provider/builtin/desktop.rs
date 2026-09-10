@@ -55,10 +55,7 @@ impl Default for DesktopEntryProvider {
 
 impl Provider for DesktopEntryProvider {
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            id: "desktop".into(),
-            ..Default::default()
-        }
+        ProviderMeta::builder("desktop").build()
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {

@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::PreprocessedQuery;
-pub use util::{Action, EntryBuilder, entry};
+pub use util::{Action, EntryBuilder, ProviderMetaBuilder, entry};
 
 /// A source for an entry's icon. Providers describe *what* to show without
 /// resolving it to a concrete image; the UI is responsible for turning this
@@ -95,11 +95,10 @@ pub type ScoredEntry = Scored<EntryMeta>;
 /// overwritable — the provider supplies defaults, the config file can
 /// override them.
 ///
-/// [`Default`] gives sensible values: empty `id` (a provider returning an
-/// empty id is refused at registration), empty `name` (resolved to the
-/// `id`), no prefixes, enabled, and queried for every input. Providers only
-/// need to spell out what differs, e.g.
-/// `ProviderMeta { id: "calculator".into(), prefixes: vec!["=".into()], prefix_only: true, ..Default::default() }`.
+/// Use [`ProviderMeta::builder`] for ergonomic construction:
+/// `ProviderMeta::builder("calculator").prefix("=").prefix_only(true).build()`.
+/// The `id` is the only required field; `name` defaults to the `id`,
+/// `prefixes` is empty, `enabled` is `true`, and `prefix_only` is `false`.
 #[derive(Debug, Clone)]
 pub struct ProviderMeta {
     /// Stable, unique identifier for this provider (e.g. `"desktop"`,
@@ -133,6 +132,12 @@ impl ProviderMeta {
     /// returns an empty id is a bug — most likely copied from an example
     /// that forgot the field — and is refused loudly rather than silently
     /// breaking config lookup, logs, and select dispatch.
+    /// Create a [`ProviderMetaBuilder`] for this type. The `id` is the
+    /// only required field; everything else has sensible defaults.
+    pub fn builder(id: impl Into<String>) -> ProviderMetaBuilder {
+        ProviderMetaBuilder::new(id)
+    }
+
     pub(crate) fn resolved(mut self) -> anyhow::Result<Self> {
         if self.id.is_empty() {
             anyhow::bail!("provider returned an empty id");
@@ -141,18 +146,6 @@ impl ProviderMeta {
             self.name = self.id.clone();
         }
         Ok(self)
-    }
-}
-
-impl Default for ProviderMeta {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            prefixes: Vec::new(),
-            enabled: true,
-            prefix_only: false,
-        }
     }
 }
 
@@ -291,7 +284,7 @@ pub struct HandleContext<'a> {
 ///
 /// impl Provider for MyProvider {
 ///     fn meta(&self) -> ProviderMeta {
-///         ProviderMeta { id: "my".into(), ..Default::default() }
+///         ProviderMeta::builder("my").build()
 ///     }
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */

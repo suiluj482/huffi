@@ -284,11 +284,9 @@ mod tests {
 
     impl Provider for TrackingProvider {
         fn meta(&self) -> ProviderMeta {
-            ProviderMeta {
-                id: self.id.clone(),
-                prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
-                ..Default::default()
-            }
+            ProviderMeta::builder(&self.id)
+                .prefixes(self.prefixes.iter().copied())
+                .build()
         }
 
         fn init(&mut self, _ctx: InitContext) -> ProviderResult {
@@ -541,10 +539,7 @@ mod tests {
         }
         impl Provider for ExtraCapturingProvider {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    id: "extra-capture".into(),
-                    ..Default::default()
-                }
+                ProviderMeta::builder("extra-capture").build()
             }
             fn init(&mut self, ctx: InitContext) -> ProviderResult {
                 *self.received.lock().unwrap() = ctx.extra.clone();
@@ -584,10 +579,7 @@ mod tests {
         struct FailingInit;
         impl Provider for FailingInit {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    id: "failing".into(),
-                    ..Default::default()
-                }
+                ProviderMeta::builder("failing").build()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Config {
@@ -616,12 +608,10 @@ mod tests {
         }
         impl Provider for PrefixOnlyProvider {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    id: "prefixed".into(),
-                    prefixes: vec!["::".into()],
-                    prefix_only: true,
-                    ..Default::default()
-                }
+                ProviderMeta::builder("prefixed")
+                    .prefix("::")
+                    .prefix_only(true)
+                    .build()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
@@ -661,10 +651,7 @@ mod tests {
         struct NameLessProvider;
         impl Provider for NameLessProvider {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta {
-                    id: "nameless".into(),
-                    ..Default::default()
-                }
+                ProviderMeta::builder("nameless").build()
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
@@ -690,7 +677,13 @@ mod tests {
         struct IdLessProvider;
         impl Provider for IdLessProvider {
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta::default()
+                ProviderMeta {
+                    id: String::new(),
+                    name: String::new(),
+                    prefixes: Vec::new(),
+                    enabled: true,
+                    prefix_only: false,
+                }
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok

@@ -28,11 +28,9 @@ impl TestProvider {
 
 impl Provider for TestProvider {
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            id: self.id.clone(),
-            prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
-            ..Default::default()
-        }
+        ProviderMeta::builder(&self.id)
+            .prefixes(self.prefixes.iter().copied())
+            .build()
     }
 
     fn init(&mut self, _ctx: InitContext) -> ProviderResult {

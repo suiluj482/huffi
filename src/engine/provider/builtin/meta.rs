@@ -49,12 +49,10 @@ impl MetaProvider {
 
 impl Provider for MetaProvider {
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta {
-            id: "meta".into(),
-            prefixes: vec!["@".into()],
-            prefix_only: true,
-            ..Default::default()
-        }
+        ProviderMeta::builder("meta")
+            .prefix("@")
+            .prefix_only(true)
+            .build()
     }
 
     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
