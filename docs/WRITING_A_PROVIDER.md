@@ -9,32 +9,35 @@ a ranked list.
 
 ```rust
 pub trait Provider: Send {
-    fn id(&self) -> &str;
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
 }
 ```
 
-### `id()`
-
-A short, unique name for this provider (e.g. `"desktop"`, `"calculator"`).
-Used in logs, select dispatch, and config lookup. This is the **stable**
-identity — it is never overridden by user config.
-
 ### `meta()`
 
-Returns a [`ProviderMeta`] with the display name, trigger prefixes, enabled
-flag, and a `prefix_only` flag. All fields are overwritable by user config
-under `[engine.provider.builtin.<id>]`.
+Returns a [`ProviderMeta`] describing the provider. Its `id` is a short,
+unique name for the provider (e.g. `"desktop"`, `"calculator"`). It is used
+in logs, select dispatch, and config lookup, and this is the **stable**
+identity — it is never overridden by user config. The engine refuses to
+register a provider with an empty `id`.
+
+The remaining fields are overwritable by user config under
+`[engine.provider.builtin.<id>]`: the display `name`, trigger `prefixes`,
+the `enabled` flag, and `prefix_only`.
 
 [`ProviderMeta`] implements [`Default`], so a provider only spells out what
-differs from the defaults (empty name — resolved to the provider `id()` at
-registration — no prefixes, enabled, queried for every input):
+differs. Filling in `id` plus anything non-default is all that is needed:
+an empty `name` resolves to the `id` at registration, the provider starts
+enabled, has no prefixes, and is queried for every input.
 
 ```rust
 fn meta(&self) -> ProviderMeta {
-    ProviderMeta { ..Default::default() }
+    ProviderMeta {
+        id: "my-provider".into(),
+        ..Default::default()
+    }
 }
 ```
 
@@ -251,9 +254,12 @@ use huffi::engine::scoring::MatchField;
 struct CustomDirProvider { entries: Vec<Entry> }
 
 impl Provider for CustomDirProvider {
-    fn id(&self) -> &str { "custom-dirs" }
     fn meta(&self) -> ProviderMeta {
-        ProviderMeta { name: "Custom Dirs".into(), prefixes: vec![], enabled: true }
+        ProviderMeta {
+            id: "custom-dirs".into(),
+            name: "Custom Dirs".into(),
+            ..Default::default()
+        }
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {

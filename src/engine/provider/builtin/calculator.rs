@@ -25,12 +25,9 @@ impl CalculatorProvider {
 }
 
 impl Provider for CalculatorProvider {
-    fn id(&self) -> &str {
-        "calculator"
-    }
-
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
+            id: "calculator".into(),
             prefixes: vec!["=".into()],
             prefix_only: true,
             ..Default::default()

@@ -27,12 +27,9 @@ impl TestProvider {
 }
 
 impl Provider for TestProvider {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
+            id: self.id.clone(),
             prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
             ..Default::default()
         }

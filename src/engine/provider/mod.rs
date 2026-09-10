@@ -88,22 +88,28 @@ pub struct EntryMeta {
 pub type Entry = Scoreable<EntryMeta>;
 pub type ScoredEntry = Scored<EntryMeta>;
 
-/// Static metadata describing a provider: its display name, the string
-/// prefixes that trigger it, whether it is active, and whether it only
-/// wants to be queried after a prefix. All fields are overwritable by user
-/// config — the provider supplies defaults, the config file can override
-/// them.
+/// Static metadata describing a provider: its stable `id`, display name,
+/// the string prefixes that trigger it, whether it is active, and whether
+/// it only wants to be queried after a prefix. The `id` is the provider's
+/// identity and is never overwritten by user config; every other field is
+/// overwritable — the provider supplies defaults, the config file can
+/// override them.
 ///
-/// [`Default`] gives sensible values: empty `name` (resolved to the
-/// provider's [`id`](Provider::id) at registration), no prefixes, enabled,
-/// and queried for every input. Providers only need to spell out what
-/// differs, e.g.
-/// `ProviderMeta { prefixes: vec!["=".into()], prefix_only: true, ..Default::default() }`.
+/// [`Default`] gives sensible values: empty `id` (a provider returning an
+/// empty id is refused at registration), empty `name` (resolved to the
+/// `id`), no prefixes, enabled, and queried for every input. Providers only
+/// need to spell out what differs, e.g.
+/// `ProviderMeta { id: "calculator".into(), prefixes: vec!["=".into()], prefix_only: true, ..Default::default() }`.
 #[derive(Debug, Clone)]
 pub struct ProviderMeta {
+    /// Stable, unique identifier for this provider (e.g. `"desktop"`,
+    /// `"calculator"`). Used in logs, select dispatch, and config lookup.
+    /// Never overridden by user config; the engine rejects an empty id at
+    /// registration.
+    pub id: String,
     /// Human-readable display name for the UI. An empty string resolves to
-    /// the provider's [`id`](Provider::id) at registration, unless the name
-    /// is overridden by config.
+    /// the provider's [`id`](Self::id) at registration, unless the name is
+    /// overridden by config.
     pub name: String,
     /// Query prefixes that trigger this provider, e.g. `["="]` for the
     /// calculator. Empty means the provider handles every query.
@@ -120,9 +126,28 @@ pub struct ProviderMeta {
     pub prefix_only: bool,
 }
 
+impl ProviderMeta {
+    /// Validate that an id is set and resolve an empty `name` to the id.
+    ///
+    /// Called by the engine when a provider is registered. A provider that
+    /// returns an empty id is a bug — most likely copied from an example
+    /// that forgot the field — and is refused loudly rather than silently
+    /// breaking config lookup, logs, and select dispatch.
+    pub(crate) fn resolved(mut self) -> anyhow::Result<Self> {
+        if self.id.is_empty() {
+            anyhow::bail!("provider returned an empty id");
+        }
+        if self.name.is_empty() {
+            self.name = self.id.clone();
+        }
+        Ok(self)
+    }
+}
+
 impl Default for ProviderMeta {
     fn default() -> Self {
         Self {
+            id: String::new(),
             name: String::new(),
             prefixes: Vec::new(),
             enabled: true,
@@ -214,15 +239,16 @@ pub struct HandleContext<'a> {
 ///
 /// # Trait contract
 ///
-/// - [`id()`](Self::id) — returns a short, unique identifier for this
-///   provider (e.g. `"desktop"`, `"calculator"`). Used in logs, select
-///   dispatch, and config lookup. This is the **stable** identity; it is
-///   never overridden by config.
-/// - [`meta()`](Self::meta) — returns a [`ProviderMeta`] with the display
-///   name, trigger prefixes, and enabled flag. All fields are overwritable
-///   by user config. An empty prefix list means the provider is always
-///   active. Each query is preprocessed once: the longest declared prefix
-///   that the input starts with becomes the global prefix for that query.
+/// - [`meta()`](Self::meta) — returns a [`ProviderMeta`] describing this
+///   provider. Its `id` is the **stable** identity (e.g. `"desktop"`,
+///   `"calculator"`): a short, unique key used in logs, select dispatch,
+///   and config lookup, never overridden by config. The remaining fields —
+///   display name, trigger prefixes, enabled flag, `prefix_only` — are
+///   overwritable by user config; an empty `name` resolves to the `id`, so
+///   a provider typically only fills in the `id` plus what differs. An
+///   empty prefix list means the provider is always active. Each query is
+///   preprocessed once: the longest declared prefix that the input starts
+///   with becomes the global prefix for that query.
 /// - [`init()`](Self::init) — called once at startup with an
 ///   [`InitContext`] carrying the provider's own data folder
 ///   (`<data dir>/providers/<provider id>/`, created unless running in
@@ -264,9 +290,8 @@ pub struct HandleContext<'a> {
 /// struct MyProvider { entries: Vec<Entry> }
 ///
 /// impl Provider for MyProvider {
-///     fn id(&self) -> &str { "my" }
 ///     fn meta(&self) -> ProviderMeta {
-///         ProviderMeta { ..Default::default() }
+///         ProviderMeta { id: "my".into(), ..Default::default() }
 ///     }
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */
@@ -279,9 +304,6 @@ pub struct HandleContext<'a> {
 ///
 /// See [`CalculatorProvider`] for a real provider with a prefix trigger.
 pub trait Provider: Send {
-    /// Stable, unique identifier for this provider (e.g. `"desktop"`).
-    /// Used in logs, select dispatch, and config lookup. Not overwritable.
-    fn id(&self) -> &str;
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;

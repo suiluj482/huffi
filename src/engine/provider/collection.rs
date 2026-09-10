@@ -60,29 +60,16 @@ impl ProviderCollection {
 
 impl ProviderCollection {
     pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) -> anyhow::Result<()> {
-        let id = provider.id().to_owned();
         let mut meta = provider.meta();
+        let id = meta.id.clone();
 
-        // Apply user-config overrides.
+        // Apply user-config overrides; the id is never overridden.
         if let Some(ov) = self.overrides.get(&id) {
-            if let Some(ref name) = ov.name {
-                meta.name = name.clone();
-            }
-            if let Some(enabled) = ov.enabled {
-                meta.enabled = enabled;
-            }
-            if let Some(ref prefixes) = ov.prefixes {
-                meta.prefixes = prefixes.clone();
-            }
-            if let Some(prefix_only) = ov.prefix_only {
-                meta.prefix_only = prefix_only;
-            }
+            meta = ov.apply(meta);
         }
 
-        // An empty name falls back to the provider id.
-        if meta.name.is_empty() {
-            meta.name = id.clone();
-        }
+        // Reject a missing id loudly and resolve an empty name to the id.
+        let mut meta = meta.resolved()?;
 
         let extra = self.overrides.get(&id).and_then(|ov| ov.extra.clone());
 
@@ -201,7 +188,7 @@ impl ProviderCollection {
                 }
                 let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
-                    e.entry.provider_id = Some(p.id().to_string());
+                    e.entry.provider_id = Some(meta.id.clone());
                 }
                 Some(QueryGroup {
                     query: ctx.query.to_string(),
@@ -218,7 +205,7 @@ impl ProviderCollection {
     /// longer registered.
     pub fn handle(&mut self, provider_id: &str, entry_id: &str, pre: &PreprocessedQuery) {
         for (provider, meta) in &mut self.providers {
-            if provider.id() != provider_id {
+            if meta.id != provider_id {
                 continue;
             }
             provider.handle(HandleContext {
@@ -296,12 +283,9 @@ mod tests {
     }
 
     impl Provider for TrackingProvider {
-        fn id(&self) -> &str {
-            &self.id
-        }
-
         fn meta(&self) -> ProviderMeta {
             ProviderMeta {
+                id: self.id.clone(),
                 prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
                 ..Default::default()
             }
@@ -444,12 +428,12 @@ mod tests {
         assert!(
             providers
                 .iter()
-                .any(|p| p.name == "desktop" && p.prefixes.is_empty())
+                .any(|p| p.id == "desktop" && p.name == "desktop" && p.prefixes.is_empty())
         );
         assert!(
-            providers
-                .iter()
-                .any(|p| p.name == "calculator" && p.prefixes == vec!["="])
+            providers.iter().any(|p| {
+                p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
+            })
         );
     }
 
@@ -541,7 +525,8 @@ mod tests {
         let config = ProviderConfig { builtin: overrides };
         let c = ProviderCollection::new_with_config(dir, true, &config).unwrap();
         let providers = c.providers();
-        let calc = providers.iter().find(|p| p.name == "Calc").unwrap();
+        let calc = providers.iter().find(|p| p.id == "calculator").unwrap();
+        assert_eq!(calc.name, "Calc");
         assert!(!calc.enabled);
         assert_eq!(calc.prefixes, vec!["::"]);
     }
@@ -555,11 +540,11 @@ mod tests {
             received: Arc<Mutex<Option<serde_json::Value>>>,
         }
         impl Provider for ExtraCapturingProvider {
-            fn id(&self) -> &str {
-                "extra-capture"
-            }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta::default()
+                ProviderMeta {
+                    id: "extra-capture".into(),
+                    ..Default::default()
+                }
             }
             fn init(&mut self, ctx: InitContext) -> ProviderResult {
                 *self.received.lock().unwrap() = ctx.extra.clone();
@@ -598,11 +583,11 @@ mod tests {
     fn critical_config_error_disables_provider() {
         struct FailingInit;
         impl Provider for FailingInit {
-            fn id(&self) -> &str {
-                "failing"
-            }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta::default()
+                ProviderMeta {
+                    id: "failing".into(),
+                    ..Default::default()
+                }
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Config {
@@ -630,11 +615,9 @@ mod tests {
             calls: CallLog,
         }
         impl Provider for PrefixOnlyProvider {
-            fn id(&self) -> &str {
-                "prefixed"
-            }
             fn meta(&self) -> ProviderMeta {
                 ProviderMeta {
+                    id: "prefixed".into(),
                     prefixes: vec!["::".into()],
                     prefix_only: true,
                     ..Default::default()
@@ -677,11 +660,11 @@ mod tests {
     fn empty_meta_name_resolves_to_id() {
         struct NameLessProvider;
         impl Provider for NameLessProvider {
-            fn id(&self) -> &str {
-                "nameless"
-            }
             fn meta(&self) -> ProviderMeta {
-                ProviderMeta::default()
+                ProviderMeta {
+                    id: "nameless".into(),
+                    ..Default::default()
+                }
             }
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
@@ -695,8 +678,32 @@ mod tests {
         c.add_provider(Box::new(NameLessProvider)).unwrap();
         let providers = c.providers();
         assert!(
-            providers.iter().any(|p| p.name == "nameless"),
+            providers
+                .iter()
+                .any(|p| p.id == "nameless" && p.name == "nameless"),
             "an empty meta name should fall back to the provider id"
+        );
+    }
+
+    #[test]
+    fn provider_with_empty_id_is_rejected() {
+        struct IdLessProvider;
+        impl Provider for IdLessProvider {
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta::default()
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                ProviderResult::Ok
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let mut c = collection();
+        assert!(
+            c.add_provider(Box::new(IdLessProvider)).is_err(),
+            "a provider returning an empty id should be refused at registration"
         );
     }
 
@@ -720,7 +727,7 @@ mod tests {
         };
         let c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
         let providers = c.providers();
-        let desktop = providers.iter().find(|p| p.name == "desktop").unwrap();
+        let desktop = providers.iter().find(|p| p.id == "desktop").unwrap();
         assert!(desktop.prefix_only);
     }
 }

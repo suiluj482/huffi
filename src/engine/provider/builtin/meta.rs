@@ -48,12 +48,9 @@ impl MetaProvider {
 }
 
 impl Provider for MetaProvider {
-    fn id(&self) -> &str {
-        "meta"
-    }
-
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
+            id: "meta".into(),
             prefixes: vec!["@".into()],
             prefix_only: true,
             ..Default::default()
