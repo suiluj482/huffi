@@ -186,9 +186,12 @@ mod tests {
     }
 
     impl Provider for CountingProvider {
+        fn id(&self) -> &str {
+            &self.id
+        }
         fn meta(&self) -> ProviderMeta {
             ProviderMeta {
-                id: self.id.clone(),
+                name: self.id.clone(),
                 prefixes: vec![],
                 enabled: true,
             }
@@ -353,9 +356,12 @@ mod tests {
         }
 
         impl Provider for HandleTrackingProvider {
+            fn id(&self) -> &str {
+                &self.id
+            }
             fn meta(&self) -> ProviderMeta {
                 ProviderMeta {
-                    id: self.id.clone(),
+                    name: self.id.clone(),
                     prefixes: vec![],
                     enabled: true,
                 }
@@ -493,12 +499,12 @@ mod tests {
         assert!(
             providers
                 .iter()
-                .any(|p| p.id == "desktop" && p.prefixes.is_empty())
+                .any(|p| p.name == "desktop" && p.prefixes.is_empty())
         );
         assert!(
             providers
                 .iter()
-                .any(|p| p.id == "calculator" && p.prefixes == vec!["="])
+                .any(|p| p.name == "calculator" && p.prefixes == vec!["="])
         );
     }
 }

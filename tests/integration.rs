@@ -144,10 +144,10 @@ fn providers_lists_entries() {
     let engine = TestEngine::new();
     let providers = engine.engine.providers();
     assert!(!providers.is_empty());
-    assert!(providers.iter().any(|e| e.id == "desktop"));
-    assert!(providers.iter().any(|e| e.id == "calculator"));
-    assert!(providers.iter().any(|e| e.id == "meta"));
-    assert!(providers.iter().any(|e| e.id == "test"));
+    assert!(providers.iter().any(|e| e.name == "desktop"));
+    assert!(providers.iter().any(|e| e.name == "calculator"));
+    assert!(providers.iter().any(|e| e.name == "meta"));
+    assert!(providers.iter().any(|e| e.name == "test"));
 }
 
 #[test]

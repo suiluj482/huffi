@@ -753,7 +753,7 @@ impl Launcher {
                     .iter()
                     .find(|p| p.prefixes.iter().any(|pfx2| pfx2 == pfx))
                 {
-                    Some(p) => format!("{pfx}  {}", p.id),
+                    Some(p) => format!("{pfx}  {}", p.name),
                     None => pfx.clone(),
                 };
                 self.badge_label.set_text(&label);
@@ -770,9 +770,9 @@ impl Launcher {
                 .iter()
                 .map(|p| {
                     if p.prefixes.is_empty() {
-                        p.id.clone()
+                        p.name.clone()
                     } else {
-                        format!("{}: {}", p.id, p.prefixes.join(", "))
+                        format!("{}: {}", p.name, p.prefixes.join(", "))
                     }
                 })
                 .collect();

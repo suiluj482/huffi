@@ -8,8 +8,9 @@ use crate::engine::provider::{
 };
 use crate::engine::scoring::MatchField;
 
-/// Fuzzy-match field weights for this provider, loaded from the
-/// `[engine.provider.desktop]` table of the config file.
+/// Fuzzy-match field weights for this provider. When provided via
+/// `[engine.provider.builtin.desktop.extra]`, the fields are parsed from
+/// the arbitrary extra config.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DesktopConfig {
@@ -37,10 +38,10 @@ pub struct DesktopEntryProvider {
 }
 
 impl DesktopEntryProvider {
-    pub fn new(dirs: Vec<PathBuf>, weights: DesktopConfig) -> Self {
+    pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
             dirs,
-            weights,
+            weights: DesktopConfig::default(),
             entries: Arc::from([]),
         }
     }
@@ -48,23 +49,37 @@ impl DesktopEntryProvider {
 
 impl Default for DesktopEntryProvider {
     fn default() -> Self {
-        Self::new(
-            freedesktop_desktop_entry::default_paths().collect(),
-            DesktopConfig::default(),
-        )
+        Self::new(freedesktop_desktop_entry::default_paths().collect())
     }
 }
 
 impl Provider for DesktopEntryProvider {
+    fn id(&self) -> &str {
+        "desktop"
+    }
+
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
-            id: "desktop".into(),
+            name: "desktop".into(),
             prefixes: vec![],
             enabled: true,
         }
     }
 
-    fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+    fn init(&mut self, ctx: InitContext) -> ProviderResult {
+        // Parse extra config into DesktopConfig if provided.
+        if let Some(ref extra) = ctx.extra {
+            match serde_json::from_value::<DesktopConfig>(extra.clone()) {
+                Ok(weights) => self.weights = weights,
+                Err(e) => {
+                    return ProviderResult::Config {
+                        msg: format!("invalid extra config: {e}"),
+                        critical: false,
+                    }
+                }
+            }
+        }
+
         let weights = self.weights;
         self.entries = Arc::from(
             freedesktop_desktop_entry::Iter::new(self.dirs.clone().into_iter())

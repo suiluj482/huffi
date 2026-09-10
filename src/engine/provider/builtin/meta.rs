@@ -48,9 +48,13 @@ impl MetaProvider {
 }
 
 impl Provider for MetaProvider {
+    fn id(&self) -> &str {
+        "meta"
+    }
+
     fn meta(&self) -> ProviderMeta {
         ProviderMeta {
-            id: "meta".into(),
+            name: "meta".into(),
             prefixes: vec!["@".into()],
             enabled: true,
         }
@@ -202,6 +206,7 @@ mod tests {
         assert!(matches!(
             p.init(InitContext {
                 data_dir: Path::new(dir),
+                extra: None,
             }),
             ProviderResult::Ok
         ));
@@ -359,6 +364,7 @@ mod tests {
         assert!(matches!(
             p.init(InitContext {
                 data_dir: Path::new("/tmp/data"),
+                extra: None,
             }),
             ProviderResult::Ok
         ));
@@ -381,6 +387,7 @@ mod tests {
         assert!(matches!(
             p.init(InitContext {
                 data_dir: Path::new("/tmp/data"),
+                extra: None,
             }),
             ProviderResult::Ok
         ));

@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
 
 use crate::engine::scoring::QueryGroup;
 
-use super::config::ProviderConfig;
+use super::config::{ProviderConfig, ProviderOverride};
 use super::{
     CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext, Provider,
     ProviderMeta, ProviderResult, QueryContext,
@@ -14,6 +15,8 @@ pub struct ProviderCollection {
     /// Registered providers in insertion order, with the metadata used for
     /// them (the `enabled` flag may be flipped by a failed init).
     providers: Vec<(Box<dyn Provider>, ProviderMeta)>,
+    /// User-config overrides keyed by provider id.
+    overrides: HashMap<String, ProviderOverride>,
     /// Huffi's data folder; each provider gets `data_dir/providers/<id>/`.
     data_dir: std::path::PathBuf,
     /// Skip creating on-disk state when true.
@@ -43,12 +46,12 @@ impl ProviderCollection {
     ) -> anyhow::Result<Self> {
         let mut collection = Self {
             providers: Vec::new(),
+            overrides: config.builtin.clone(),
             data_dir: data_dir.as_ref().to_path_buf(),
             dry_run,
         };
         collection.add_provider(Box::new(DesktopEntryProvider::new(
             freedesktop_desktop_entry::default_paths().collect(),
-            config.desktop,
         )))?;
         collection.add_provider(Box::new(CalculatorProvider::new()))?;
         Ok(collection)
@@ -57,21 +60,49 @@ impl ProviderCollection {
 
 impl ProviderCollection {
     pub fn add_provider(&mut self, mut provider: Box<dyn Provider>) -> anyhow::Result<()> {
+        let id = provider.id().to_owned();
         let mut meta = provider.meta();
-        let dir = self.data_dir.join("providers").join(&meta.id);
+
+        // Apply user-config overrides.
+        if let Some(ov) = self.overrides.get(&id) {
+            if let Some(ref name) = ov.name {
+                meta.name = name.clone();
+            }
+            if let Some(enabled) = ov.enabled {
+                meta.enabled = enabled;
+            }
+            if let Some(ref prefixes) = ov.prefixes {
+                meta.prefixes = prefixes.clone();
+            }
+        }
+
+        let extra = self.overrides.get(&id).and_then(|ov| ov.extra.clone());
+
+        let dir = self.data_dir.join("providers").join(&id);
         if !self.dry_run {
             std::fs::create_dir_all(&dir)
                 .with_context(|| format!("failed to create data dir {}", dir.display()))?;
         }
-        match provider.init(InitContext { data_dir: &dir }) {
+        match provider.init(InitContext {
+            data_dir: &dir,
+            extra,
+        }) {
             ProviderResult::Ok => {}
             ProviderResult::Unsupported(msg) => {
-                eprintln!("[provider] {} unsupported: {msg}", meta.id);
+                eprintln!("[provider] {id} unsupported: {msg}");
                 meta.enabled = false;
             }
             ProviderResult::Other(msg) => {
-                eprintln!("[provider] {} disabled: {msg}", meta.id);
+                eprintln!("[provider] {id} disabled: {msg}");
                 meta.enabled = false;
+            }
+            ProviderResult::Config { msg, critical } => {
+                if critical {
+                    eprintln!("[provider] {id} config error, disabled: {msg}");
+                    meta.enabled = false;
+                } else {
+                    eprintln!("[provider] {id} config warning, using defaults: {msg}");
+                }
             }
         }
         self.providers.push((provider, meta));
@@ -159,7 +190,7 @@ impl ProviderCollection {
                 let ctx = Self::provider_query_context(meta, pre);
                 let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
-                    e.entry.provider_id = Some(meta.id.clone());
+                    e.entry.provider_id = Some(p.id().to_string());
                 }
                 Some(QueryGroup {
                     query: ctx.query.to_string(),
@@ -176,7 +207,7 @@ impl ProviderCollection {
     /// longer registered.
     pub fn handle(&mut self, provider_id: &str, entry_id: &str, pre: &PreprocessedQuery) {
         for (provider, meta) in &mut self.providers {
-            if meta.id != provider_id {
+            if provider.id() != provider_id {
                 continue;
             }
             provider.handle(HandleContext {
@@ -254,9 +285,13 @@ mod tests {
     }
 
     impl Provider for TrackingProvider {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
         fn meta(&self) -> ProviderMeta {
             ProviderMeta {
-                id: self.id.clone(),
+                name: self.id.clone(),
                 prefixes: self.prefixes.iter().map(|s| (*s).to_string()).collect(),
                 enabled: true,
             }
@@ -399,12 +434,12 @@ mod tests {
         assert!(
             providers
                 .iter()
-                .any(|p| p.id == "desktop" && p.prefixes.is_empty())
+                .any(|p| p.name == "desktop" && p.prefixes.is_empty())
         );
         assert!(
             providers
                 .iter()
-                .any(|p| p.id == "calculator" && p.prefixes == vec!["="])
+                .any(|p| p.name == "calculator" && p.prefixes == vec!["="])
         );
     }
 
@@ -474,5 +509,112 @@ mod tests {
             vec![("desk-entry".to_string(), None, "= fi".into())],
             "a provider whose prefixes don't contain the global prefix sees None and the full query"
         );
+    }
+
+    #[test]
+    fn meta_overrides_applied_from_config() {
+        let dir = std::env::temp_dir().join(format!(
+            "huffi-providers-override-{}",
+            std::process::id()
+        ));
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "calculator".to_string(),
+            ProviderOverride {
+                name: Some("Calc".to_string()),
+                enabled: Some(false),
+                prefixes: Some(vec!["::".to_string()]),
+                extra: None,
+            },
+        );
+        let config = ProviderConfig { builtin: overrides };
+        let c = ProviderCollection::new_with_config(dir, true, &config).unwrap();
+        let providers = c.providers();
+        let calc = providers.iter().find(|p| p.name == "Calc").unwrap();
+        assert!(!calc.enabled);
+        assert_eq!(calc.prefixes, vec!["::"]);
+    }
+
+    #[test]
+    fn provider_extra_config_is_passed_to_init() {
+        let received: Arc<Mutex<Option<serde_json::Value>>> =
+            Arc::new(Mutex::new(None));
+
+        struct ExtraCapturingProvider {
+            received: Arc<Mutex<Option<serde_json::Value>>>,
+        }
+        impl Provider for ExtraCapturingProvider {
+            fn id(&self) -> &str {
+                "extra-capture"
+            }
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta {
+                    name: "extra-capture".into(),
+                    prefixes: vec![],
+                    enabled: true,
+                }
+            }
+            fn init(&mut self, ctx: InitContext) -> ProviderResult {
+                *self.received.lock().unwrap() = ctx.extra.clone();
+                ProviderResult::Ok
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("huffi-providers-extra-{}", std::process::id()));
+        let override_cfg = ProviderConfig {
+            builtin: HashMap::from([(
+                "extra-capture".to_string(),
+                ProviderOverride {
+                    name: None,
+                    enabled: None,
+                    prefixes: None,
+                    extra: Some(serde_json::json!({ "precision": 2 })),
+                },
+            )]),
+        };
+        let mut c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
+        c.add_provider(Box::new(ExtraCapturingProvider {
+            received: Arc::clone(&received),
+        }))
+        .unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            Some(serde_json::json!({ "precision": 2 }))
+        );
+    }
+
+    #[test]
+    fn critical_config_error_disables_provider() {
+        struct FailingInit;
+        impl Provider for FailingInit {
+            fn id(&self) -> &str {
+                "failing"
+            }
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta {
+                    name: "failing".into(),
+                    prefixes: vec![],
+                    enabled: true,
+                }
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                ProviderResult::Config {
+                    msg: "bad config".into(),
+                    critical: true,
+                }
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("huffi-providers-{}-critical", std::process::id()));
+        let mut c = ProviderCollection::new_with_config(dir, true, &ProviderConfig::default()).unwrap();
+        c.add_provider(Box::new(FailingInit)).unwrap();
+        let providers = c.providers();
+        assert!(!providers.iter().any(|p| p.name == "failing" && p.enabled));
     }
 }

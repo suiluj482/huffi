@@ -88,12 +88,15 @@ pub struct EntryMeta {
 pub type Entry = Scoreable<EntryMeta>;
 pub type ScoredEntry = Scored<EntryMeta>;
 
-/// Static metadata describing a provider: its unique id, the string
-/// prefixes that trigger it, and whether it is active.
+/// Static metadata describing a provider: its display name, the string
+/// prefixes that trigger it, and whether it is active. All fields are
+/// overwritable by user config — the provider supplies defaults, the
+/// config file can override them.
 #[derive(Debug, Clone)]
 pub struct ProviderMeta {
-    /// Id used to identify the provider in logs and select dispatch.
-    pub id: String,
+    /// Human-readable display name for the UI. Defaults to the provider's
+    /// [`id`](Provider::id) when not overridden by config.
+    pub name: String,
     /// Query prefixes that trigger this provider, e.g. `["="]` for the
     /// calculator. Empty means the provider handles every query.
     pub prefixes: Vec<String>,
@@ -114,6 +117,11 @@ pub enum ProviderResult {
     /// Any other initialization failure. Also logged and the provider
     /// disabled; the engine keeps running.
     Other(String),
+    /// Provider configuration is invalid (e.g. malformed `extra` config).
+    /// `critical` decides whether the provider is disabled: a critical
+    /// config error disables it, a non-critical one logs a warning and the
+    /// provider continues with its defaults.
+    Config { msg: String, critical: bool },
 }
 
 impl std::fmt::Display for ProviderResult {
@@ -122,6 +130,13 @@ impl std::fmt::Display for ProviderResult {
             ProviderResult::Ok => write!(f, "ok"),
             ProviderResult::Unsupported(msg) => write!(f, "unsupported: {msg}"),
             ProviderResult::Other(msg) => write!(f, "{msg}"),
+            ProviderResult::Config { msg, critical } => {
+                if *critical {
+                    write!(f, "invalid config: {msg}")
+                } else {
+                    write!(f, "invalid config (using defaults): {msg}")
+                }
+            }
         }
     }
 }
@@ -130,11 +145,14 @@ impl std::fmt::Display for ProviderResult {
 ///
 /// Wrapped in a struct so future setup inputs (config sections, resolved
 /// paths, environment) can be added without breaking existing implementors.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct InitContext<'a> {
     /// The provider's own data folder (`<data dir>/providers/<provider id>/`,
     /// created unless running in dry-run mode).
     pub data_dir: &'a Path,
+    /// Arbitrary per-provider config from `[engine.provider.builtin.<id>.extra]`.
+    /// `None` when the user did not set an `extra` section for this provider.
+    pub extra: Option<serde_json::Value>,
 }
 
 /// The context of a single [`Provider::query`] invocation.
@@ -171,17 +189,21 @@ pub struct HandleContext<'a> {
 ///
 /// # Trait contract
 ///
-/// - [`meta()`](Self::meta) — returns a [`ProviderMeta`] with a unique id
-///   (used in log messages, not exposed to the user) and one or more
-///   string prefixes that trigger this provider (e.g. `["="]` for the
-///   calculator). An empty prefix list means the provider is always
+/// - [`id()`](Self::id) — returns a short, unique identifier for this
+///   provider (e.g. `"desktop"`, `"calculator"`). Used in logs, select
+///   dispatch, and config lookup. This is the **stable** identity; it is
+///   never overridden by config.
+/// - [`meta()`](Self::meta) — returns a [`ProviderMeta`] with the display
+///   name, trigger prefixes, and enabled flag. All fields are overwritable
+///   by user config. An empty prefix list means the provider is always
 ///   active. Each query is preprocessed once: the longest declared prefix
 ///   that the input starts with becomes the global prefix for that query.
 /// - [`init()`](Self::init) — called once at startup with an
 ///   [`InitContext`] carrying the provider's own data folder
 ///   (`<data dir>/providers/<provider id>/`, created unless running in
-///   dry-run mode). Use this to do expensive work (scan directories, build
-///   data structures, open storage) so it doesn't happen on every keystroke.
+///   dry-run mode) and any extra per-provider config from the user.
+///   Use this to do expensive work (scan directories, build data
+///   structures, open storage) so it doesn't happen on every keystroke.
 ///   Providers never need to locate or create their own folders. Returning
 ///   [`ProviderResult::Unsupported`] — or any other init error — logs a
 ///   warning and disables the provider; the engine keeps running.
@@ -217,8 +239,9 @@ pub struct HandleContext<'a> {
 /// struct MyProvider { entries: Vec<Entry> }
 ///
 /// impl Provider for MyProvider {
+///     fn id(&self) -> &str { "my" }
 ///     fn meta(&self) -> ProviderMeta {
-///         ProviderMeta { id: "my".into(), prefixes: vec![], enabled: true }
+///         ProviderMeta { name: "My Provider".into(), prefixes: vec![], enabled: true }
 ///     }
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */
@@ -231,6 +254,9 @@ pub struct HandleContext<'a> {
 ///
 /// See [`CalculatorProvider`] for a real provider with a prefix trigger.
 pub trait Provider: Send {
+    /// Stable, unique identifier for this provider (e.g. `"desktop"`).
+    /// Used in logs, select dispatch, and config lookup. Not overwritable.
+    fn id(&self) -> &str;
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
