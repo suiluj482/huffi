@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::engine::provider::{Entry, Provider, entry};
+use crate::engine::provider::{
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+};
 
 /// Provides entries that expose launcher-internal state: uptime, control
 /// socket path, data path, pid, version, and dry-run mode.
@@ -11,8 +13,6 @@ use crate::engine::provider::{Entry, Provider, entry};
 /// path on your clipboard.
 pub struct MetaProvider {
     control_socket: PathBuf,
-    /// Huffi's data folder (see [`Engine::new_with_config`], e.g.
-    /// `~/.local/share/huffi`), surfaced by the `meta-data` entry.
     data_dir: PathBuf,
     dry_run: bool,
     started: Instant,
@@ -48,18 +48,19 @@ impl MetaProvider {
 }
 
 impl Provider for MetaProvider {
-    fn id(&self) -> &str {
-        "meta"
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta::builder("meta")
+            .prefix("@")
+            .prefix_only(true)
+            .build()
     }
 
-    fn prefixes(&self) -> &[&str] {
-        &["@"]
+    fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+        ProviderResult::Ok
     }
 
-    fn init(&mut self, _data_dir: &Path) {}
-
-    fn query(&mut self, prefix: Option<&str>, _query: &str) -> Vec<Entry> {
-        let Some(_prefix) = prefix else {
+    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+        let Some(_prefix) = ctx.prefix else {
             return vec![];
         };
 
@@ -197,20 +198,46 @@ mod tests {
 
     fn provider(dir: &str) -> MetaProvider {
         let mut p = MetaProvider::new("/tmp/x.sock", dir, false);
-        p.init(Path::new(dir));
+        assert!(matches!(
+            p.init(InitContext {
+                data_dir: Path::new(dir),
+                extra: None,
+            }),
+            ProviderResult::Ok
+        ));
         p
     }
 
     #[test]
     fn empty_without_prefix() {
-        assert!(provider("/tmp/data").query(None, "").is_empty());
-        assert!(provider("/tmp/data").query(None, "uptime").is_empty());
+        assert!(
+            provider("/tmp/data")
+                .query(QueryContext {
+                    prefix: None,
+                    query: "",
+                    original: "",
+                })
+                .is_empty()
+        );
+        assert!(
+            provider("/tmp/data")
+                .query(QueryContext {
+                    prefix: None,
+                    query: "uptime",
+                    original: "uptime",
+                })
+                .is_empty()
+        );
     }
 
     #[test]
     fn returns_entries_with_prefix() {
         let mut p = provider("/tmp/data");
-        let entries = p.query(Some("@"), "");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         assert_eq!(entries.len(), 11);
         assert!(entries.iter().any(|e| e.entry.id == "meta-uptime"));
         assert!(entries.iter().any(|e| e.entry.id == "meta-socket"));
@@ -225,7 +252,11 @@ mod tests {
     #[test]
     fn memory_and_threads_entries_carry_values() {
         let mut p = provider("/tmp/data");
-        let entries = p.query(Some("@"), "");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         let memory = entries
             .iter()
             .find(|e| e.entry.id == "meta-memory")
@@ -257,7 +288,11 @@ mod tests {
     #[test]
     fn kill_entry_runs_kill_on_pid() {
         let mut p = provider("/tmp/data");
-        let entries = p.query(Some("@"), "");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         let kill = entries
             .iter()
             .find(|e| e.entry.id == "meta-kill")
@@ -276,7 +311,11 @@ mod tests {
     #[test]
     fn open_data_entry_runs_xdg_open_on_folder() {
         let mut p = provider("/tmp/data");
-        let entries = p.query(Some("@"), "");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         let open = entries
             .iter()
             .find(|e| e.entry.id == "meta-open-data")
@@ -295,7 +334,11 @@ mod tests {
     #[test]
     fn socket_entry_carries_value_and_copy_action() {
         let mut p = provider("/tmp/data");
-        let entries = p.query(Some("@"), "sock");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "sock",
+            original: "@sock",
+        });
         let socket = entries
             .iter()
             .find(|e| e.entry.id == "meta-socket")
@@ -313,8 +356,18 @@ mod tests {
     #[test]
     fn dry_run_reflected_in_entry() {
         let mut p = MetaProvider::new("/tmp/x.sock", "/tmp/data", true);
-        p.init(Path::new("/tmp/data"));
-        let entries = p.query(Some("@"), "");
+        assert!(matches!(
+            p.init(InitContext {
+                data_dir: Path::new("/tmp/data"),
+                extra: None,
+            }),
+            ProviderResult::Ok
+        ));
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         let dry = entries
             .iter()
             .find(|e| e.entry.id == "meta-dry-run")
@@ -326,8 +379,18 @@ mod tests {
     #[test]
     fn value_not_in_match_fields() {
         let mut p = MetaProvider::new("/tmp/unlikely-path.sock", "/tmp/data", false);
-        p.init(Path::new("/tmp/data"));
-        let entries = p.query(Some("@"), "");
+        assert!(matches!(
+            p.init(InitContext {
+                data_dir: Path::new("/tmp/data"),
+                extra: None,
+            }),
+            ProviderResult::Ok
+        ));
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
         let socket = entries
             .iter()
             .find(|e| e.entry.id == "meta-socket")

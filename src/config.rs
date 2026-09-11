@@ -178,7 +178,12 @@ page_size = 25
 boost_weight = 4.0
 half_life_days = 7
 
-[engine.provider.desktop]
+[engine.provider.builtin.desktop]
+name = "Apps"
+enabled = false
+prefixes = ["!"]
+
+[engine.provider.builtin.desktop.extra]
 weight_comment = 0.9
 
 [engine.external]
@@ -191,8 +196,22 @@ terminal = ["foot"]
         assert_eq!(parsed.ui.page_size, 25);
         assert_eq!(parsed.engine.scoring.boost_weight, 4.0);
         assert_eq!(parsed.engine.scoring.half_life_days, 7.0);
-        assert_eq!(parsed.engine.provider.desktop.weight_comment, 0.9);
-        assert_eq!(parsed.engine.provider.desktop.weight_name, 1.0);
+
+        let desktop_ov = parsed
+            .engine
+            .provider
+            .builtin
+            .get("desktop")
+            .expect("desktop override");
+        assert_eq!(desktop_ov.name.as_deref(), Some("Apps"));
+        assert_eq!(desktop_ov.enabled, Some(false));
+        assert_eq!(
+            desktop_ov.prefixes.as_deref(),
+            Some(&["!".to_string()][..])
+        );
+        let extra = desktop_ov.extra.as_ref().expect("extra config");
+        assert_eq!(extra["weight_comment"], 0.9);
+
         assert_eq!(parsed.engine.external.terminal, vec!["foot".to_string()]);
         assert_eq!(parsed.engine.external.clipboard, "wl-copy");
     }

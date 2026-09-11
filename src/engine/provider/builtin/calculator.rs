@@ -1,10 +1,11 @@
 use rink_core::{one_line, simple_context};
 
-use crate::engine::provider::{Entry, Icon, Provider, entry};
+use crate::engine::provider::{
+    Entry, Icon, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+};
 
 pub struct CalculatorProvider {
-    id: String,
-    ctx: Option<rink_core::Context>,
+    rink: Option<rink_core::Context>,
     icon: Option<Icon>,
 }
 
@@ -17,49 +18,42 @@ impl Default for CalculatorProvider {
 impl CalculatorProvider {
     pub fn new() -> Self {
         Self {
-            id: "calculator".into(),
-            ctx: None,
+            rink: None,
             icon: None,
         }
     }
 }
 
 impl Provider for CalculatorProvider {
-    fn id(&self) -> &str {
-        &self.id
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta::builder("calculator")
+            .prefix("=")
+            .prefix_only(true)
+            .build()
     }
 
-    fn prefixes(&self) -> &[&str] {
-        &["="]
-    }
-
-    fn init(&mut self, _data_dir: &std::path::Path) {
+    fn init(&mut self, _ctx: InitContext) -> ProviderResult {
         match simple_context() {
-            Ok(ctx) => {
-                eprintln!("[calculator] rink context initialized");
-                self.ctx = Some(ctx);
-            }
-            Err(e) => {
-                eprintln!("[calculator] failed to init rink context: {e}");
-            }
+            Ok(rink) => self.rink = Some(rink),
+            Err(e) => return ProviderResult::Other(format!("failed to init rink context: {e}")),
         }
         self.icon = Some(Icon::Name("accessories-calculator".into()));
+        ProviderResult::Ok
     }
 
-    fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry> {
-        let Some(_prefix) = prefix else {
+    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+        let Some(_prefix) = ctx.prefix else {
             return vec![];
         };
 
-        let Some(ctx) = self.ctx.as_mut() else {
-            eprintln!("[calculator] no rink context");
+        let Some(rink) = self.rink.as_mut() else {
             return vec![];
         };
 
-        let result = if query.is_empty() {
+        let result = if ctx.query.is_empty() {
             Ok("type to calculate".into())
         } else {
-            one_line(ctx, query)
+            one_line(rink, ctx.query)
         };
 
         let (title, value) = match result {

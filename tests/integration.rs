@@ -37,9 +37,9 @@ impl TestEngine {
     }
 
     fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>, usize) {
-        let (prefix, scored) = self.engine.query(query);
-        let total = scored.len();
-        (prefix, scored, total)
+        let reply = self.engine.query(query);
+        let total = reply.scored.len();
+        (reply.pre.prefix.clone(), reply.scored.to_vec(), total)
     }
 }
 
@@ -144,10 +144,10 @@ fn providers_lists_entries() {
     let engine = TestEngine::new();
     let providers = engine.engine.providers();
     assert!(!providers.is_empty());
-    assert!(providers.iter().any(|e| e.id == "desktop"));
-    assert!(providers.iter().any(|e| e.id == "calculator"));
-    assert!(providers.iter().any(|e| e.id == "meta"));
-    assert!(providers.iter().any(|e| e.id == "test"));
+    assert!(providers.iter().any(|e| e.id == "desktop" && e.name == "desktop"));
+    assert!(providers.iter().any(|e| e.id == "calculator" && e.name == "calculator"));
+    assert!(providers.iter().any(|e| e.id == "meta" && e.name == "meta"));
+    assert!(providers.iter().any(|e| e.id == "test" && e.name == "test"));
 }
 
 #[test]

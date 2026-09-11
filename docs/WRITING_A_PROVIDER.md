@@ -9,22 +9,41 @@ a ranked list.
 
 ```rust
 pub trait Provider: Send {
-    fn id(&self) -> &str;
-    fn prefixes(&self) -> &[&str];
-    fn init(&mut self, data_dir: &Path);
-    fn query(&mut self, prefix: Option<&str>, query: &str) -> Vec<Entry>;
+    fn meta(&self) -> ProviderMeta;
+    fn init(&mut self, ctx: InitContext) -> ProviderResult;
+    fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
+    fn handle(&mut self, ctx: HandleContext); // has a default no-op impl
 }
 ```
 
-### `id()`
+### `meta()`
 
-A short, unique name for this provider.
+Returns a [`ProviderMeta`] describing the provider. Its `id` is a short,
+unique name for the provider (e.g. `"desktop"`, `"calculator"`). It is used
+in logs, select dispatch, and config lookup, and this is the **stable**
+identity — it is never overridden by user config. The engine refuses to
+register a provider with an empty `id`.
 
-### `prefixes()`
+The remaining fields are overwritable by user config under
+`[engine.provider.builtin.<id>]`: the display `name`, trigger `prefixes`,
+the `enabled` flag, and `prefix_only`.
 
-Returns the trigger prefixes of this provider. `query()` is always called,
-regardless of whether a prefix matches. The prefixes are intended for user
-transparency (the UI lists them and marks the active one).
+Use [`ProviderMeta::builder`] to construct it: the `id` is the only
+required field, and everything else has sensible defaults. An empty `name`
+resolves to the `id` at registration, the provider starts enabled, has no
+prefixes, and is queried for every input.
+
+```rust
+fn meta(&self) -> ProviderMeta {
+    ProviderMeta::builder("my-provider").build()
+}
+```
+
+**`prefix_only`** — when `true`, the engine never calls your `query()`
+unless the user's input matched one of your prefixes; the provider is
+skipped entirely otherwise. Prefix-triggered providers can declare this
+instead of returning `vec![]` for unprefixed input, saving a call per
+keystroke. [`CalculatorProvider`] and [`MetaProvider`] do this.
 
 Prefixes are resolved once per query by the engine: the **longest** declared
 prefix that the user's input starts with becomes the *global prefix* for that
@@ -40,14 +59,21 @@ fuzzy-matches the provider's entries against `" 2 + 2"`, not the full input.
 Providers whose prefix did not match score against the full input instead. A
 `.score()`-based entry isn't affected by any query either way.
 
-### `init(data_dir)`
+### `init(ctx)`
 
-Called once at startup, before any queries are served. `data_dir` is this
-provider's **own** data folder: `<data dir>/providers/<provider id>/`, created by the
-engine before `init()` runs (unless running in `--dry-run`). Use it to keep
-per-provider state (caches, indices, logs) without colliding with other
-providers — huffi never needs to know what you put there, and you never need
-to locate or create the folder yourself.
+Called once at startup, before any queries are served. The `InitContext`
+carries:
+
+- `data_dir` — this provider's **own** data folder:
+  `<data dir>/providers/<provider id>/`, created by the engine before
+  `init()` runs (unless running in `--dry-run`). Use it to keep
+  per-provider state (caches, indices, logs) without colliding with other
+  providers — huffi never needs to know what you put there, and you never
+  need to locate or create the folder yourself.
+- `extra` — optional arbitrary config from
+  `[engine.provider.builtin.<id>.extra]`. Not schema checked — your
+  provider is responsible for interpreting it (e.g. via
+  `serde_json::from_value`).
 
 Use this for expensive one-time work:
 
@@ -56,20 +82,32 @@ Use this for expensive one-time work:
   calculator)
 - Building an index, opening your own storage under `data_dir`
 
+Return `ProviderResult::Config { msg, critical }` when the `extra` config
+is present but invalid: a non-critical error logs a warning and the
+provider continues with its defaults, a critical one disables the provider.
+`ProviderResult::Unsupported` disables the provider when the platform can't
+support it (e.g. a missing binary).
+
 Since `init()` is only called once, keep `query()` as lightweight as
 possible. Your provider holds arbitrary state — store everything you need
 in your struct fields during `init()`.
 
-### `query()`
+### `query(ctx)`
 
 Called on **every keystroke** while the user types. Return the entries your
 provider wants to offer for the current input.
 
-**Performance matters** — this runs for. If the user types quickly, 
-`query()` is called rapidly. Avoid I/O, allocations in hot paths,
+**Performance matters** — this runs for every keystroke. If the user types
+quickly, `query()` is called rapidly. Avoid I/O, allocations in hot paths,
 or expensive computation here. Cache everything in `init()`.
 
-The `prefix` and `query` parameters:
+The `QueryContext` fields:
+
+- `prefix` — `Some("...")` when the provider's declared prefix matched,
+  `None` otherwise.
+- `query` — the text after the prefix when a prefix matched, otherwise
+  the full typed text.
+- `original` — the full query as typed, including the prefix.
 
 ```
 User types         prefix     query
@@ -89,6 +127,20 @@ is `None`, since it has nothing to offer for un-prefixed input. This is
 exactly what [`CalculatorProvider`] does — it returns `vec![]` at the top
 of `query()` when no prefix matched, staying performant and out of the way for normal app
 searching.
+
+### `handle(ctx)`
+
+Called when one of your provider's entries is selected by the user, in
+addition to the entry's action. The `HandleContext` carries:
+
+- `entry_id` — the id of the entry that was selected.
+- `query` — the provider-relative [`QueryContext`] the selection was made
+  under (same semantics as in `query()`).
+
+The default implementation does nothing; override it to update provider
+state or trigger behavior on selection. Since the engine reuses its cached
+query reply for the selection, `handle()` will not see a fresh `query()`
+call.
 
 ## Entries and `EntryBuilder`
 
@@ -208,16 +260,17 @@ If no action is set, selection does nothing (`Action::NoOp`).
 ## Complete example: always-active provider
 
 ```rust
-use huffi::engine::provider::{Entry, Provider, entry};
+use huffi::engine::provider::{Entry, Provider, ProviderMeta, ProviderResult, InitContext, entry};
 use huffi::engine::scoring::MatchField;
 
 struct CustomDirProvider { entries: Vec<Entry> }
 
 impl Provider for CustomDirProvider {
-    fn id(&self) -> &str { "custom-dirs" }
-    fn prefixes(&self) -> &[&str] { &[] }
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta::builder("custom-dirs").name("Custom Dirs").build()
+    }
 
-    fn init(&mut self, _data_dir: &Path) {
+    fn init(&mut self, ctx: InitContext) -> ProviderResult {
         self.entries = vec![
             entry("projects", "Projects")
                 .exec(vec!["xdg-open".into(), "/home/me/projects".into()])
@@ -226,9 +279,10 @@ impl Provider for CustomDirProvider {
                 ])
                 .history_key("custom-projects")
         ];
+        ProviderResult::Ok
     }
 
-    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         self.entries.clone()
     }
 }
@@ -251,9 +305,11 @@ engine.add_provider(Box::new(MyProvider::default()));
 ```
 
 `add_provider` creates the provider's `<data_dir>/providers/<id>/` folder (when not in
-dry-run mode) and calls [`init(&data_dir)`][`init()`] before the provider is
-queried. Built-ins are registered in [`ProviderCollection::new_with_config()`] in
-`src/engine/provider/collection.rs`.
+dry-run mode) and calls [`init(ctx)`][`init()`] before the provider is
+queried. User-config overrides from `[engine.provider.builtin.<id>]` are
+applied to the provider's [`meta()`] before init, and any `extra` config
+is passed through `InitContext`. Built-ins are registered in
+[`ProviderCollection::new_with_config()`] in `src/engine/provider/collection.rs`.
 
 [`Engine`]: ../src/engine/mod.rs
 [`ProviderCollection::new_with_config()`]: ../src/engine/provider/collection.rs

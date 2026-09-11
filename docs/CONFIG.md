@@ -55,7 +55,17 @@ confidence_k     = 3.0
 # Base score for results shown while the query is empty.
 empty_query_score = 0.8
 
-[engine.provider.desktop]
+[engine.provider.builtin.desktop]
+# Display name shown in the UI (defaults to the provider id).
+# name    = "Applications"
+# Override whether the provider participates in queries.
+# enabled = true
+# Override trigger prefixes (empty = always active).
+# prefixes = []
+# Only call the provider when a query matches one of its prefixes.
+# prefix_only = false
+
+[engine.provider.builtin.desktop.extra]
 # Fuzzy-match field weights for the desktop-entry provider.
 weight_name         = 1.0
 weight_keyword      = 0.8
@@ -90,7 +100,7 @@ and declarative settings are supported:
       ui.page_size = 15;
       paths.data_dir = "/home/me/.local/share/huffi";
       engine.scoring.boost_weight = 4.0;
-      engine.provider.desktop.weight_comment = 0.9;
+      engine.provider.builtin.desktop.extra.weight_comment = 0.9;
       engine.external.terminal = [ "foot", "--" ];
     };
     # …or point at a checked-in file instead:

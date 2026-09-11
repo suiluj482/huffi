@@ -1,4 +1,6 @@
-use crate::engine::provider::{Entry, Provider};
+use crate::engine::provider::{
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext,
+};
 
 pub struct TestProvider {
     id: String,
@@ -25,17 +27,17 @@ impl TestProvider {
 }
 
 impl Provider for TestProvider {
-    fn id(&self) -> &str {
-        &self.id
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta::builder(&self.id)
+            .prefixes(self.prefixes.iter().copied())
+            .build()
     }
 
-    fn prefixes(&self) -> &[&str] {
-        &self.prefixes
+    fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+        ProviderResult::Ok
     }
 
-    fn init(&mut self, _data_dir: &std::path::Path) {}
-
-    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         self.entries.clone()
     }
 }

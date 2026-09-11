@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::engine::provider::{Entry, Provider, entry, split_command};
+use crate::engine::provider::{
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, split_command,
+};
 use crate::engine::scoring::MatchField;
 
-/// Fuzzy-match field weights for this provider, loaded from the
-/// `[engine.provider.desktop]` table of the config file.
+/// Fuzzy-match field weights for this provider. When provided via
+/// `[engine.provider.builtin.desktop.extra]`, the fields are parsed from
+/// the arbitrary extra config.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DesktopConfig {
@@ -29,18 +32,16 @@ impl Default for DesktopConfig {
 }
 
 pub struct DesktopEntryProvider {
-    id: String,
     dirs: Vec<PathBuf>,
     weights: DesktopConfig,
     entries: Arc<[Entry]>,
 }
 
 impl DesktopEntryProvider {
-    pub fn new(dirs: Vec<PathBuf>, weights: DesktopConfig) -> Self {
+    pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
-            id: "desktop".into(),
             dirs,
-            weights,
+            weights: DesktopConfig::default(),
             entries: Arc::from([]),
         }
     }
@@ -48,32 +49,39 @@ impl DesktopEntryProvider {
 
 impl Default for DesktopEntryProvider {
     fn default() -> Self {
-        Self::new(
-            freedesktop_desktop_entry::default_paths().collect(),
-            DesktopConfig::default(),
-        )
+        Self::new(freedesktop_desktop_entry::default_paths().collect())
     }
 }
 
 impl Provider for DesktopEntryProvider {
-    fn id(&self) -> &str {
-        &self.id
+    fn meta(&self) -> ProviderMeta {
+        ProviderMeta::builder("desktop").build()
     }
 
-    fn prefixes(&self) -> &[&str] {
-        &[]
-    }
+    fn init(&mut self, ctx: InitContext) -> ProviderResult {
+        // Parse extra config into DesktopConfig if provided.
+        if let Some(ref extra) = ctx.extra {
+            match serde_json::from_value::<DesktopConfig>(extra.clone()) {
+                Ok(weights) => self.weights = weights,
+                Err(e) => {
+                    return ProviderResult::Config {
+                        msg: format!("invalid extra config: {e}"),
+                        critical: false,
+                    }
+                }
+            }
+        }
 
-    fn init(&mut self, _data_dir: &Path) {
         let weights = self.weights;
         self.entries = Arc::from(
             freedesktop_desktop_entry::Iter::new(self.dirs.clone().into_iter())
                 .filter_map(|path| read_desktop_entry(&path, weights))
                 .collect::<Vec<_>>(),
         );
+        ProviderResult::Ok
     }
 
-    fn query(&mut self, _prefix: Option<&str>, _query: &str) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         self.entries.to_vec()
     }
 }

@@ -11,7 +11,9 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Window width in pixels.
     pub width: i32,
+    /// Window height in pixels.
     pub height: i32,
     /// Results shown per page.
     pub page_size: usize,
