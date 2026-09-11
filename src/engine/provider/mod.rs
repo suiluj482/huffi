@@ -11,6 +11,7 @@
 //! | [`DesktopEntryProvider`] | (always active) | `freedesktop-desktop-entry` — `.desktop` files |
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | engine state — uptime, control socket path, pid, version |
+//! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
 
 pub mod builtin;
 pub mod collection;
@@ -305,7 +306,9 @@ pub trait Provider: Send {
 
 pub use collection::ProviderCollection;
 
-pub use builtin::{CalculatorProvider, DesktopEntryProvider, MetaProvider, TestProvider};
+pub use builtin::{
+    CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, TestProvider,
+};
 pub use util::split_command;
 
 #[cfg(test)]

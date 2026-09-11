@@ -7,8 +7,8 @@ use crate::engine::scoring::QueryGroup;
 
 use super::config::{ProviderConfig, ProviderOverride};
 use super::{
-    CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext, Provider,
-    ProviderMeta, ProviderResult, QueryContext,
+    CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext,
+    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
 };
 
 pub struct ProviderCollection {
@@ -54,6 +54,7 @@ impl ProviderCollection {
             freedesktop_desktop_entry::default_paths().collect(),
         )))?;
         collection.add_provider(Box::new(CalculatorProvider::new()))?;
+        collection.add_provider(Box::new(NixRunProvider::new()))?;
         Ok(collection)
     }
 }
