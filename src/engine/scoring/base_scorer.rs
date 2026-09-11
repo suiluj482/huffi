@@ -119,6 +119,9 @@ fn score_fields(
 
     for field in fields {
         let w = field.weight as f64;
+        if w == 0.0 {
+            continue;
+        }
         weight_sum += w;
         if let Some(s) = score(fuzzy_matcher, needle, &field.text) {
             total += s as f64 * w;
@@ -197,6 +200,29 @@ mod tests {
         let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
         let fields = fields(&[]);
         assert!(score_fields(&mut fuzzy_matcher, needle, &fields).is_none());
+    }
+
+    #[test]
+    fn score_fields_skips_zero_weight_fields() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let mut pattern_buf = Vec::new();
+        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let with_zero = fields(&[("Firefox", 1.0), ("Infinite nonsense", 0.0)]);
+        let without = fields(&[("Firefox", 1.0)]);
+        assert_eq!(
+            score_fields(&mut fuzzy_matcher, needle, &with_zero),
+            score_fields(&mut fuzzy_matcher, needle, &without),
+            "a zero-weight field must not influence the score"
+        );
+    }
+
+    #[test]
+    fn score_fields_all_zero_returns_none() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let mut pattern_buf = Vec::new();
+        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let fields = fields(&[("Firefox", 0.0), ("Zzz", 0.0)]);
+        assert_eq!(score_fields(&mut fuzzy_matcher, needle, &fields), None);
     }
 
     fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {

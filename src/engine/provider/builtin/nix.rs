@@ -20,7 +20,9 @@ pub struct NixConfig {
     pub weight_attr: f32,
     /// Fuzzy-match weight for the package pname.
     pub weight_pname: f32,
-    /// Fuzzy-match weight for the package description.
+    /// Fuzzy-match weight for the package description. `0.0` (default) skips
+    /// description matching entirely — it only costs scoring time — while the
+    /// description still shows as the row subtitle.
     pub weight_desc: f32,
     /// Regenerate the cached nixpkgs index once it is this old. nixpkgs-unstable
     /// moves daily; the search itself takes ~15s, so it only runs when stale.
@@ -32,7 +34,7 @@ impl Default for NixConfig {
         Self {
             weight_attr: 1.0,
             weight_pname: 0.9,
-            weight_desc: 0.5,
+            weight_desc: 0.0,
             cache_max_age_secs: 7 * 24 * 3600,
         }
     }
@@ -260,10 +262,12 @@ fn build_entry(p: &PackageInfo, config: NixConfig) -> Entry {
 
     if let Some(desc) = &p.description {
         e = e.subtitle(desc.clone());
-        fields.push(MatchField {
-            text: desc.clone(),
-            weight: config.weight_desc,
-        });
+        if config.weight_desc > 0.0 {
+            fields.push(MatchField {
+                text: desc.clone(),
+                weight: config.weight_desc,
+            });
+        }
     }
 
     e.match_fields(fields)
@@ -430,7 +434,7 @@ mod tests {
             crate::engine::scoring::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
-        assert_eq!(fields.len(), 3);
+        assert_eq!(fields.len(), 2);
         assert!(
             fields
                 .iter()
@@ -440,11 +444,6 @@ mod tests {
             fields
                 .iter()
                 .any(|f| f.text == "coreaction" && f.weight == config.weight_pname)
-        );
-        assert!(
-            fields
-                .iter()
-                .any(|f| f.text == "Side bar" && f.weight == config.weight_desc)
         );
     }
 
@@ -465,14 +464,37 @@ mod tests {
         assert!(
             fields
                 .iter()
-                .any(|f| f.text == "hello" && f.weight == 2.0)
+                .all(|f| f.text != "A program that produces a familiar, friendly greeting"),
+            "description is not a match field by default"
         );
-        assert!(
-            fields
-                .iter()
-                .any(|f| f.text == "A program that produces a familiar, friendly greeting"
-                    && f.weight == NixConfig::default().weight_desc)
-        );
+    }
+
+    #[test]
+    fn description_matched_only_when_weighted() {
+        let package = PackageInfo {
+            attr: "hello".into(),
+            pname: "hello".into(),
+            description: Some("A program that produces a familiar, friendly greeting".into()),
+        };
+        let default = NixConfig::default();
+        assert!(!description_is_match_field(&package, default));
+
+        let enabled = NixConfig {
+            weight_desc: 0.5,
+            ..NixConfig::default()
+        };
+        assert!(description_is_match_field(&package, enabled));
+    }
+
+    fn description_is_match_field(package: &PackageInfo, config: NixConfig) -> bool {
+        let e = build_entry(package, config);
+        let fields = match &e.rank {
+            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            other => panic!("expected MatchFields, got {other:?}"),
+        };
+        fields
+            .iter()
+            .any(|f| f.text == package.description.as_deref().unwrap())
     }
 
     #[test]
@@ -527,5 +549,52 @@ mod tests {
         let back: Vec<PackageInfo> = serde_json::from_str(&json).unwrap();
         assert_eq!(back.len(), packages.len());
         assert_eq!(back[0].attr, packages[0].attr);
+    }
+
+    /// Profiling harness (run: `cargo test --release profile_nix -- --ignored
+    /// --nocapture`). Times index build, per-keystroke clone, and fuzzy
+    /// scoring against the real on-disk cache.
+    #[test]
+    #[ignore]
+    fn profile_nix_keystroke_cost() {
+        use crate::engine::scoring::base_scorer::BaseScorer;
+        use crate::engine::scoring::QueryGroup;
+        use std::time::Instant;
+
+        let home = std::env::var("HOME").expect("HOME set");
+        let data_dir = std::env::var("HUFFI_PROFILE_DATA")
+            .unwrap_or_else(|_| format!("{home}/.local/share/huffi/providers/nix"));
+        let config = NixConfig::default();
+
+        let t = Instant::now();
+        let entries = load_or_build(Path::new(&data_dir), config);
+        eprintln!(
+            "[prof] index build: {} entries in {:?}",
+            entries.len(),
+            t.elapsed()
+        );
+
+        for needle in ["f", "fi", "fire", "firefox"] {
+            let t = Instant::now();
+            let cloned: Vec<Entry> = entries.to_vec();
+            let clone_dur = t.elapsed();
+
+            let mut scorer = BaseScorer::default();
+            let groups = vec![QueryGroup {
+                query: needle.to_string(),
+                entries: cloned,
+            }];
+            let t = Instant::now();
+            let scored = scorer.base_scoring(groups);
+            let score_dur = t.elapsed();
+
+            eprintln!(
+                "[prof] query '{needle}': clone {:?} + base_scoring {:?} = {:?} ({} matches)",
+                clone_dur,
+                score_dur,
+                clone_dur + score_dur,
+                scored.len()
+            );
+        }
     }
 }

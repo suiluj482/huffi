@@ -493,4 +493,53 @@ mod tests {
             })
         );
     }
+
+    /// Profiling harness (run: `cargo test --release profile_engine -- --ignored
+    /// --nocapture`) against the real on-disk nix index. Times the full
+    /// Engine::query path per keystroke, split into provider grouping
+    /// (clones + stamping) vs. scoring (fuzzy + history + sort).
+    #[test]
+    #[ignore]
+    fn profile_engine_query() {
+        use std::time::{Duration, Instant};
+
+        let data_dir = std::env::var("HUFFI_PROFILE_DATA")
+            .unwrap_or_else(|_| format!("{}/.local/share/huffi", std::env::var("HOME").unwrap()));
+        let mut engine = Engine::new(&data_dir, false).unwrap();
+
+        let mut ready = false;
+        for i in 0..200 {
+            let q = format!("!{}", (b'a' + (i % 26) as u8) as char);
+            if !engine.query(&q).scored.is_empty() {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(ready, "nix index never populated");
+        eprintln!("[prof] nix index ready");
+
+        for q in ["!f", "!fi", "!fire", "!firefox", "!gimp"] {
+            let t = Instant::now();
+            let n = engine.query(q).scored.len();
+            let total = t.elapsed();
+
+            let pre = engine.providers.preprocess_query(q);
+            let t = Instant::now();
+            let groups = engine.providers.grouped_entries(&pre);
+            let group_dur = t.elapsed();
+            let t = Instant::now();
+            let scored = engine.scorer.score(groups, q);
+            let score_dur = t.elapsed();
+
+            assert_eq!(scored.len(), n);
+            eprintln!(
+                "[prof] query '{q}': total {:?} = group {:?} + score {:?} ({} results)",
+                total,
+                group_dur,
+                score_dur,
+                n
+            );
+        }
+    }
 }

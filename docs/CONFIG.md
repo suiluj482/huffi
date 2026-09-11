@@ -79,10 +79,12 @@ weight_comment      = 0.5
 # prefix_only = true
 
 [engine.provider.builtin.nix.extra]
-# Fuzzy-match field weights for the nix run provider.
+# Fuzzy-match field weights for the nix run provider. The package description
+# is always shown as the subtitle; it is *not* fuzzy-matched against unless
+# weight_desc is set above 0 (matching the description costs scoring time).
 weight_attr         = 1.0
 weight_pname        = 0.9
-weight_desc         = 0.5
+weight_desc         = 0.0
 # Regenerate the cached nixpkgs index once it is this old (seconds).
 # Default: 7 days.
 cache_max_age_secs  = 604800
