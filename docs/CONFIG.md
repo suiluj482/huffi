@@ -72,6 +72,21 @@ weight_keyword      = 0.8
 weight_generic_name = 0.7
 weight_comment      = 0.5
 
+[engine.provider.builtin.nix]
+# Trigger prefix: `!firefox` runs `nix run nixpkgs#firefox`.
+# prefixes = ["!"]
+# Only call the provider when a query matches one of its prefixes.
+# prefix_only = true
+
+[engine.provider.builtin.nix.extra]
+# Fuzzy-match field weights for the nix run provider.
+weight_attr         = 1.0
+weight_pname        = 0.9
+weight_desc         = 0.5
+# Regenerate the cached nixpkgs index once it is this old (seconds).
+# Default: 7 days.
+cache_max_age_secs  = 604800
+
 [engine.external]
 # For `Terminal=true` desktop entries: the argv items to prepend to the
 # entry's command — the terminal binary plus whatever flags it expects before
@@ -101,6 +116,7 @@ and declarative settings are supported:
       paths.data_dir = "/home/me/.local/share/huffi";
       engine.scoring.boost_weight = 4.0;
       engine.provider.builtin.desktop.extra.weight_comment = 0.9;
+      engine.provider.builtin.nix.extra.weight_desc = 0.6;
       engine.external.terminal = [ "foot", "--" ];
     };
     # …or point at a checked-in file instead:
