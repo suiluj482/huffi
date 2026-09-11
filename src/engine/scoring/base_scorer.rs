@@ -34,6 +34,7 @@ impl BaseScorer {
     pub fn base_scoring<T>(&mut self, groups: Vec<QueryGroup<T>>) -> Vec<BaseScored<T>> {
         let mut base_scored = Vec::new();
         let mut raw = Vec::new();
+        let mut haystack_buf: Vec<char> = Vec::new();
         for g in groups {
             if g.query.is_empty() {
                 base_scored.extend(g.entries.into_iter().map(|s| BaseScored {
@@ -67,8 +68,12 @@ impl BaseScorer {
                         base_score: score as f64,
                     }),
                     Rank::MatchFields(fields) => {
-                        if let Some(r) = score_fields(&mut self.fuzzy_matcher, &needle, &fields)
-                            && r > 0.0
+                        if let Some(r) = score_fields(
+                            &mut self.fuzzy_matcher,
+                            &needle,
+                            &fields,
+                            &mut haystack_buf,
+                        ) && r > 0.0
                         {
                             raw.push((
                                 Scoreable {
@@ -107,9 +112,13 @@ pub fn normalize<T>(raw: Vec<(Scoreable<T>, f64)>) -> Vec<BaseScored<T>> {
         .collect()
 }
 
-fn score(fuzzy_matcher: &mut nucleo::Matcher, needle: &Atom, field: &str) -> Option<u16> {
-    let mut haystack_buf = Vec::new();
-    let haystack = nucleo::Utf32Str::new(field, &mut haystack_buf);
+fn score(
+    fuzzy_matcher: &mut nucleo::Matcher,
+    needle: &Atom,
+    field: &str,
+    haystack_buf: &mut Vec<char>,
+) -> Option<u16> {
+    let haystack = nucleo::Utf32Str::new(field, haystack_buf);
     needle.score(haystack, fuzzy_matcher)
 }
 
@@ -117,6 +126,7 @@ fn score_fields(
     fuzzy_matcher: &mut nucleo::Matcher,
     needle: &Atom,
     fields: &[MatchField],
+    haystack_buf: &mut Vec<char>,
 ) -> Option<f64> {
     if fields.is_empty() {
         return None;
@@ -131,7 +141,7 @@ fn score_fields(
             continue;
         }
         weight_sum += w;
-        if let Some(s) = score(fuzzy_matcher, needle, &field.text) {
+        if let Some(s) = score(fuzzy_matcher, needle, &field.text, haystack_buf) {
             total += s as f64 * w;
         }
     }
@@ -172,11 +182,14 @@ mod tests {
     fn score_matches() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields_a = fields(&[("Firefox", 1.0)]);
         let fields_b = fields(&[("Gimp", 1.0)]);
-        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields_a).unwrap() > 0.0);
+        assert!(
+            score_fields(&mut fuzzy_matcher, &needle, &fields_a, &mut haystack_buf).unwrap() > 0.0
+        );
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, &needle, &fields_b),
+            score_fields(&mut fuzzy_matcher, &needle, &fields_b, &mut haystack_buf),
             Some(0.0)
         );
     }
@@ -189,8 +202,9 @@ mod tests {
         for (query, text) in [("Aa", "AAA"), ("aBc", "ABC"), ("FI", "fi"), ("fI", "Fi")] {
             let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
             let needle = atom(query);
+            let mut haystack_buf: Vec<char> = Vec::new();
             let fields = fields(&[(text, 1.0)]);
-            let scored = score_fields(&mut fuzzy_matcher, &needle, &fields);
+            let scored = score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf);
             assert!(
                 scored.unwrap_or(0.0) > 0.0,
                 "{query:?} should match {text:?}, got {scored:?}"
@@ -202,17 +216,21 @@ mod tests {
     fn score_fields_matches_independent_fields() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[("Firefox", 1.0), ("Browse the Web", 0.5)]);
-        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields).is_some());
+        assert!(
+            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_some()
+        );
     }
 
     #[test]
     fn score_fields_returns_zero_when_no_field_matches() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("zzz");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[("Firefox", 1.0), ("Browse the Web", 0.5)]);
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, &needle, &fields),
+            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf),
             Some(0.0)
         );
     }
@@ -221,10 +239,13 @@ mod tests {
     fn score_fields_weighted_average() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields_a = fields(&[("Firefox", 1.0), ("Unrelated", 1.0)]);
         let fields_b = fields(&[("Firefox", 1.0), ("Fireshot", 1.0)]);
-        let score_a = score_fields(&mut fuzzy_matcher, &needle, &fields_a).unwrap();
-        let score_b = score_fields(&mut fuzzy_matcher, &needle, &fields_b).unwrap();
+        let score_a =
+            score_fields(&mut fuzzy_matcher, &needle, &fields_a, &mut haystack_buf).unwrap();
+        let score_b =
+            score_fields(&mut fuzzy_matcher, &needle, &fields_b, &mut haystack_buf).unwrap();
         assert!(score_b > score_a);
     }
 
@@ -232,19 +253,23 @@ mod tests {
     fn score_fields_empty_returns_none() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[]);
-        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields).is_none());
+        assert!(
+            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_none()
+        );
     }
 
     #[test]
     fn score_fields_skips_zero_weight_fields() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let with_zero = fields(&[("Firefox", 1.0), ("Infinite nonsense", 0.0)]);
         let without = fields(&[("Firefox", 1.0)]);
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, &needle, &with_zero),
-            score_fields(&mut fuzzy_matcher, &needle, &without),
+            score_fields(&mut fuzzy_matcher, &needle, &with_zero, &mut haystack_buf),
+            score_fields(&mut fuzzy_matcher, &needle, &without, &mut haystack_buf),
             "a zero-weight field must not influence the score"
         );
     }
@@ -253,8 +278,12 @@ mod tests {
     fn score_fields_all_zero_returns_none() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let needle = atom("fi");
+        let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[("Firefox", 0.0), ("Zzz", 0.0)]);
-        assert_eq!(score_fields(&mut fuzzy_matcher, &needle, &fields), None);
+        assert_eq!(
+            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf),
+            None
+        );
     }
 
     fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {
