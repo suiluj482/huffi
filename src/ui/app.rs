@@ -13,8 +13,8 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GBox, Button, DrawingArea, Entry, EventControllerKey, EventControllerScroll,
-    EventControllerScrollFlags, GestureClick, Image, Label, Orientation, Overlay, PropagationPhase,
-    Separator, Window,
+    EventControllerScrollFlags, GestureClick, GestureDrag, Image, Label, Orientation, Overlay,
+    PropagationPhase, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
@@ -376,6 +376,7 @@ impl Launcher {
         }
 
         let rail_click = GestureClick::new();
+        rail_click.set_button(1);
         {
             let weak = Rc::downgrade(self);
             rail_click.connect_pressed(move |_, _n_press, _x, y| {
@@ -385,6 +386,20 @@ impl Launcher {
             });
         }
         self.rail.add_controller(rail_click);
+
+        let rail_drag = GestureDrag::new();
+        rail_drag.set_button(1);
+        {
+            let weak = Rc::downgrade(self);
+            rail_drag.connect_drag_update(move |drag, _offset_x, offset_y| {
+                if let Some(this) = weak.upgrade()
+                    && let Some((_start_x, start_y)) = drag.start_point()
+                {
+                    this.rail_dragged(start_y + offset_y);
+                }
+            });
+        }
+        self.rail.add_controller(rail_drag);
 
         let (tx, rx) = async_channel::unbounded::<ControlMsg>();
         {
@@ -956,7 +971,15 @@ impl Launcher {
         let _ = cr.fill();
     }
 
+    fn rail_dragged(self: &Rc<Self>, y: f64) {
+        self.rail_select_at(y);
+    }
+
     fn rail_clicked(self: &Rc<Self>, y: f64) {
+        self.rail_select_at(y);
+    }
+
+    fn rail_select_at(self: &Rc<Self>, y: f64) {
         let total = self.state.borrow().total;
         if total == 0 {
             return;
