@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::PreprocessedQuery;
-pub use util::{Action, EntryBuilder, ProviderMetaBuilder, entry};
+pub use util::{Action, EntryBuilder, ProviderMetaBuilder, entry, parse_extra_config};
 
 /// A source for an entry's icon. Providers describe *what* to show without
 /// resolving it to a concrete image; the UI is responsible for turning this

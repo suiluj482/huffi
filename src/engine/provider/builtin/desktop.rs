@@ -4,7 +4,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::engine::provider::{
-    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, split_command,
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+    parse_extra_config, split_command,
 };
 use crate::engine::scoring::MatchField;
 
@@ -59,17 +60,10 @@ impl Provider for DesktopEntryProvider {
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {
-        // Parse extra config into DesktopConfig if provided.
-        if let Some(ref extra) = ctx.extra {
-            match serde_json::from_value::<DesktopConfig>(extra.clone()) {
-                Ok(weights) => self.weights = weights,
-                Err(e) => {
-                    return ProviderResult::Config {
-                        msg: format!("invalid extra config: {e}"),
-                        critical: false,
-                    }
-                }
-            }
+        match parse_extra_config::<DesktopConfig>(&ctx.extra) {
+            Err(result) => return result,
+            Ok(Some(weights)) => self.weights = weights,
+            Ok(None) => {}
         }
 
         let weights = self.weights;

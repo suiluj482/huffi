@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use crate::engine::config::ExternalConfig;
 use crate::engine::scoring::{MatchField, Rank};
 
-use super::{Entry, EntryMeta, Icon, ProviderMeta};
+use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult};
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -231,6 +231,26 @@ pub fn split_command(s: &str) -> Vec<String> {
     result
 }
 
+/// Parse a provider's optional `extra` config into a strongly typed struct.
+///
+/// Returns `Ok(None)` when no `extra` was provided, `Ok(Some(_))` when it
+/// parsed, and `Err(ProviderResult::Config { critical: false })` when it
+/// was present but invalid, so the provider can continue with its defaults.
+pub fn parse_extra_config<T: serde::de::DeserializeOwned>(
+    extra: &Option<serde_json::Value>,
+) -> Result<Option<T>, ProviderResult> {
+    match extra {
+        None => Ok(None),
+        Some(value) => match serde_json::from_value::<T>(value.clone()) {
+            Ok(config) => Ok(Some(config)),
+            Err(e) => Err(ProviderResult::Config {
+                msg: format!("invalid extra config: {e}"),
+                critical: false,
+            }),
+        },
+    }
+}
+
 /// Ergonomic builder for [`ProviderMeta`]. Start with
 /// [`ProviderMeta::builder`], chain optional setters, and finish with
 /// [`.build()`](ProviderMetaBuilder::build).
@@ -296,6 +316,48 @@ impl ProviderMetaBuilder {
             prefixes: self.prefixes,
             enabled: self.enabled,
             prefix_only: self.prefix_only,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    #[serde(default)]
+    struct DummyConfig {
+        weight: f32,
+    }
+
+    impl Default for DummyConfig {
+        fn default() -> Self {
+            Self { weight: 1.0 }
+        }
+    }
+
+    #[test]
+    fn parse_extra_config_none_when_absent() {
+        let extra: Option<serde_json::Value> = None;
+        assert_eq!(parse_extra_config::<DummyConfig>(&extra).unwrap(), None);
+    }
+
+    #[test]
+    fn parse_extra_config_some_when_valid() {
+        let extra = Some(serde_json::json!({ "weight": 2.5 }));
+        assert_eq!(
+            parse_extra_config::<DummyConfig>(&extra).unwrap(),
+            Some(DummyConfig { weight: 2.5 })
+        );
+    }
+
+    #[test]
+    fn parse_extra_config_non_critical_error_when_invalid() {
+        let extra = Some(serde_json::json!({ "weight": "not a number" }));
+        match parse_extra_config::<DummyConfig>(&extra) {
+            Err(ProviderResult::Config { critical: false, .. }) => {}
+            other => panic!("expected non-critical Config error, got {other:?}"),
         }
     }
 }
