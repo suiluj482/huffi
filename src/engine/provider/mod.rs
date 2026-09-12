@@ -120,9 +120,9 @@ pub struct ProviderMeta {
     pub enabled: bool,
     /// When set, [`ProviderCollection`] only calls [`Provider::query`] if
     /// the query matched one of this provider's prefixes; otherwise the
-    /// provider is skipped entirely. Mirrors what prefix-triggered
-    /// providers do manually by returning `vec![]` for unprefixed input,
-    /// without the per-keystroke call.
+    /// provider is skipped entirely. Providers return their entries
+    /// unconditionally from [`Provider::query`] and leave prefix gating to
+    /// the collection.
     pub prefix_only: bool,
 }
 

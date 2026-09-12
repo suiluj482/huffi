@@ -132,10 +132,7 @@ impl Provider for NixRunProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        if ctx.prefix.is_none() {
-            return vec![];
-        }
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         self.entries
             .read()
             .map(|guard| guard.to_vec())
@@ -493,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn query_empty_without_prefix() {
+    fn query_returns_entries_without_prefix() {
         let mut p = NixRunProvider::with_entries(vec![build_entry(
             &PackageInfo {
                 attr: "hello".into(),
@@ -502,20 +499,24 @@ mod tests {
             },
             NixConfig::default(),
         )]);
-        assert!(p
-            .query(QueryContext {
+        assert_eq!(
+            p.query(QueryContext {
                 prefix: None,
                 query: "",
                 original: "",
             })
-            .is_empty());
-        assert!(p
-            .query(QueryContext {
+            .len(),
+            1
+        );
+        assert_eq!(
+            p.query(QueryContext {
                 prefix: None,
                 query: "hello",
                 original: "hello",
             })
-            .is_empty());
+            .len(),
+            1
+        );
     }
 
     #[test]

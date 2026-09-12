@@ -59,11 +59,7 @@ impl Provider for MetaProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        let Some(_prefix) = ctx.prefix else {
-            return vec![];
-        };
-
+    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
         let uptime = format_uptime(self.uptime());
         let socket = self.control_socket.to_string_lossy().into_owned();
         let data = self.data_dir.to_string_lossy().into_owned();
@@ -209,18 +205,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_without_prefix() {
+    fn returns_entries_without_prefix() {
         assert!(
-            provider("/tmp/data")
+            !provider("/tmp/data")
                 .query(QueryContext {
                     prefix: None,
                     query: "",
                     original: "",
                 })
-                .is_empty()
+                .is_empty(),
+            "prefix_only gating is the collection's job, not the provider's query"
         );
         assert!(
-            provider("/tmp/data")
+            !provider("/tmp/data")
                 .query(QueryContext {
                     prefix: None,
                     query: "uptime",

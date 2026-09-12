@@ -42,10 +42,6 @@ impl Provider for CalculatorProvider {
     }
 
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        let Some(_prefix) = ctx.prefix else {
-            return vec![];
-        };
-
         let Some(rink) = self.rink.as_mut() else {
             return vec![];
         };

@@ -38,7 +38,8 @@ impl ProviderCollection {
     /// Construct the collection with the built-in providers configured from
     /// `config`. Each provider is registered with `add_provider`, which
     /// provisions its `<data_dir>/providers/<provider id>/` folder (when
-    /// not in dry-run mode) and calls its [`init`](Provider::init).
+    /// not in dry-run mode) and calls its [`init`](Provider::init) — unless
+    /// the provider is disabled by its own default or by user config.
     pub fn new_with_config(
         data_dir: impl AsRef<Path>,
         dry_run: bool,
@@ -72,32 +73,36 @@ impl ProviderCollection {
         // Reject a missing id loudly and resolve an empty name to the id.
         let mut meta = meta.resolved()?;
 
-        let extra = self.overrides.get(&id).and_then(|ov| ov.extra.clone());
-
-        let dir = self.data_dir.join("providers").join(&id);
-        if !self.dry_run {
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("failed to create data dir {}", dir.display()))?;
-        }
-        match provider.init(InitContext {
-            data_dir: &dir,
-            extra,
-        }) {
-            ProviderResult::Ok => {}
-            ProviderResult::Unsupported(msg) => {
-                eprintln!("[provider] {id} unsupported: {msg}");
-                meta.enabled = false;
+        // A provider disabled by its own default or by user config is
+        // registered but never initialized: no data folder is provisioned and
+        // `init` is not called.
+        if meta.enabled {
+            let dir = self.data_dir.join("providers").join(&id);
+            if !self.dry_run {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("failed to create data dir {}", dir.display()))?;
             }
-            ProviderResult::Other(msg) => {
-                eprintln!("[provider] {id} disabled: {msg}");
-                meta.enabled = false;
-            }
-            ProviderResult::Config { msg, critical } => {
-                if critical {
-                    eprintln!("[provider] {id} config error, disabled: {msg}");
+            let extra = self.overrides.get(&id).and_then(|ov| ov.extra.clone());
+            match provider.init(InitContext {
+                data_dir: &dir,
+                extra,
+            }) {
+                ProviderResult::Ok => {}
+                ProviderResult::Unsupported(msg) => {
+                    eprintln!("[provider] {id} unsupported: {msg}");
                     meta.enabled = false;
-                } else {
-                    eprintln!("[provider] {id} config warning, using defaults: {msg}");
+                }
+                ProviderResult::Other(msg) => {
+                    eprintln!("[provider] {id} disabled: {msg}");
+                    meta.enabled = false;
+                }
+                ProviderResult::Config { msg, critical } => {
+                    if critical {
+                        eprintln!("[provider] {id} config error, disabled: {msg}");
+                        meta.enabled = false;
+                    } else {
+                        eprintln!("[provider] {id} config warning, using defaults: {msg}");
+                    }
                 }
             }
         }
@@ -598,6 +603,98 @@ mod tests {
         c.add_provider(Box::new(FailingInit)).unwrap();
         let providers = c.providers();
         assert!(!providers.iter().any(|p| p.name == "failing" && p.enabled));
+    }
+
+    #[test]
+    fn init_skipped_for_provider_disabled_by_default() {
+        let inits: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+
+        struct DisabledByDefault {
+            inits: Arc<Mutex<usize>>,
+        }
+        impl Provider for DisabledByDefault {
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta::builder("disabled-by-default")
+                    .enabled(false)
+                    .build()
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                *self.inits.lock().unwrap() += 1;
+                ProviderResult::Ok
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let mut c = collection();
+        c.add_provider(Box::new(DisabledByDefault {
+            inits: Arc::clone(&inits),
+        }))
+        .unwrap();
+        assert_eq!(
+            *inits.lock().unwrap(),
+            0,
+            "init must not run for a provider disabled by its own meta"
+        );
+        assert!(
+            !c.providers()
+                .iter()
+                .any(|p| p.id == "disabled-by-default" && p.enabled)
+        );
+    }
+
+    #[test]
+    fn init_skipped_for_provider_disabled_by_config() {
+        let inits: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+
+        struct ConfigDisabled {
+            inits: Arc<Mutex<usize>>,
+        }
+        impl Provider for ConfigDisabled {
+            fn meta(&self) -> ProviderMeta {
+                ProviderMeta::builder("config-disabled").build()
+            }
+            fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+                *self.inits.lock().unwrap() += 1;
+                ProviderResult::Ok
+            }
+            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+                vec![]
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "huffi-providers-disabled-{}",
+            std::process::id()
+        ));
+        let override_cfg = ProviderConfig {
+            builtin: HashMap::from([(
+                "config-disabled".to_string(),
+                ProviderOverride {
+                    name: None,
+                    enabled: Some(false),
+                    prefixes: None,
+                    prefix_only: None,
+                    extra: None,
+                },
+            )]),
+        };
+        let mut c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
+        c.add_provider(Box::new(ConfigDisabled {
+            inits: Arc::clone(&inits),
+        }))
+        .unwrap();
+        assert_eq!(
+            *inits.lock().unwrap(),
+            0,
+            "init must not run for a provider disabled by user config"
+        );
+        assert!(
+            !c.providers()
+                .iter()
+                .any(|p| p.id == "config-disabled" && p.enabled)
+        );
     }
 
     #[test]
