@@ -72,8 +72,26 @@ carries:
   need to locate or create the folder yourself.
 - `extra` — optional arbitrary config from
   `[engine.provider.builtin.<id>.extra]`. Not schema checked — your
-  provider is responsible for interpreting it (e.g. via
-  `serde_json::from_value`).
+  provider is responsible for interpreting it. Parse it with
+  [`parse_extra_config`]: it returns `Ok(None)` when no `extra` was set,
+  `Ok(Some(_))` when it parsed, and `Err(ProviderResult::Config { critical: false })`
+  when it was present but invalid:
+
+  ```rust
+  #[derive(Debug, serde::Deserialize)]
+  #[serde(default)]
+  struct MyConfig { /* fields with #[serde(default)] */ }
+  impl Default for MyConfig { /* your defaults */ }
+
+  fn init(&mut self, ctx: InitContext) -> ProviderResult {
+      match parse_extra_config::<MyConfig>(&ctx.extra) {
+          Err(result) => return result,
+          Ok(Some(config)) => self.config = config,
+          Ok(None) => {}
+      }
+      // ...
+  }
+  ```
 
 Use this for expensive one-time work:
 

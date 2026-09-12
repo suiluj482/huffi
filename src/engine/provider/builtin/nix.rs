@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+    parse_extra_config,
 };
 use crate::engine::scoring::MatchField;
 
@@ -108,16 +109,10 @@ impl Provider for NixRunProvider {
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {
-        if let Some(ref extra) = ctx.extra {
-            match serde_json::from_value::<NixConfig>(extra.clone()) {
-                Ok(config) => self.config = config,
-                Err(e) => {
-                    return ProviderResult::Config {
-                        msg: format!("invalid extra config: {e}"),
-                        critical: false,
-                    }
-                }
-            }
+        match parse_extra_config::<NixConfig>(&ctx.extra) {
+            Err(result) => return result,
+            Ok(Some(config)) => self.config = config,
+            Ok(None) => {}
         }
 
         if !nix_available() {
