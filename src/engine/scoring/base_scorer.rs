@@ -222,9 +222,10 @@ mod tests {
         let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
         let with_zero = fields(&[("Firefox", 1.0), ("Infinite nonsense", 0.0)]);
         let without = fields(&[("Firefox", 1.0)]);
+        let mut haystack_buf: Vec<char> = Vec::new();
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, needle, &with_zero),
-            score_fields(&mut fuzzy_matcher, needle, &without),
+            score_fields(&mut fuzzy_matcher, needle, &with_zero, &mut haystack_buf),
+            score_fields(&mut fuzzy_matcher, needle, &without, &mut haystack_buf),
             "a zero-weight field must not influence the score"
         );
     }
@@ -235,7 +236,11 @@ mod tests {
         let mut pattern_buf = Vec::new();
         let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
         let fields = fields(&[("Firefox", 0.0), ("Zzz", 0.0)]);
-        assert_eq!(score_fields(&mut fuzzy_matcher, needle, &fields), None);
+        let mut haystack_buf: Vec<char> = Vec::new();
+        assert_eq!(
+            score_fields(&mut fuzzy_matcher, needle, &fields, &mut haystack_buf),
+            None
+        );
     }
 
     fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {
