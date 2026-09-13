@@ -52,6 +52,7 @@ enum ControlMsg {
 #[derive(Debug, Clone)]
 struct Row {
     entry_id: String,
+    provider_id: Option<String>,
     history_key: Option<String>,
     base_score: f64,
     history_score: Option<f64>,
@@ -66,6 +67,7 @@ impl From<Scored<EntryMeta>> for Row {
         let entry = scored.entry;
         Self {
             entry_id: entry.id,
+            provider_id: entry.provider_id,
             history_key: scored.history_key,
             base_score: scored.base_score,
             history_score: scored.history_score,
@@ -113,6 +115,7 @@ pub struct Launcher {
     state: RefCell<State>,
     page_size: usize,
     icon_size: i32,
+    theme: theme::Theme,
 }
 
 impl Launcher {
@@ -122,8 +125,9 @@ impl Launcher {
         main_loop: glib::MainLoop,
         ui: UiConfig,
     ) -> Rc<Self> {
+        let theme = theme::Theme::new(ui.theme.as_str());
         if let Some(display) = gdk::Display::default() {
-            theme::load_css(&display);
+            theme::load_css(&display, &theme);
         }
 
         let window = Window::new();
@@ -229,6 +233,7 @@ impl Launcher {
             }),
             page_size: ui.page_size,
             icon_size: ui.icon_size,
+            theme,
         });
 
         this.attach_handlers(listener, main_loop);
@@ -243,6 +248,7 @@ impl Launcher {
                 move |providers| {
                     if let Some(this) = weak.upgrade() {
                         this.state.borrow_mut().providers = providers;
+                        this.load_provider_css();
                         this.render_list();
                     }
                 }
@@ -250,6 +256,20 @@ impl Launcher {
         );
 
         this
+    }
+
+    /// Register the per-provider stylesheets for the current provider list.
+    fn load_provider_css(self: &Rc<Self>) {
+        let ids: Vec<String> = self
+            .state
+            .borrow()
+            .providers
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        if let Some(display) = gdk::Display::default() {
+            theme::load_provider_css(&display, &self.theme, &ids);
+        }
     }
 
     pub fn show_with_query(self: &Rc<Self>, query: String) {
@@ -813,27 +833,26 @@ impl Launcher {
         global_index: usize,
         local_index: usize,
     ) -> BuiltRow {
-        let row = GBox::new(Orientation::Horizontal, 8);
+        // Instantiate the theme's row template (provider-specific when the
+        // theme ships one) and bind the entry's fields onto the widgets it
+        // declares. Unknown ids are fine; optional widgets are skipped.
+        let xml = self.theme.entry_template(hit.provider_id.as_deref());
+        let builder = gtk4::Builder::from_string(&xml);
+
+        let row = builder
+            .object::<GBox>("row")
+            .unwrap_or_else(|| GBox::new(Orientation::Horizontal, 0));
         row.set_valign(Align::Center);
         row.add_css_class(if is_selected { "row-selected" } else { "row" });
-
-        let clickable = GBox::new(Orientation::Horizontal, 12);
-        clickable.set_hexpand(true);
-        clickable.set_valign(Align::Center);
-
-        match hit
-            .icon
-            .as_ref()
-            .and_then(|icon| load_icon(icon, self.icon_size))
-        {
-            Some(icon) => clickable.append(&icon),
-            None => clickable.append(&spacer(self.icon_size)),
+        if let Some(id) = &hit.provider_id {
+            row.add_css_class(&format!("provider-{id}"));
         }
 
-        let title_area = GBox::new(Orientation::Horizontal, 12);
-        title_area.set_hexpand(true);
-
-        let title = Label::new(Some(&hit.title));
+        let title = builder.object::<Label>("title").unwrap_or_else(|| {
+            let title = Label::new(Some(&hit.title));
+            row.append(&title);
+            title
+        });
         title.add_css_class(if is_selected {
             "title-selected"
         } else {
@@ -842,50 +861,59 @@ impl Launcher {
         title.set_ellipsize(pango::EllipsizeMode::End);
         title.set_halign(Align::Start);
         title.set_xalign(0.0);
-        title_area.append(&title);
 
+        if let Some(icon) = builder.object::<Image>("icon") {
+            self.bind_icon(&icon, hit);
+        }
+
+        if let Some(area) = builder.object::<GBox>("title-area") {
+            area.set_hexpand(true);
+        }
+
+        // The subtitle is optional: only rendered when the entry has one AND
+        // the template declares a `subtitle` widget.
         let sub = if let Some(sub) = &hit.subtitle {
             title.set_hexpand(false);
-            let sub_label = Label::new(Some(&format!("({sub})")));
-            sub_label.add_css_class(if is_selected {
-                "subtitle-selected"
-            } else {
-                "subtitle"
-            });
-            sub_label.set_halign(Align::Start);
-            title_area.append(&sub_label);
-            Some(sub_label)
+            builder.object::<Label>("subtitle").inspect(|sub_label| {
+                sub_label.set_text(&format!("({sub})"));
+                sub_label.add_css_class(if is_selected {
+                    "subtitle-selected"
+                } else {
+                    "subtitle"
+                });
+                sub_label.set_halign(Align::Start);
+                sub_label.set_visible(true);
+            })
         } else {
             title.set_hexpand(true);
             None
         };
-        clickable.append(&title_area);
 
-        let scores = GBox::new(Orientation::Horizontal, 6);
-        scores.set_valign(Align::Center);
-        let base_score = Label::new(Some(&format!("{:.2}", hit.base_score)));
-        base_score.add_css_class(if is_selected {
-            "score-selected"
-        } else {
-            "score"
-        });
-        scores.append(&base_score);
-        let mut score_labels = vec![base_score];
-        if let Some(h) = hit.history_score {
-            let history_score = Label::new(Some(&format!("{h:.2}")));
-            history_score.add_css_class(if is_selected {
+        let mut scores = Vec::new();
+        if let Some(base) = builder.object::<Label>("score-base") {
+            base.set_text(&format!("{:.2}", hit.base_score));
+            base.add_css_class(if is_selected {
                 "score-selected"
             } else {
                 "score"
             });
-            scores.append(&history_score);
-            score_labels.push(history_score);
+            scores.push(base);
         }
-        clickable.append(&scores);
-
-        clickable.set_cursor_from_name(Some("pointer"));
-
+        if let Some(h) = hit.history_score
+            && let Some(history) = builder.object::<Label>("score-history")
         {
+            history.set_text(&format!("{h:.2}"));
+            history.add_css_class(if is_selected {
+                "score-selected"
+            } else {
+                "score"
+            });
+            history.set_visible(true);
+            scores.push(history);
+        }
+
+        if let Some(clickable) = builder.object::<GBox>("clickable") {
+            clickable.set_cursor_from_name(Some("pointer"));
             let weak = Rc::downgrade(self);
             let click = GestureClick::new();
             click.connect_pressed(move |_, _n_press, _x, _y| {
@@ -896,40 +924,59 @@ impl Launcher {
             clickable.add_controller(click);
         }
 
-        row.append(&clickable);
-
+        let boost = builder.object::<Button>("boost");
+        let delete = builder.object::<Button>("delete");
         if hit.history_key.is_some() {
-            let boost_btn = Button::with_label("+");
-            boost_btn.add_css_class("flat-btn");
-            boost_btn.set_focusable(false);
-            boost_btn.set_valign(Align::Center);
-            let weak = Rc::downgrade(self);
-            boost_btn.connect_clicked(move |_| {
-                if let Some(this) = weak.upgrade() {
-                    this.modify_history(local_index, ModifyKind::Boost);
-                }
-            });
-
-            let delete_btn = Button::with_label("\u{2212}");
-            delete_btn.add_css_class("flat-btn");
-            delete_btn.set_focusable(false);
-            delete_btn.set_valign(Align::Center);
-            let weak = Rc::downgrade(self);
-            delete_btn.connect_clicked(move |_| {
-                if let Some(this) = weak.upgrade() {
-                    this.modify_history(local_index, ModifyKind::Delete);
-                }
-            });
-
-            row.append(&boost_btn);
-            row.append(&delete_btn);
+            if let Some(boost) = &boost {
+                boost.add_css_class("flat-btn");
+                boost.set_visible(true);
+                let weak = Rc::downgrade(self);
+                boost.connect_clicked(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.modify_history(local_index, ModifyKind::Boost);
+                    }
+                });
+            }
+            if let Some(delete) = &delete {
+                delete.add_css_class("flat-btn");
+                delete.set_visible(true);
+                let weak = Rc::downgrade(self);
+                delete.connect_clicked(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.modify_history(local_index, ModifyKind::Delete);
+                    }
+                });
+            }
+        } else {
+            if let Some(boost) = &boost {
+                boost.set_visible(false);
+            }
+            if let Some(delete) = &delete {
+                delete.set_visible(false);
+            }
         }
 
         BuiltRow {
             row,
             title,
             sub,
-            scores: score_labels,
+            scores,
+        }
+    }
+
+    /// Point a template `icon` widget at the entry's icon, or leave it blank
+    /// (reserving `icon_size` pixels) when there is none or it fails to load.
+    fn bind_icon(&self, image: &Image, hit: &Row) {
+        image.set_pixel_size(self.icon_size);
+        match &hit.icon {
+            Some(Icon::Name(name)) => image.set_icon_name(Some(name)),
+            Some(Icon::Path(path)) if path.exists() => {
+                let file = gtk4::gio::File::for_path(path);
+                if let Ok(texture) = gdk::Texture::from_file(&file) {
+                    image.set_paintable(Some(&texture));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -988,37 +1035,6 @@ fn toggle_class(
     } else {
         widget.add_css_class(base_class);
         widget.remove_css_class(selected_class);
-    }
-}
-
-fn spacer(size: i32) -> GBox {
-    let box_ = GBox::new(Orientation::Horizontal, 0);
-    box_.set_width_request(size);
-    box_.set_height_request(size);
-    box_
-}
-
-fn load_icon(icon: &Icon, size: i32) -> Option<Image> {
-    match icon {
-        Icon::Name(name) => {
-            let image = Image::from_icon_name(name);
-            image.set_pixel_size(size);
-            Some(image)
-        }
-        Icon::Path(path) => {
-            if !path.exists() {
-                return None;
-            }
-            let file = gtk4::gio::File::for_path(path);
-            match gdk::Texture::from_file(&file) {
-                Ok(texture) => {
-                    let image = Image::from_paintable(Some(&texture));
-                    image.set_pixel_size(size);
-                    Some(image)
-                }
-                Err(_) => None,
-            }
-        }
     }
 }
 

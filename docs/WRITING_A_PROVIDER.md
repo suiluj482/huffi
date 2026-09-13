@@ -257,6 +257,36 @@ When the user selects an entry, its `Action` is performed:
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
+## Theming provider entries
+
+Each entry row is rendered from the active theme's GTK Builder template
+(`entry.ui`) and styled by its stylesheet. Every row carries a
+`provider-<id>` CSS class automatically, so rows that come from your provider
+can be styled by users without touching templates:
+
+```css
+.provider-my-provider .row { background-color: #1e1e2e; }
+.provider-my-provider .title { color: #cba6f7; }
+```
+
+A provider can also ship its own row layout and scoped stylesheet in the
+**default theme**, alongside the code that produces its entries, so the
+default look is customized out of the box:
+
+```text
+data/themes/default/providers/<your provider id>/
+  style.css   # loaded for this provider's rows only
+  entry.ui    # GTK Builder row template (see the default entry.ui for ids)
+```
+
+Users override any of these by placing a file at the same relative path
+inside their own theme (`~/.config/huffi/themes/<name>/providers/<id>/`).
+The renderer binds entry fields onto the documented widget ids (`row`,
+`clickable`, `icon`, `title`, `subtitle`, `score-base`, `score-history`,
+`boost`, `delete`); a template that omits a widget simply doesn't show it.
+Since provider ids are stable (never overridden by config), they double as
+theme keys.
+
 ## Complete example: always-active provider
 
 ```rust

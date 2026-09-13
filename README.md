@@ -194,6 +194,11 @@ weight_comment = 0.9      # comments match a bit harder
   paths and UI size plus `[engine.*]` tables for scoring constants, provider
   settings, and external binaries; flags always override it. See
   [docs/CONFIG.md](docs/CONFIG.md).
+- **Theming** — themes are directories of a global stylesheet and per-provider
+  GTK Builder row templates (CSS + XML). The default theme ships embedded;
+  copying it to `~/.config/huffi/themes/<name>/` and setting `[ui] theme`
+  overrides any part of it, and every provider's rows are addressable through
+  a `provider-<id>` CSS class. See [docs/CONFIG.md](docs/CONFIG.md).
 - **Nix flake** — reproducible builds for `x86_64-linux` and
   `aarch64-linux`, dev shell with all Wayland/GTK dependencies, and a Home
   Manager module that installs `huffi` and keeps it warm on login.
@@ -213,8 +218,8 @@ src/
   lib.rs        # pub mod engine   (GTK-free, unit-testable)
   main.rs       # bin: clap args, control socket, GTK init, engine bootstrap
   engine/       # providers + scoring + history (the model)
-  ui/           # GTK4 window, control socket, background tasks, CSS theme
-data/style.css  # default stylesheet
+  ui/           # GTK4 window, control socket, background tasks, theme loader
+data/themes/default/  # default theme: stylesheet + per-provider row templates
 tests/          # in-process integration tests against the engine
 ```
 

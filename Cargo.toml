@@ -26,3 +26,4 @@ clap = { version = "4", features = ["derive", "env"] }
 gtk4 = "0.11"
 gtk4-layer-shell = "0.8"
 async-channel = "2"
+include_dir = "0.7"
