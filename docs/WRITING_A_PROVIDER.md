@@ -388,6 +388,40 @@ expressions with [`rink-core`], and returns a single entry with the computed
 result as its title and a `.set_query("= …")` query suggestion so `Tab`
 chains calculations.
 
+It's also the worked example for structured results. Rather than asking rink
+for one formatted string, it takes the typed `QueryReply` and derives two
+things from the kind it got back:
+
+```rust
+match eval(rink, ctx.query) {
+    Ok(reply) => vec![self
+        .base(&reply.to_string())          // rink's own one-line rendering
+        .variant(variant_name(&reply))     // → a more specific template
+        .details(details_from_reply(&reply)) // → named detail fields
+        .score(1.0)],
+    // A failed expression is a legitimate result: the error becomes the title,
+    // and there's nothing to copy or re-query.
+    Err(err) => vec![self.base(&err.to_string()).score(1.0)],
+}
+```
+
+Two details worth copying:
+
+- **Extract into named keys, not a format string.** `details_from_reply`
+  returns a map, and `DETAIL_KEYS` lists what it can produce. A theme picks the
+  subset it wants, so adding a field later is a provider change that no theme
+  has to opt into, and renaming one is a breaking change you can see in
+  `DETAIL_KEYS` instead of hiding inside a `format!`. Details the result
+  doesn't have are simply absent, and templates already skip them.
+- **Set the variant from the result kind, explicitly.** `variant_name` maps
+  each reply kind to a kebab-case name by hand rather than deriving one from the
+  enum, so rink's naming can't leak into theme paths and the set of themes you
+  support stays visible in one `match`.
+
+The provider takes no `.extra` config and its `InitContext.extra` is `None`, so
+there is nothing to document in `config.toml`; the keys are user-visible through
+the default theme instead (see [`CONFIG.md`](CONFIG.md#themes)).
+
 ## Registering a provider
 
 Register it on the [`Engine`] in `src/main.rs`, after `Engine::new`:
@@ -411,3 +445,4 @@ is passed through `InitContext`. Built-ins are registered in
 [`entry()`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs
+[`CONFIG.md`]: CONFIG.md#themes

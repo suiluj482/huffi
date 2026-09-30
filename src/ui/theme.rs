@@ -253,6 +253,73 @@ mod tests {
         );
     }
 
+    /// The calculator templates shipped in the default theme are the only
+    /// in-tree templates that declare `detail-*` widgets, so they're the ones
+    /// worth holding to the provider's actual key set. A `detail-<key>` widget
+    /// the calculator never emits is dead markup, and a key it does emit that
+    /// no template declares is a field nobody can see — both are silent, so
+    /// both are worth catching here.
+    ///
+    /// This is a text check, not a real parse: instantiating the template would
+    /// mean a `GtkBuilder` off the main thread, which gtk4 forbids. So
+    /// well-formedness is still only checked by GTK at runtime; what's checked
+    /// here is that the structural ids and the detail keys line up.
+    #[test]
+    fn shipped_calculator_templates_declare_only_real_detail_keys() {
+        use huffi::engine::provider::builtin::calculator::DETAIL_KEYS;
+
+        let dir = temp_theme_dir("shipped-calc");
+        let theme = Theme::with_root(Some(dir));
+
+        for variant in [None, Some("date")] {
+            let xml = theme.entry_template(Some("calculator"), variant);
+            let label = variant.unwrap_or("<provider-level>");
+
+            // Without a `row` object the renderer falls back to a bare box, so
+            // a template that lost it degrades every calculator row in silence.
+            assert!(
+                xml.contains("id=\"row\""),
+                "{label} template declares no `row` object"
+            );
+            assert!(
+                xml.contains("id=\"clickable\""),
+                "{label} template declares no `clickable` object, so rows stop \
+                 being click targets"
+            );
+
+            let declared: Vec<&str> = xml
+                .match_indices("id=\"detail-")
+                .map(|(at, matched)| {
+                    let rest = &xml[at + matched.len()..];
+                    let end = rest.find('"').expect("unterminated id attribute");
+                    &rest[..end]
+                })
+                .collect();
+            assert!(!declared.is_empty(), "{label} template declares no details");
+
+            for key in declared {
+                assert!(
+                    DETAIL_KEYS.contains(&key),
+                    "{label} template declares detail-{key}, which the calculator never emits"
+                );
+            }
+        }
+
+        // Every key the calculator can emit is reachable from some shipped
+        // template, so no detail is unreachable from the default theme.
+        let provider_level = theme.entry_template(Some("calculator"), None).to_string();
+        let date = theme
+            .entry_template(Some("calculator"), Some("date"))
+            .to_string();
+        for key in DETAIL_KEYS {
+            let declared = format!("id=\"detail-{key}\"");
+            assert!(
+                provider_level.contains(&declared) || date.contains(&declared),
+                "calculator emits detail-{key} but no shipped template declares it"
+            );
+        }
+    }
+
     #[test]
     fn provider_template_wins_when_present() {
         let dir = temp_theme_dir("provider");

@@ -223,9 +223,33 @@ The file is installed to `~/.config/huffi/config.toml`.
     .detail { font-size: 11px; color: @huffi_subtext0_color; }
     .row-selected .detail { color: @huffi_mauve_color; }
     ```
-- **Legacy styling** — `$XDG_CONFIG_HOME/huffi/style.css` is still loaded
-  with user priority on top of the active theme; the accent color for the
-  scroll rail is read from its `huffi_mauve_color` `@define-color`.
-- The `--data` and `--socket` flags still override the corresponding
-  `[paths]` entries per invocation; the config file only supplies the
-  defaults the flags would otherwise use.
+
+    The calculator is the worked example. It evaluates expressions with
+    [`rink-core`] and derives both a layout variant and a set of named details
+    from the kind of result it got back, so this:
+
+    ```text
+    =1/3 m/s  →  variant number,  details quantity, exact, dimensions
+    =now      →  variant date,    details human, absolute
+    =water    →  variant substance, details doc, properties
+    =lightyear → variant def,     details def, value, doc
+    ```
+
+    resolves to a different template per row (`entry.ui`,
+    `date/entry.ui`, and the provider-level fallback for the rest), and each row
+    renders only the details its result actually has. The full key set is
+    `calculator::DETAIL_KEYS` in
+    [`src/engine/provider/builtin/calculator.rs`][calculator], which is what the
+    shipped templates are tested against — if you write your own template for
+    the calculator, declare ids from that list and your theme will never show a
+    field that doesn't exist or hide one you asked for.
+
+    - **Legacy styling** — `$XDG_CONFIG_HOME/huffi/style.css` is still loaded
+      with user priority on top of the active theme; the accent color for the
+      scroll rail is read from its `huffi_mauve_color` `@define-color`.
+  - The `--data` and `--socket` flags still override the corresponding
+    `[paths]` entries per invocation; the config file only supplies the
+    defaults the flags would otherwise use.
+
+[`rink-core`]: https://github.com/tiffany352/rink-rs
+[calculator]: ../src/engine/provider/builtin/calculator.rs

@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Calculator row template.
+
+  The calculator asks for structured results (rink's `QueryReply`), not just a
+  formatted string, so a row has more to show than its title. This template
+  declares a widget for every detail key the calculator can produce; the ones a
+  given result doesn't carry stay hidden, so numbers show an exact value or an
+  approximation and substances show a property list, without either needing its
+  own layout.
+
+  Declared detail keys: quantity, exact, approx, dimensions, human, absolute,
+  doc, def, value, properties. Dates additionally get their own layout — see
+  `providers/calculator/date/entry.ui`.
+
+  The calculator never sets a subtitle, so there's no `subtitle` widget here.
+  `boost` / `delete` are declared hidden because the renderer only reveals them
+  for entries that have a history key, and doesn't start them hidden itself.
+-->
+<interface>
+  <object class="GtkBox" id="row">
+    <property name="orientation">horizontal</property>
+    <property name="spacing">8</property>
+    <property name="valign">center</property>
+    <child>
+      <object class="GtkBox" id="clickable">
+        <property name="orientation">horizontal</property>
+        <property name="spacing">12</property>
+        <property name="hexpand">true</property>
+        <property name="valign">center</property>
+        <child>
+          <object class="GtkImage" id="icon">
+            <property name="pixel-size">24</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="title-area">
+            <property name="orientation">vertical</property>
+            <property name="spacing">2</property>
+            <property name="hexpand">true</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkLabel" id="title">
+                <property name="ellipsize">end</property>
+                <property name="halign">start</property>
+                <property name="xalign">0</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkBox" id="details-area">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">12</property>
+                <child>
+                  <object class="GtkLabel" id="detail-quantity">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-exact">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-approx">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-dimensions">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">24</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-human">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-absolute">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">28</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-doc">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">40</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-def">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">28</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-value">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-properties">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">48</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="scores">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">6</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkLabel" id="score-base">
+                <property name="label">0.00</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="boost">
+        <property name="label">+</property>
+        <property name="focusable">false</property>
+        <property name="valign">center</property>
+        <property name="visible">false</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="delete">
+        <property name="label">−</property>
+        <property name="focusable">false</property>
+        <property name="valign">center</property>
+        <property name="visible">false</property>
+      </object>
+    </child>
+  </object>
+</interface>
