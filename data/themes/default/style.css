@@ -71,6 +71,17 @@ window {
     font-size: 12px;
     color: @huffi_mauve_color;
 }
+/* Named detail fields, bound onto `detail-<key>` widgets. Selection is
+   handled here rather than in the renderer, so any template can style
+   details per provider or per variant without renderer changes. */
+.detail {
+    font-size: 11px;
+    color: @huffi_subtext0_color;
+}
+.row-selected .detail {
+    font-size: 11px;
+    color: @huffi_mauve_color;
+}
 .badge {
     color: @huffi_mauve_color;
     background-color: @huffi_surface1_color;

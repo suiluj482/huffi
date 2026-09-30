@@ -10,6 +10,8 @@
 //!   providers/<id>/
 //!     style.css          # optional, scoped to that provider's rows
 //!     entry.ui           # optional, custom row layout for that provider
+//!     <variant>/
+//!       entry.ui         # optional, row layout for one layout variant
 //! ```
 //!
 //! The user's theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
@@ -36,6 +38,10 @@ use crate::config;
 const DEFAULT_THEME_DIR: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/data/themes/default");
 
+/// Cache key for a resolved row template: the entry's provider id and its
+/// layout variant, either of which may be unset.
+type TemplateKey = (Option<String>, Option<String>);
+
 /// Resolve the accent color from the stylesheet (`@define-color
 /// huffi_mauve_color`), falling back to the default value if the theme
 /// doesn't define it.
@@ -58,12 +64,12 @@ pub fn mauve(context: &gtk4::StyleContext) -> (f64, f64, f64) {
 pub struct Theme {
     /// `config_dir/huffi/themes/<name>/` when that directory exists.
     user_root: Option<PathBuf>,
-    /// Cache of resolved entry templates, keyed by provider id (`None` for the
-    /// theme-wide default). Shared as `Rc<str>` so building a row costs an
-    /// `Rc` bump rather than a fresh copy of the whole XML document. Interior
-    /// mutability so [`Theme::entry_template`] can be called through `&self`
-    /// from row building.
-    templates: RefCell<HashMap<Option<String>, Rc<str>>>,
+    /// Cache of resolved entry templates, keyed by `(provider id, variant)` —
+    /// `None` for either means "not set". Shared as `Rc<str>` so building a row
+    /// costs an `Rc` bump rather than a fresh copy of the whole XML document.
+    /// Interior mutability so [`Theme::entry_template`] can be called through
+    /// `&self` from row building.
+    templates: RefCell<HashMap<TemplateKey, Rc<str>>>,
 }
 
 impl Theme {
@@ -112,20 +118,36 @@ impl Theme {
             .flatten()
     }
 
-    /// The entry-row GTK Builder template for a provider. A provider-specific
-    /// `providers/<id>/entry.ui` wins over the theme's default `entry.ui`.
+    /// The entry-row GTK Builder template for a provider, resolved by layout
+    /// variant:
+    ///
+    /// ```text
+    /// providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+    /// ```
+    ///
+    /// A user file in any of those positions wins over the embedded default at
+    /// the same position, and a missing position falls through to the next one
+    /// (see [`Theme::resource`]). Variants only ever add a more specific
+    /// layout; they never remove the fallbacks.
     ///
     /// The returned `Rc<str>` is shared, not reallocated, so the per-row cost is
     /// one reference bump. The XML itself still has to be parsed per row:
     /// `GtkBuilder` instantiates a single object graph, so there is no way to
     /// re-run the same definitions for a second row.
-    pub fn entry_template(&self, provider_id: Option<&str>) -> Rc<str> {
-        let key = provider_id.map(str::to_owned);
+    pub fn entry_template(&self, provider_id: Option<&str>, variant: Option<&str>) -> Rc<str> {
+        let key = (provider_id.map(str::to_owned), variant.map(str::to_owned));
         if let Some(cached) = self.templates.borrow().get(&key) {
             return Rc::clone(cached);
         }
-        let template = provider_id
-            .and_then(|id| self.resource(&format!("providers/{id}/entry.ui")))
+        let scoped = provider_id.map(|id| format!("providers/{id}"));
+        let template = variant
+            .zip(scoped.as_deref())
+            .and_then(|(v, dir)| self.resource(&format!("{dir}/{v}/entry.ui")))
+            .or_else(|| {
+                scoped
+                    .as_deref()
+                    .and_then(|dir| self.resource(&format!("{dir}/entry.ui")))
+            })
             .or_else(|| self.resource("entry.ui"))
             .unwrap_or_default();
         let template: Rc<str> = Rc::from(template);
@@ -204,7 +226,7 @@ mod tests {
         let theme = Theme::with_root(Some(dir));
         let css = theme.resource("style.css").expect("embedded style.css");
         assert!(css.contains("@define-color"));
-        let template = theme.entry_template(None);
+        let template = theme.entry_template(None, None);
         assert!(template.contains("id=\"row\""));
     }
 
@@ -224,7 +246,7 @@ mod tests {
         let dir = temp_theme_dir("fallback");
         std::fs::write(dir.join("style.css"), "/* user css */").unwrap();
         let theme = Theme::with_root(Some(dir));
-        let template = theme.entry_template(Some("desktop"));
+        let template = theme.entry_template(Some("desktop"), None);
         assert!(
             template.contains("id=\"row\""),
             "a provider without its own entry.ui must use the default template"
@@ -243,13 +265,76 @@ mod tests {
         .unwrap();
         let theme = Theme::with_root(Some(dir));
 
-        let calc = theme.entry_template(Some("calculator"));
+        let calc = theme.entry_template(Some("calculator"), None);
         assert!(calc.contains("GtkBox\" id=\"row\""), "{calc}");
-        let generic = theme.entry_template(Some("desktop"));
+        let generic = theme.entry_template(Some("desktop"), None);
         assert!(
             generic.contains("title"),
             "fallback template for other providers"
         );
+    }
+
+    /// Write a user theme containing a `providers/<id>/<variant>/entry.ui`
+    /// alongside the provider-level and theme-wide templates, so the
+    /// resolution chain can be asserted end to end. `tag` must be unique per
+    /// test: [`temp_theme_dir`] clears the directory it returns, and the test
+    /// binary runs tests on parallel threads.
+    fn variant_theme(tag: &str) -> PathBuf {
+        let dir = temp_theme_dir(tag);
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calculator/entry.ui", "provider"),
+            ("providers/calculator/date/entry.ui", "variant"),
+        ] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn variant_template_wins_over_provider_template() {
+        let theme = Theme::with_root(Some(variant_theme("variant-wins")));
+        let date = theme.entry_template(Some("calculator"), Some("date"));
+        assert!(date.contains("variant"), "{date}");
+    }
+
+    #[test]
+    fn unknown_variant_falls_back_to_provider_template() {
+        let theme = Theme::with_root(Some(variant_theme("variant-unknown")));
+        let number = theme.entry_template(Some("calculator"), Some("number"));
+        assert!(number.contains("provider"), "{number}");
+    }
+
+    #[test]
+    fn unknown_provider_and_variant_fall_back_to_global_template() {
+        let theme = Theme::with_root(Some(variant_theme("variant-no-provider")));
+        let other = theme.entry_template(Some("desktop"), Some("date"));
+        assert!(other.contains("global"), "{other}");
+    }
+
+    #[test]
+    fn variant_without_provider_id_uses_global_template() {
+        let theme = Theme::with_root(Some(variant_theme("variant-unscoped")));
+        let unowned = theme.entry_template(None, Some("date"));
+        assert!(unowned.contains("global"), "{unowned}");
+    }
+
+    #[test]
+    fn each_variant_is_cached_separately() {
+        let theme = Theme::with_root(Some(variant_theme("variant-cache")));
+        let date = theme.entry_template(Some("calculator"), Some("date"));
+        let number = theme.entry_template(Some("calculator"), Some("number"));
+        assert!(!Rc::ptr_eq(&date, &number));
+        assert!(Rc::ptr_eq(
+            &date,
+            &theme.entry_template(Some("calculator"), Some("date"))
+        ));
+        assert!(Rc::ptr_eq(
+            &number,
+            &theme.entry_template(Some("calculator"), Some("number"))
+        ));
     }
 
     #[test]
@@ -267,10 +352,10 @@ mod tests {
     fn entry_template_is_cached() {
         let dir = temp_theme_dir("cache");
         let theme = Theme::with_root(Some(dir));
-        let a = theme.entry_template(Some("desktop"));
+        let a = theme.entry_template(Some("desktop"), None);
         // Pointer equality, not just equal contents: the second call must hand
         // back the very same allocation rather than re-resolving the theme.
-        let b = theme.entry_template(Some("desktop"));
+        let b = theme.entry_template(Some("desktop"), None);
         assert!(Rc::ptr_eq(&a, &b), "template was reallocated, not cached");
     }
 
@@ -278,11 +363,14 @@ mod tests {
     fn default_template_is_cached_separately_from_provider_templates() {
         let dir = temp_theme_dir("cache-keys");
         let theme = Theme::with_root(Some(dir));
-        let default = theme.entry_template(None);
-        let desktop = theme.entry_template(Some("desktop"));
+        let default = theme.entry_template(None, None);
+        let desktop = theme.entry_template(Some("desktop"), None);
         assert!(!Rc::ptr_eq(&default, &desktop));
         // Both are cached, and each keeps its own identity across calls.
-        assert!(Rc::ptr_eq(&default, &theme.entry_template(None)));
-        assert!(Rc::ptr_eq(&desktop, &theme.entry_template(Some("desktop"))));
+        assert!(Rc::ptr_eq(&default, &theme.entry_template(None, None)));
+        assert!(Rc::ptr_eq(
+            &desktop,
+            &theme.entry_template(Some("desktop"), None)
+        ));
     }
 }

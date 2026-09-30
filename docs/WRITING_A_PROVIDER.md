@@ -177,7 +177,9 @@ entry("my-entry-id", "Display Name")
 | `.subtitle(s)` | `String` | Secondary text shown beside the title in the UI |
 | `.comment(s)` | `String` | Longer description (used as a fallback subtitle) |
 | `.icon(name\|path)` | `String` / path | Icon to show. A string maps to a themed freedesktop icon name (see `.icon_name`); a `Path` to an explicit icon file (see `.icon_path`) |
-| `.extra(json)` | `serde_json::Value` | Arbitrary metadata attached to the entry, surfaced on the query hit |
+| `.detail(key, value)` | `String`, `String` | Named display field, rendered by a theme onto a `detail-<key>` widget. Key must match `[a-z0-9-]+` |
+| `.details(fields)` | iterable of `(String, String)` | Add several `.detail()` fields at once |
+| `.variant(name)` | `String` | Pick a layout variant, e.g. `"date"`, resolving `providers/<id>/<variant>/entry.ui` |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
@@ -295,6 +297,8 @@ default look is customized out of the box:
 data/themes/default/providers/<your provider id>/
   style.css   # loaded for this provider's rows only
   entry.ui    # GTK Builder row template (see the default entry.ui for ids)
+  <variant>/
+    entry.ui  # optional row template for one layout variant
 ```
 
 Users override any of these by placing a file at the same relative path
@@ -304,6 +308,47 @@ The renderer binds entry fields onto the documented widget ids (`row`,
 `boost`, `delete`); a template that omits a widget simply doesn't show it.
 Since provider ids are stable (never overridden by config), they double as
 theme keys.
+
+### Named details and layout variants
+
+A title and a subtitle can't carry a structured result — a unit's quantity and
+dimensionality, a date's humanized relative time. Use `.detail()` for those.
+Keys are provider-defined, so pick a vocabulary your result shape can support
+(`quantity`, `dimensions`, `human`, ...) and document it; a theme then renders
+whichever subset it declares, by declaring a `detail-<key>` label:
+
+```rust
+entry("result", "1.609 km")
+    .detail("quantity", "length")
+    .detail("dimensions", "L")
+```
+
+```xml
+<child>
+  <object class="GtkLabel" id="detail-quantity">
+    <property name="visible">false</property>
+  </object>
+</child>
+```
+
+There is no catch-all widget: a template renders exactly the details it
+declares, so users can drop any field they don't care about.
+
+When different kinds of result want genuinely different layouts rather than
+just a different set of details, add `.variant()`. It selects a more specific
+template, and resolution falls through one level at a time, so you only need to
+write the file that actually differs:
+
+```text
+providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+```
+
+Rows also get a `provider-<id>-<variant>` CSS class, so a variant can be styled
+from the provider's `style.css` without its own template. The bundled
+calculator provider is the worked example: it sets a variant from the kind of
+result rink returned, so `providers/calculator/entry.ui` handles ordinary
+numbers and `providers/calculator/date/entry.ui` gives dates a taller row with
+their humanized time underneath.
 
 ## Complete example: always-active provider
 

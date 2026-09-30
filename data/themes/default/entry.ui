@@ -4,7 +4,8 @@
 
   Widget ids the row renderer binds to:
     row           GtkBox  – the row container (gets css classes `row` /
-                            `row-selected` plus `provider-<id>`)
+                            `row-selected` plus `provider-<id>` and, when the
+                            entry names one, `provider-<id>-<variant>`)
     clickable     GtkBox  – click target; receives the pointer cursor and a
                             click controller which selects / double-click submits
     icon          GtkImage – entry icon (pixel size is set from [ui].icon_size)
@@ -18,10 +19,18 @@
                               a history key
     delete        GtkButton – "−" history button; shown only for entries with
                               a history key
+    detail-<key>  GtkLabel – one of the entry's named details, by key. Keys are
+                            provider-defined ([a-z0-9-]+): declare the ones you
+                            want rendered and the renderer fills them in, giving
+                            each a `detail` css class. A detail with no matching
+                            widget isn't shown; a widget with no matching detail
+                            stays hidden. There is no catch-all widget.
 
-  A provider may override this with `providers/<id>/entry.ui` inside a theme.
-  Non-standard widgets (e.g. GtkImage decorations) are fine — anything with a
-  known id is bound, the rest is left alone.
+  A provider may override this with `providers/<id>/entry.ui` inside a theme,
+  and an individual layout variant with `providers/<id>/<variant>/entry.ui`,
+  which takes precedence over the provider-level file. Non-standard widgets
+  (e.g. GtkImage decorations) are fine — anything with a known id is bound, the
+  rest is left alone.
 -->
 <interface>
   <object class="GtkBox" id="row">

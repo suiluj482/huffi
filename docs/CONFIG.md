@@ -144,6 +144,8 @@ The file is installed to `~/.config/huffi/config.toml`.
     providers/<id>/
       style.css               # optional, scoped to that provider's rows
       entry.ui                # optional, custom row layout for that provider
+      <variant>/
+        entry.ui              # optional, row layout for one layout variant
   ```
 
   To customize, copy `data/themes/default` to
@@ -155,17 +157,30 @@ The file is installed to `~/.config/huffi/config.toml`.
 
   Every entry row carries a `provider-<id>` CSS class (e.g.
   `.provider-desktop`, `.provider-calculator`), so providers can be styled
-  without an XML template:
+  without an XML template. When the entry also names a layout variant, the row
+  gets a `provider-<id>-<variant>` class as well:
 
   ```css
   /* ~/.config/huffi/themes/minimal/style.css */
   .provider-calculator .title { color: @accent_color; }
   .provider-calculator .row { background: transparent; }
+  .provider-calculator-date .title { font-size: 15px; }
   ```
 
   A provider can also ship its own `entry.ui` GTK Builder template with a
   completely different widget layout — see below for the widget ids the row
-  renderer binds to.
+  renderer binds to. An entry may additionally select a *variant*, which picks
+  a more specific template; resolution falls through at each level, so a user
+  file at one level does not have to restate the ones below it:
+
+  ```text
+  providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+  ```
+
+  The bundled `default` theme uses both: the calculator sets a variant per kind
+  of result, so `providers/calculator/entry.ui` renders ordinary numbers and
+  `providers/calculator/date/entry.ui` renders dates with their humanized
+  relative time.
 
   - **Row template widget ids** (`entry.ui`) — the renderer binds the entry
     fields onto these named widgets; any of them can be skipped:
@@ -185,6 +200,29 @@ The file is installed to `~/.config/huffi/config.toml`.
     | `delete`       | `GtkButton`| "−" history button (only with history key)|
 
     Unnamed widgets are left alone, so a template can add decorations freely.
+
+  - **Named details** — an entry can carry arbitrary key/value display fields,
+    and a template opts in to the ones it wants by declaring a
+    `detail-<key>` label:
+
+    ```xml
+    <object class="GtkLabel" id="detail-quantity">
+      <property name="visible">false</property>
+    </object>
+    ```
+
+    Keys are chosen by the provider and must match `[a-z0-9-]+` (they become
+    part of a GTK object id). The renderer fills in each declared widget that
+    the entry actually carries and gives it the `detail` CSS class; a detail
+    with no matching widget is not shown, and a widget with no matching detail
+    stays hidden — so a template shows exactly the fields it declares, and
+    there is no catch-all "render everything" widget. Selection styling is
+    plain CSS, so any template can restyle details without renderer changes:
+
+    ```css
+    .detail { font-size: 11px; color: @huffi_subtext0_color; }
+    .row-selected .detail { color: @huffi_mauve_color; }
+    ```
 - **Legacy styling** — `$XDG_CONFIG_HOME/huffi/style.css` is still loaded
   with user priority on top of the active theme; the accent color for the
   scroll rail is read from its `huffi_mauve_color` `@define-color`.

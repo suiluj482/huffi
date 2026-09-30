@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -7,7 +8,7 @@ use crate::engine::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Run `args` as a program. With `terminal`, the args are appended to
     /// the configured terminal wrapper before spawning.
@@ -65,7 +66,8 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
         subtitle: None,
         comment: None,
         icon: None,
-        extra: None,
+        details: BTreeMap::new(),
+        variant: None,
         action: None,
         rank: None,
         history_key: None,
@@ -80,7 +82,8 @@ pub struct EntryBuilder {
     subtitle: Option<String>,
     comment: Option<String>,
     icon: Option<Icon>,
-    extra: Option<serde_json::Value>,
+    details: BTreeMap<String, String>,
+    variant: Option<String>,
     action: Option<Action>,
     rank: Option<Rank>,
     history_key: Option<String>,
@@ -122,8 +125,28 @@ impl EntryBuilder {
         self
     }
 
-    pub fn extra(mut self, v: serde_json::Value) -> Self {
-        self.extra = Some(v);
+    /// Add a named display field, bound by the row renderer onto a
+    /// `detail-<key>` widget in the active theme's row template. Keys must
+    /// match `[a-z0-9-]+`. A later detail with the same key replaces this one.
+    ///
+    /// See [`EntryMeta::details`].
+    pub fn detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.details.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add several named display fields at once. Later keys win.
+    pub fn details(mut self, fields: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.details.extend(fields);
+        self
+    }
+
+    /// Select a layout variant for this entry, e.g. `"date"`, resolving
+    /// `providers/<id>/<variant>/entry.ui` in the active theme.
+    ///
+    /// See [`EntryMeta::variant`].
+    pub fn variant(mut self, name: impl Into<String>) -> Self {
+        self.variant = Some(name.into());
         self
     }
 
@@ -191,7 +214,8 @@ impl EntryBuilder {
                 subtitle: self.subtitle,
                 comment: self.comment,
                 icon: self.icon,
-                extra: self.extra,
+                details: self.details,
+                variant: self.variant,
                 set_query: self.set_query,
                 action: self.action.unwrap_or(Action::NoOp),
             },

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::os::unix::net::UnixListener;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +59,8 @@ struct Row {
     history_score: Option<f64>,
     title: String,
     subtitle: Option<String>,
+    details: BTreeMap<String, String>,
+    variant: Option<String>,
     icon: Option<Icon>,
     set_query: Option<String>,
 }
@@ -73,6 +76,8 @@ impl From<Scored<EntryMeta>> for Row {
             history_score: scored.history_score,
             title: entry.title,
             subtitle: entry.subtitle,
+            details: entry.details,
+            variant: entry.variant,
             icon: entry.icon,
             set_query: entry.set_query,
         }
@@ -848,10 +853,13 @@ impl Launcher {
         global_index: usize,
         local_index: usize,
     ) -> BuiltRow {
-        // Instantiate the theme's row template (provider-specific when the
-        // theme ships one) and bind the entry's fields onto the widgets it
-        // declares. Unknown ids are fine; optional widgets are skipped.
-        let xml = self.theme.entry_template(hit.provider_id.as_deref());
+        // Instantiate the theme's row template (variant- and
+        // provider-specific when the theme ships one) and bind the entry's
+        // fields onto the widgets it declares. Unknown ids are fine; optional
+        // widgets are skipped.
+        let xml = self
+            .theme
+            .entry_template(hit.provider_id.as_deref(), hit.variant.as_deref());
         let builder = gtk4::Builder::from_string(&xml);
 
         let row = builder
@@ -861,6 +869,9 @@ impl Launcher {
         row.add_css_class(if is_selected { "row-selected" } else { "row" });
         if let Some(id) = &hit.provider_id {
             row.add_css_class(&format!("provider-{id}"));
+            if let Some(variant) = &hit.variant {
+                row.add_css_class(&format!("provider-{id}-{variant}"));
+            }
         }
 
         // A template that omits `title` shows no title. The detached label is
@@ -927,6 +938,20 @@ impl Launcher {
             });
             history.set_visible(true);
             scores.push(history);
+        }
+
+        // Named display fields bind onto `detail-<key>` widgets. The entry
+        // drives this loop, so a template that doesn't declare a widget for
+        // some key simply doesn't show that field, and a widget whose key the
+        // entry doesn't carry stays hidden. Selection state is handled purely
+        // in CSS (`.row-selected .detail`), so there's nothing to track here.
+        for (key, value) in &hit.details {
+            let id = format!("detail-{key}");
+            if let Some(label) = builder.object::<Label>(&id) {
+                label.set_text(value);
+                label.add_css_class("detail");
+                label.set_visible(true);
+            }
         }
 
         if let Some(clickable) = builder.object::<GBox>("clickable") {
