@@ -880,7 +880,11 @@ impl Launcher {
         // `row` instead of `title-area`, outside the `clickable` target.
         let title = builder
             .object::<Label>("title")
-            .unwrap_or_else(|| Label::new(Some(&hit.title)));
+            .unwrap_or_else(|| Label::new(Some("")));
+        // The template supplies the label, not its text: every shipped template
+        // declares `title` with no `label` property, so the text has to come
+        // from here or the row renders blank.
+        title.set_text(&hit.title);
         title.add_css_class(if is_selected {
             "title-selected"
         } else {
