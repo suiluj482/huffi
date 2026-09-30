@@ -19,6 +19,9 @@ pub struct UiConfig {
     pub page_size: usize,
     /// Entry icon size in pixels.
     pub icon_size: i32,
+    /// Theme name, resolved from `$XDG_CONFIG_HOME/huffi/themes/<name>/` on
+    /// top of the embedded default theme.
+    pub theme: String,
 }
 
 impl Default for UiConfig {
@@ -28,6 +31,7 @@ impl Default for UiConfig {
             height: 400,
             page_size: 10,
             icon_size: 24,
+            theme: "default".into(),
         }
     }
 }
@@ -48,6 +52,7 @@ mod tests {
                 height: 400,
                 page_size: 10,
                 icon_size: 24,
+                theme: "default".into(),
             }
         );
     }

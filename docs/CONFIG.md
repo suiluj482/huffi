@@ -39,6 +39,9 @@ height    = 400
 page_size = 10
 # Entry icon size in pixels.
 icon_size = 24
+# Theme name. Themes live in $XDG_CONFIG_HOME/huffi/themes/<name>/ and
+# overlay the embedded default theme (data/themes/default/) file by file.
+# theme = "default"
 
 [engine.scoring]
 # Weight of a manual boost relative to a normal launch.
@@ -131,10 +134,60 @@ The file is installed to `~/.config/huffi/config.toml`.
 
 ## Other configuration
 
-- **Styling** — `$XDG_CONFIG_HOME/huffi/style.css` is loaded with user
-  priority on top of the default stylesheet (`data/style.css`); the accent
-  color for the scroll rail is read from its `huffi_mauve_color`
-  `@define-color`.
+- **Themes** — a theme is a directory of stylesheets and per-provider row
+  templates. The default theme ships embedded at `data/themes/default/`:
+
+  ```text
+  data/themes/default/
+    style.css                 # global stylesheet
+    entry.ui                  # default GTK Builder row template
+    providers/<id>/
+      style.css               # optional, scoped to that provider's rows
+      entry.ui                # optional, custom row layout for that provider
+  ```
+
+  To customize, copy `data/themes/default` to
+  `~/.config/huffi/themes/<name>/`, keep only the files you want to override
+  (you can start from nothing), and select it with `[ui] theme = "<name>"`
+  (default: the embedded `default` theme). A file present in your theme
+  replaces the matching file in the embedded default; the embedded CSS is
+  still loaded below yours, so you only need to restate the rules you change.
+
+  Every entry row carries a `provider-<id>` CSS class (e.g.
+  `.provider-desktop`, `.provider-calculator`), so providers can be styled
+  without an XML template:
+
+  ```css
+  /* ~/.config/huffi/themes/minimal/style.css */
+  .provider-calculator .title { color: @accent_color; }
+  .provider-calculator .row { background: transparent; }
+  ```
+
+  A provider can also ship its own `entry.ui` GTK Builder template with a
+  completely different widget layout — see below for the widget ids the row
+  renderer binds to.
+
+  - **Row template widget ids** (`entry.ui`) — the renderer binds the entry
+    fields onto these named widgets; any of them can be skipped:
+
+    | Widget id      | Type       | Bound to                                  |
+    |----------------|------------|-------------------------------------------|
+    | `row`          | `GtkBox`   | the row container (required)              |
+    | `clickable`    | `GtkBox`   | click-to-select target                    |
+    | `icon`         | `GtkImage` | entry icon (pixel size from `icon_size`)  |
+    | `title-area`   | `GtkBox`   | title (+ subtitle) area                   |
+    | `title`        | `GtkLabel` | entry title                               |
+    | `subtitle`     | `GtkLabel` | entry subtitle (shown only if set)        |
+    | `scores`       | `GtkBox`   | score labels container                    |
+    | `score-base`   | `GtkLabel` | base (fuzzy) score                        |
+    | `score-history`| `GtkLabel` | history score (shown only if present)     |
+    | `boost`        | `GtkButton`| "+" history button (only with history key)|
+    | `delete`       | `GtkButton`| "−" history button (only with history key)|
+
+    Unnamed widgets are left alone, so a template can add decorations freely.
+- **Legacy styling** — `$XDG_CONFIG_HOME/huffi/style.css` is still loaded
+  with user priority on top of the active theme; the accent color for the
+  scroll rail is read from its `huffi_mauve_color` `@define-color`.
 - The `--data` and `--socket` flags still override the corresponding
   `[paths]` entries per invocation; the config file only supplies the
   defaults the flags would otherwise use.
