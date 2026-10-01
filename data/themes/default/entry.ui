@@ -5,7 +5,8 @@
   Widget ids the row renderer binds to:
     row           GtkBox  – the row container (gets css classes `row` /
                             `row-selected` plus `provider-<id>` and, when the
-                            entry names one, `provider-<id>-<variant>`)
+                            entry names one, `variant-<variant>` and
+                            `provider-<id>-<variant>`)
     clickable     GtkBox  – click target; receives the pointer cursor and a
                             click controller which selects / double-click submits
     icon          GtkImage – entry icon (pixel size is set from [ui].icon_size)
@@ -28,9 +29,11 @@
 
   A provider may override this with `providers/<id>/entry.ui` inside a theme,
   and an individual layout variant with `providers/<id>/<variant>/entry.ui`,
-  which takes precedence over the provider-level file. Non-standard widgets
-  (e.g. GtkImage decorations) are fine — anything with a known id is bound, the
-  rest is left alone.
+  which takes precedence over the provider-level file. A theme may also ship
+  `variants/<variant>/entry.ui`, which applies to every provider reporting
+  that variant and is consulted after the provider's own files. Non-standard
+  widgets (e.g. GtkImage decorations) are fine — anything with a known id is
+  bound, the rest is left alone.
 -->
 <interface>
   <object class="GtkBox" id="row">

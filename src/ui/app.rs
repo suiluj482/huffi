@@ -873,6 +873,12 @@ impl Launcher {
                 row.add_css_class(&format!("provider-{id}-{variant}"));
             }
         }
+        // `variant-<name>` is provider-independent, so a shared
+        // `variants/<name>/entry.ui` layout can be styled for every provider
+        // that reports that variant.
+        if let Some(variant) = &hit.variant {
+            row.add_css_class(&format!("variant-{variant}"));
+        }
 
         // A template that omits `title` shows no title. The detached label is
         // still returned so `apply_selection` has something to toggle, but it

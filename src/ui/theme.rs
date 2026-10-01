@@ -7,11 +7,15 @@
 //! <theme>/
 //!   style.css            # global stylesheet
 //!   entry.ui             # default GTK Builder row template
+//!   variants/<name>/
+//!     entry.ui           # optional, row layout for one layout variant,
+//!                        #   for every provider that reports it
 //!   providers/<id>/
 //!     style.css          # optional, scoped to that provider's rows
 //!     entry.ui           # optional, custom row layout for that provider
 //!     <variant>/
-//!       entry.ui         # optional, row layout for one layout variant
+//!       entry.ui         # optional, row layout for one layout variant of
+//!                        #   this provider
 //! ```
 //!
 //! The user's theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
@@ -118,17 +122,30 @@ impl Theme {
             .flatten()
     }
 
-    /// The entry-row GTK Builder template for a provider, resolved by layout
+    /// The entry-row GTK Builder template for an entry, resolved by layout
     /// variant:
     ///
     /// ```text
-    /// providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+    /// providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
+    ///     →  variants/<variant>/entry.ui  →  entry.ui
     /// ```
     ///
-    /// A user file in any of those positions wins over the embedded default at
-    /// the same position, and a missing position falls through to the next one
-    /// (see [`Theme::resource`]). Variants only ever add a more specific
-    /// layout; they never remove the fallbacks.
+    /// The two variant positions differ only in scope. `providers/<id>/<variant>`
+    /// is one provider's opinion about one variant, while `variants/<variant>` is
+    /// the theme's opinion about it for *every* provider — so a theme can ship
+    /// one `variants/list/entry.ui` and have every provider that reports a `list`
+    /// variant pick it up, with no per-provider file. A shared template is
+    /// therefore only useful if it sticks to generic widget ids (`title`,
+    /// `subtitle`, `detail-<key>`) rather than a particular provider's keys.
+    ///
+    /// The shared position comes *after* the provider's own template, so a theme
+    /// that customises one provider doesn't silently lose a variant layout that
+    /// the shared file would otherwise have supplied for it.
+    ///
+    /// A user file in any position wins over the embedded default at the same
+    /// position, and a missing position falls through to the next one (see
+    /// [`Theme::resource`]). Variants only ever add a more specific layout; they
+    /// never remove the fallbacks.
     ///
     /// The returned `Rc<str>` is shared, not reallocated, so the per-row cost is
     /// one reference bump. The XML itself still has to be parsed per row:
@@ -148,6 +165,7 @@ impl Theme {
                     .as_deref()
                     .and_then(|dir| self.resource(&format!("{dir}/entry.ui")))
             })
+            .or_else(|| variant.and_then(|v| self.resource(&format!("variants/{v}/entry.ui"))))
             .or_else(|| self.resource("entry.ui"))
             .unwrap_or_default();
         let template: Rc<str> = Rc::from(template);
@@ -365,6 +383,65 @@ mod tests {
         let theme = Theme::with_root(Some(variant_theme("variant-wins")));
         let date = theme.entry_template(Some("calculator"), Some("date"));
         assert!(date.contains("variant"), "{date}");
+    }
+
+    /// A theme with a `variants/<name>/entry.ui` that no provider claims. The
+    /// "prov" provider has no template of its own, so it should fall through
+    /// the provider level to the shared variant.
+    fn shared_variant_theme(tag: &str) -> PathBuf {
+        let dir = temp_theme_dir(tag);
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calc/entry.ui", "provider"),
+            ("providers/calc/priv/entry.ui", "priv-variant"),
+            ("variants/shared/entry.ui", "shared-variant"),
+        ] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn shared_variant_applies_to_a_provider_with_no_template_of_its_own() {
+        let theme = Theme::with_root(Some(shared_variant_theme("shared-applies")));
+        let row = theme.entry_template(Some("prov"), Some("shared"));
+        assert!(row.contains("shared-variant"), "{row}");
+    }
+
+    #[test]
+    fn shared_variant_applies_when_there_is_no_provider_at_all() {
+        let theme = Theme::with_root(Some(shared_variant_theme("shared-no-provider")));
+        let row = theme.entry_template(None, Some("shared"));
+        assert!(row.contains("shared-variant"), "{row}");
+    }
+
+    #[test]
+    fn provider_variant_wins_over_shared_variant() {
+        let theme = Theme::with_root(Some(shared_variant_theme("shared-vs-provider")));
+        let row = theme.entry_template(Some("calc"), Some("priv"));
+        assert!(row.contains("priv-variant"), "{row}");
+    }
+
+    /// The point of putting the shared position *after* the provider template:
+    /// a theme that customises one provider keeps winning for it, rather than
+    /// having its layout replaced by the shared variant file.
+    #[test]
+    fn provider_template_wins_over_shared_variant_for_the_same_variant_name() {
+        let dir = temp_theme_dir("shared-after-provider");
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calc/entry.ui", "provider"),
+            ("variants/shared/entry.ui", "shared-variant"),
+        ] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        let theme = Theme::with_root(Some(dir));
+        let row = theme.entry_template(Some("calc"), Some("shared"));
+        assert!(row.contains("provider"), "{row}");
     }
 
     #[test]

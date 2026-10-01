@@ -141,11 +141,15 @@ The file is installed to `~/.config/huffi/config.toml`.
   data/themes/default/
     style.css                 # global stylesheet
     entry.ui                  # default GTK Builder row template
+    variants/<name>/
+      entry.ui                # optional, row layout for one layout variant,
+                               #   for every provider reporting it
     providers/<id>/
       style.css               # optional, scoped to that provider's rows
       entry.ui                # optional, custom row layout for that provider
       <variant>/
-        entry.ui              # optional, row layout for one layout variant
+        entry.ui              # optional, row layout for one layout variant of
+                               #   this provider
   ```
 
   To customize, copy `data/themes/default` to
@@ -158,13 +162,16 @@ The file is installed to `~/.config/huffi/config.toml`.
   Every entry row carries a `provider-<id>` CSS class (e.g.
   `.provider-desktop`, `.provider-calculator`), so providers can be styled
   without an XML template. When the entry also names a layout variant, the row
-  gets a `provider-<id>-<variant>` class as well:
+  gets `variant-<variant>` and `provider-<id>-<variant>` classes as well. The
+  first is provider-independent, so one rule can cover a layout across every
+  provider that uses it:
 
   ```css
   /* ~/.config/huffi/themes/minimal/style.css */
   .provider-calculator .title { color: @accent_color; }
   .provider-calculator .row { background: transparent; }
-  .provider-calculator-date .title { font-size: 15px; }
+  .variant-date .title { font-size: 15px; }
+  .provider-calculator-date .detail { font-style: italic; }
   ```
 
   A provider can also ship its own `entry.ui` GTK Builder template with a
@@ -174,12 +181,25 @@ The file is installed to `~/.config/huffi/config.toml`.
   file at one level does not have to restate the ones below it:
 
   ```text
-  providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+  providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
+      →  variants/<variant>/entry.ui  →  entry.ui
   ```
 
-  The bundled `default` theme uses both: the calculator sets a variant per kind
-  of result, so `providers/calculator/entry.ui` renders ordinary numbers and
-  `providers/calculator/date/entry.ui` renders dates with their humanized
+  The two variant positions differ only in scope. `providers/<id>/<variant>` is
+  one provider's opinion about one layout; `variants/<variant>` is the theme's
+  opinion about it for *every* provider, so a single shared file can serve any
+  number of them. The shared position is consulted *after* the provider's own
+  files, so customising one provider doesn't silently displace the shared
+  layout for it.
+
+  A shared template is only useful if it sticks to generic widget ids (`title`,
+  `subtitle`, `detail-<key>`) rather than one provider's detail keys — the
+  generic ids are the ones every entry can populate, whereas a key like
+  `detail-human` only means something to the one provider that defines it.
+
+  The bundled `default` theme uses both levels: the calculator sets a variant per
+  kind of result, so `providers/calculator/entry.ui` renders ordinary numbers
+  and `providers/calculator/date/entry.ui` renders dates with their humanized
   relative time.
 
   - **Row template widget ids** (`entry.ui`) — the renderer binds the entry

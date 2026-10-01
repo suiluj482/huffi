@@ -298,7 +298,7 @@ data/themes/default/providers/<your provider id>/
   style.css   # loaded for this provider's rows only
   entry.ui    # GTK Builder row template (see the default entry.ui for ids)
   <variant>/
-    entry.ui  # optional row template for one layout variant
+    entry.ui  # optional row template for one layout variant of this provider
 ```
 
 Users override any of these by placing a file at the same relative path
@@ -340,15 +340,41 @@ template, and resolution falls through one level at a time, so you only need to
 write the file that actually differs:
 
 ```text
-providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui  →  entry.ui
+providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
+    →  variants/<variant>/entry.ui  →  entry.ui
 ```
 
-Rows also get a `provider-<id>-<variant>` CSS class, so a variant can be styled
-from the provider's `style.css` without its own template. The bundled
-calculator provider is the worked example: it sets a variant from the kind of
-result rink returned, so `providers/calculator/entry.ui` handles ordinary
-numbers and `providers/calculator/date/entry.ui` gives dates a taller row with
-their humanized time underneath.
+**Choosing variant names.** A variant name is a piece of shared vocabulary, not
+a private label, because of the last position in that chain: a theme can ship
+`variants/<name>/entry.ui` once and have every provider that reports `<name>`
+use it. That only pays off if the names mean the same thing across providers,
+so prefer names that describe the *layout* a row wants and that you can imagine
+another provider also wanting:
+
+```rust
+entry("water", "water").variant("list")   // a row with a tall, wrapping detail
+entry("lightyear", "lightyear")           // no variant: title + details is fine
+```
+
+Naming them after your provider's own result types (`unit-definition`,
+`substance`) works too, but then only you can ever use them and the shared
+position is dead weight. If a layout is really yours alone, `providers/<id>/`
+already expresses that, and a variant name you don't share is better expressed
+as not using `.variant()` at all.
+
+Whatever you pick, keep the *provider-scoped* file for the cases where your
+provider needs something the generic layout can't do, and leave the shared one
+alone. A shared template can only populate generic widget ids (`title`,
+`subtitle`, `detail-<key>`), since a key like `detail-human` means nothing to a
+provider that doesn't define it.
+
+Rows also get `variant-<variant>` and `provider-<id>-<variant>` CSS classes, so
+a variant can be styled without its own template — the first is
+provider-independent, the second is specific to you. The bundled calculator
+provider is the worked example: it sets a variant from the kind of result rink
+returned, so `providers/calculator/entry.ui` handles ordinary numbers and
+`providers/calculator/date/entry.ui` gives dates a taller row with their
+humanized time underneath.
 
 ## Complete example: always-active provider
 
