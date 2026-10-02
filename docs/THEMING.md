@@ -109,6 +109,7 @@ scope a rule to the rows you mean. Rows carry:
 | `row` / `row-selected`       | yes           | unselected / selected state             |
 | `title` / `title-selected`   | yes           | the title label                         |
 | `subtitle` / `subtitle-selected` | when present | the subtitle label                  |
+| `comment` / `comment-selected`   | when present | the comment label, for prose           |
 | `score` / `score-selected`   | when declared | both score labels share these two       |
 | `detail`                     | when present  | each filled-in `detail-<key>` label     |
 | `provider-<id>`              | provider rows | which provider produced it              |
@@ -122,24 +123,43 @@ mechanism:
 ```css
 .provider-calculator .title { color: @accent_color; }
 .provider-desktop .row { border-bottom: none; }
-.variant-date .detail { font-style: italic; }
+.variant-info .detail { font-style: italic; }
 .row-selected .detail { color: @huffi_mauve_color; }
 ```
 
-Because class tokens are matched whole, `.provider-calculator-date` selects
+Because class tokens are matched whole, `.provider-calculator-info` selects
 exactly that class and nothing else — no escaping is involved. The practical
 advice is only that you write the **longest** class name you mean: `.provider-my`
 matches all of a provider's rows *including its variants*, which is often not
 what you want.
 
 Of the two variant classes, `variant-<variant>` is the one that scales:
-`.variant-date .title` styles every provider's date rows with one rule, where
-`.provider-calculator-date` is specific to one provider.
+`.variant-info .title` styles every provider's info rows with one rule, where
+`.provider-calculator-info` is specific to one provider.
 
 Selection is expressed by a *second* class rather than a `.selected` prefix,
 which is why a stylesheet can also do `.row-selected .detail { … }` and recolour
 every detail in a selected row at once — the renderer never touches that, so any
 template inherits it for free.
+
+### Sizing one provider differently
+
+Pairing a base class with a provider class is enough to restyle a single
+provider, and the default stylesheet uses it to give calculator rows a larger
+type size — a result is read rather than scanned, and is often the only row on
+screen:
+
+```css
+.provider-calculator .title   { font-size: 17px; }
+.provider-calculator .detail  { font-size: 12px; }
+```
+
+One rule per widget covers both the selected and unselected states, but only
+because of how specificity falls out: `.provider-calculator .title` (two classes)
+outranks `.title-selected` (one), and it beats `.row-selected .detail` on source
+order because it is written later. So **put provider-scoped rules at the end of
+the stylesheet**. A base rule added below one of these silently takes precedence
+again, which is exactly the kind of regression that survives a test suite.
 
 ### Styling the rest of the panel
 
@@ -188,18 +208,19 @@ the chain above is really "first position that exists in either layer wins",
 falling through one file at a time.
 
 That has one consequence worth knowing. If you override
-`providers/calculator/entry.ui` but leave `providers/calculator/date/entry.ui`
-alone, date rows render with the **default theme's** date template, not yours.
-To give one provider a single layout across all of its variants, shadow those
-variant templates with copies of your own file.
+`providers/calculator/entry.ui` but leave `providers/calculator/info/entry.ui`
+alone, substance and unit rows render with the **default theme's** info template,
+not yours. To give one provider a single layout across all of its variants,
+shadow those variant templates with copies of your own file.
 
 If no template is found at all the row is empty rather than an error. In practice
 `entry.ui` is always present, so the chain has a guaranteed fallback.
 
 There are four positions rather than one because templates answer "what widgets
-does this row have?", and that genuinely differs: a calculator date row puts
-`human` beside the title where a number row stacks its details underneath. There
-is no way to merge two layouts, so each arrangement is its own file.
+does this row have?", and that genuinely differs: a calculator substance row
+carries a prose `comment` under the title, where a number row has nothing to say
+there and would be left with a blank line. There is no way to merge two layouts,
+so each arrangement is its own file.
 
 The two variant positions differ only in scope:
 
@@ -211,9 +232,9 @@ The two variant positions differ only in scope:
 A shared `variants/list/entry.ui` therefore lets one file serve any number of
 providers, with no per-provider duplication. The cost is that a shared template
 can only populate widget ids that mean something everywhere — `title`,
-`subtitle`, and `detail-<key>` for keys that are generic. It cannot reference a
-particular provider's key, because a `detail-human` label means nothing to a
-provider that has no `human` detail.
+`subtitle`, `comment`, and `detail-<key>` for keys that are generic. It cannot
+reference a particular provider's key, because a label for one provider's detail
+means nothing to a provider that has no such detail.
 
 The shared position comes **after** the provider's own template. That ordering
 is deliberate: a theme that customises one provider keeps winning for it, and
@@ -232,6 +253,7 @@ these ids:
 | `title-area`    | `GtkBox`    | container for the title and subtitle                  |
 | `title`         | `GtkLabel`  | entry title                                           |
 | `subtitle`      | `GtkLabel`  | entry subtitle (shown only when the entry has one)    |
+| `comment`       | `GtkLabel`  | entry comment: free-form prose, shown only when the entry has one |
 | `scores`        | `GtkBox`    | container for the score labels                        |
 | `score-base`    | `GtkLabel`  | base (fuzzy) score                                    |
 | `score-history` | `GtkLabel`  | history score (shown only when present)               |
@@ -245,12 +267,17 @@ row renders as an empty box. Anything you add beyond the known ids — a
 `GtkImage` decoration, an extra separator — is left untouched, so templates can
 carry arbitrary widgets.
 
+`title`, `subtitle`, and `comment` are three lines of one entry rather than three
+unrelated fields: the headline, a short qualifier, and prose. A theme that
+declares all three decides the arrangement; a theme that declares only some is
+fine, since each is filled only when the entry has it.
+
 Two details about the renderer that are easy to get wrong: a template supplies
 the *label*, not its text, so `title` must be declared without a `label`
 property — otherwise the renderer sets the text but you have pinned a competing
-one, and the row renders blank. And an optional widget such as `subtitle` should
-be declared `visible=false`, since the renderer shows it only when the entry
-actually has that field.
+one, and the row renders blank. And an optional widget such as `subtitle` or
+`comment` should be declared `visible=false`, since the renderer shows it only
+when the entry actually has that field.
 
 ### Named details
 
@@ -312,46 +339,69 @@ expressed by not using a variant at all.
 ## Worked example: the calculator
 
 The bundled calculator provider is the theme feature with the most going on. It
-evaluates `=`-prefixed expressions with [rink], and from the result kind derives
-both a variant and a set of details:
+evaluates `=`-prefixed expressions with [rink] and hands back a structured
+result, which it splits across a row's three text slots plus its detail fields:
 
-| Query         | Variant     | Details it carries                                  |
-|---------------|-------------|-----------------------------------------------------|
-| `=1.609 km`   | `number`    | `quantity` (length), `approx`                       |
-| `=1/3 m/s`    | `number`    | `exact`, `approx`, `dimensions`                     |
-| `=42`         | `number`    | `exact`                                             |
-| `=now`        | `date`      | `human`, `absolute`                                 |
-| `=water`      | `substance` | `doc`, `properties`                                 |
-| `=lightyear`  | `def`       | `def`, `value`, `doc`                               |
-| `=5 min`      | `duration`  | —                                                   |
+| Query          | `title`                  | `subtitle`          | `comment` | details                    |
+|----------------|--------------------------|---------------------|-----------|----------------------------|
+| `=1.609 km`    | `1.609 kilometer`        | —                   | —         | `quantity`, `dimensions`   |
+| `=42`          | `42`                     | —                   | —         | `quantity`                 |
+| `=now`         | `2026-10-03 00:00:00 …`  | `in 3 days`         | —         | —                          |
+| `=water`       | `water`                  | —                   | —         | `properties`               |
+| `=pascal`      | `pascal`                 | `1 pascal`          | *SI derived unit …* | `def`           |
+| `=5 min`       | `5 minute, 0 second (time)` | —              | —         | —                          |
 
-A result only carries what is actually there, which is why the rows differ so
-much. `=42` is dimensionless, so there is no `quantity` and no `dimensions` to
-report; `=1.609 km` is inexact, so there is no `exact`; and `dimensions` is
-dropped whenever it would just repeat the unit. The remaining variants —
-`conversion`, `factorize`, `units-for`, `unit-list`, `search` — carry no details
-today, so they render as title-only rows.
+Three things are worth reading off that table.
 
-The full key set is `calculator::DETAIL_KEYS` in
-[`src/engine/provider/builtin/calculator.rs`][calculator], and a test asserts the
-shipped templates declare only ids from that list — so a field can never appear
-in a row that no template asked for. Declare ids from that list and your theme
-gets exactly the fields you named.
+**The title is the smallest canonical form of one fact, not a sentence.** rink's
+own rendering of `=water` is `water: <doc> {…}` and of `=pascal` is
+`Definition: pascal = … . SI derived unit …`. Neither belongs in a list row, and
+neither is anything you would paste. So the title takes just the name or the
+value, and the rest is distributed — which also means the title doubles as the
+clipboard value and as the expression re-evaluated when the row is tab-selected,
+both of which stay meaningful.
 
-Its theme files are a good template for a provider:
+**A result only carries what is actually there.** `=42` is dimensionless, so
+there is no `dimensions` to report; `=1.609 km` has a `length` quantity to
+mention. Details a result does not have are simply not emitted, so a template
+that declares them costs nothing.
+
+**Prose goes in the comment, not in a detail.** A unit's documentation can be a
+sentence or two, which no `detail-<key>` label is shaped for. That is what
+`providers/calculator/info/entry.ui` arranges, and it is the only calculator
+layout that isn't the stock one:
 
 ```text
-providers/calculator/entry.ui        # declares all ten details
-providers/calculator/date/entry.ui   # dates only, a rearranged row
+providers/calculator/entry.ui        # title, subtitle, quantity, dimensions
+providers/calculator/info/entry.ui   # adds a comment, for substance and unit rows
 ```
 
-The date variant is the case worth reading: `providers/calculator/date/entry.ui`
-pulls `human` up beside the title and lets `absolute` trail to the right, instead
-of stacking both below it the way the provider-level template does. It reaches
-for no new mechanism — just a different arrangement of the same declared
-widgets. Note that it is *provider*-scoped; a `variants/date/entry.ui` would
-have worked identically here, at the cost of claiming the name `date` for every
-provider.
+### Variants name layouts, not result kinds
+
+The calculator emits three variant names, and they are three *arrangements*
+rather than ten kinds of answer:
+
+| Variant  | Selected for                                    | Shape                                    |
+|----------|-------------------------------------------------|------------------------------------------|
+| `number` | numbers and conversions                         | title, optional quantity/dimensions      |
+| `info`   | substances and unit definitions                 | title, value, prose, properties          |
+| `list`   | durations, factorizations, unit lists, searches | one line of text, nothing else           |
+
+A date has **no** variant at all: a title plus a subtitle is exactly the stock
+row, so naming one would buy nothing. A conversion likewise has no variant of
+its own, because rink renders it as a bare value — it *is* a `number` row.
+
+That collapsing is the point. Naming a variant after a result kind puts the
+provider's data model in your theme's directory names, and every new kind
+becomes a new template that mostly looks like the last one. Naming it after the
+arrangement means a theme writes one file per distinct *look*.
+
+The full detail key set is `calculator::DETAIL_KEYS` in
+[`src/engine/provider/builtin/calculator.rs`][calculator], and a test asserts the
+shipped templates declare only ids from that list — so a field can never appear
+in a row that no template asked for, and a key the calculator drops can't leave a
+widget stranded. Declare ids from that list and your theme gets exactly the
+fields you named.
 
 [rink]: https://github.com/tiffany352/rink-rs
 [calculator]: ../src/engine/provider/builtin/calculator.rs

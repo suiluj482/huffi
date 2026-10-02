@@ -76,7 +76,8 @@ pub struct EntryMeta {
     pub title: String,
     /// Secondary label shown below the title.
     pub subtitle: Option<String>,
-    /// Free-form description; fuzzy-matched but not rendered.
+    /// Free-form prose shown below the title and subtitle. Also fuzzy-matched,
+    /// so it counts towards ranking.
     pub comment: Option<String>,
     /// Icon shown next to the title: a themed name or an explicit file path.
     pub icon: Option<Icon>,
@@ -87,9 +88,9 @@ pub struct EntryMeta {
     /// not shown, and a widget with no matching detail stays hidden. Providers
     /// choose the key vocabulary, so this is the channel for structured results
     /// a title and subtitle can't carry — see [`CalculatorProvider`], which uses
-    /// it for quantities, dimensionality, and humanized dates.
+    /// it for quantities, dimensionality, and measured properties.
     pub details: BTreeMap<String, String>,
-    /// Layout variant for this entry, e.g. `"date"`. Selects a row template
+    /// Layout variant for this entry, e.g. `"info"`. Selects a row template
     /// under `providers/<id>/<variant>/entry.ui` in the active theme, falling
     /// back to `providers/<id>/entry.ui` and then the theme-wide `entry.ui`.
     /// Rows also get a `provider-<id>-<variant>` CSS class so variants can be

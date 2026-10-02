@@ -174,12 +174,12 @@ entry("my-entry-id", "Display Name")
 
 | Method | Type | Purpose |
 |---|---|---|
-| `.subtitle(s)` | `String` | Secondary text shown beside the title in the UI |
-| `.comment(s)` | `String` | Longer description (used as a fallback subtitle) |
+| `.subtitle(s)` | `String` | Short qualifier shown under the title |
+| `.comment(s)` | `String` | Long-form prose: a description, a caveat, a definition. **Not** shown by the default `entry.ui`; only a theme that declares a `comment` widget renders it |
 | `.icon(name\|path)` | `String` / path | Icon to show. A string maps to a themed freedesktop icon name (see `.icon_name`); a `Path` to an explicit icon file (see `.icon_path`) |
 | `.detail(key, value)` | `String`, `String` | Named display field, rendered by a theme onto a `detail-<key>` widget. Key must match `[a-z0-9-]+` |
 | `.details(fields)` | iterable of `(String, String)` | Add several `.detail()` fields at once |
-| `.variant(name)` | `String` | Pick a layout variant, e.g. `"date"`, resolving `providers/<id>/<variant>/entry.ui` |
+| `.variant(name)` | `String` | Pick a layout variant, e.g. `"list"`, resolving `providers/<id>/<variant>/entry.ui` |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
@@ -191,6 +191,12 @@ entry("my-entry-id", "Display Name")
 
 Only one of `.score()` or `.match_fields()` may be used on a single entry.
 If neither is called, the entry gets a default score of `1.0`.
+
+**Fill in everything you know.** None of these methods is "extra" — the UI is
+where display decisions get made, so a field you omit is information that can
+never be shown, while one you supply is merely hidden until a theme asks for it.
+Skip a field when you genuinely don't have a value for it, not to keep a row
+short.
 
 ### Icons
 
@@ -315,10 +321,10 @@ are optional and which are effectively required.
 ### Named details and layout variants
 
 A title and a subtitle can't carry a structured result — a unit's quantity and
-dimensionality, a date's humanized relative time. Use `.detail()` for those.
-Keys are provider-defined, so pick a vocabulary your result shape can support
-(`quantity`, `dimensions`, `human`, ...) and document it; a theme then renders
-whichever subset it declares, by declaring a `detail-<key>` label:
+dimensionality, or a substance's dozen measured properties. Use `.detail()` for
+those. Keys are provider-defined, so pick a vocabulary your result shape can
+support (`quantity`, `dimensions`, `properties`, ...) and document it; a theme
+then renders whichever subset it declares, by declaring a `detail-<key>` label:
 
 ```rust
 entry("result", "1.609 km")
@@ -371,10 +377,11 @@ define it.
 Rows also get `variant-<variant>` and `provider-<id>-<variant>` CSS classes, so
 a variant can be styled without its own template — the first is
 provider-independent, the second is specific to you. The bundled calculator
-provider is the worked example: it sets a variant from the kind of result rink
-returned, so `providers/calculator/entry.ui` handles ordinary numbers and
-`providers/calculator/date/entry.ui` gives dates a rearranged row with their
-humanized time beside the title.
+provider is the worked example: it names its three variants after *arrangements*
+rather than after kinds of answer, so `providers/calculator/entry.ui` handles
+most rows and the single `providers/calculator/info/entry.ui` adds a prose
+comment for the substance and unit rows that have documentation to show. A date
+gets no variant at all — a title plus a subtitle is already the stock row.
 
 ## Complete example: always-active provider
 

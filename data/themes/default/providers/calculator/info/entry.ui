@@ -1,22 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Calculator row template.
+  Info layout variant for the calculator.
 
-  The calculator asks for structured results (rink's `QueryReply`), not just a
-  formatted string, so a row has more to show than its title. This is the
-  generic arrangement: title, optional subtitle, then whatever detail fields the
-  result carries. A number fills in the numeric details; a date is title plus
-  subtitle and nothing more; a duration or factorisation has no fields at all and
-  renders title-only.
+  Selected automatically for rink results that have something to *describe* —
+  a substance (`=water`) or a unit definition (`=lightyear`) — via the `info`
+  variant name. This is the one calculator layout that isn't the generic one,
+  and it earns a file because it stacks four things vertically where the
+  generic template stacks three:
 
-  Declared detail keys: quantity, dimensions.
+      water                          title      what was asked
+      18.015 g/mol                   subtitle   the headline value
+      Colourless, odourless liquid   comment    rink's documentation, prose
+      molecular_mass: 18.015; …      details    the structured fields
 
-  `properties` and `def` need somewhere else to go — they belong to a
-  substance or a definition, whose prose and long value lists want their own
-  arrangement. See `providers/calculator/info/entry.ui`.
+  A title can't hold the documentation and a subtitle shouldn't try, so prose
+  gets the `comment` widget. Declared detail keys: properties, def.
 
-  `boost` / `delete` are declared hidden because the renderer only reveals them
-  for entries that have a history key, and doesn't start them hidden itself.
+  Resolved from providers/calculator/info/entry.ui, ahead of
+  providers/calculator/entry.ui.
 -->
 <interface>
   <object class="GtkBox" id="row">
@@ -39,20 +40,36 @@
             <property name="orientation">vertical</property>
             <property name="spacing">2</property>
             <property name="hexpand">true</property>
-            <property name="valign">center</property>
+            <property name="valign">start</property>
             <child>
-              <object class="GtkLabel" id="title">
-                <property name="ellipsize">end</property>
-                <property name="halign">start</property>
-                <property name="xalign">0</property>
+              <object class="GtkBox" id="title-line">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">8</property>
+                <child>
+                  <object class="GtkLabel" id="title">
+                    <property name="ellipsize">end</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="subtitle">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">20</property>
+                  </object>
+                </child>
               </object>
             </child>
             <child>
-              <object class="GtkLabel" id="subtitle">
+              <object class="GtkLabel" id="comment">
                 <property name="visible">false</property>
                 <property name="halign">start</property>
                 <property name="xalign">0</property>
                 <property name="ellipsize">end</property>
+                <property name="max-width-chars">64</property>
               </object>
             </child>
             <child>
@@ -60,19 +77,21 @@
                 <property name="orientation">horizontal</property>
                 <property name="spacing">12</property>
                 <child>
-                  <object class="GtkLabel" id="detail-quantity">
-                    <property name="visible">false</property>
-                    <property name="halign">start</property>
-                    <property name="xalign">0</property>
-                  </object>
-                </child>
-                <child>
-                  <object class="GtkLabel" id="detail-dimensions">
+                  <object class="GtkLabel" id="detail-properties">
                     <property name="visible">false</property>
                     <property name="halign">start</property>
                     <property name="xalign">0</property>
                     <property name="ellipsize">end</property>
-                    <property name="max-width-chars">24</property>
+                    <property name="max-width-chars">64</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-def">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">48</property>
                   </object>
                 </child>
               </object>
@@ -97,7 +116,7 @@
       <object class="GtkButton" id="boost">
         <property name="label">+</property>
         <property name="focusable">false</property>
-        <property name="valign">center</property>
+        <property name="valign">start</property>
         <property name="visible">false</property>
       </object>
     </child>
@@ -105,7 +124,7 @@
       <object class="GtkButton" id="delete">
         <property name="label">−</property>
         <property name="focusable">false</property>
-        <property name="valign">center</property>
+        <property name="valign">start</property>
         <property name="visible">false</property>
       </object>
     </child>

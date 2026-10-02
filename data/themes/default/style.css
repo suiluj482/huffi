@@ -63,6 +63,17 @@ window {
     font-style: italic;
     color: @huffi_mauve_color;
 }
+/* Free-form prose below the title and subtitle: a substance's documentation,
+   a definition's explanation. Muted and a step below the subtitle, since it is
+   context for the value rather than part of it. */
+.comment {
+    font-size: 12px;
+    color: @huffi_subtext0_color;
+}
+.comment-selected {
+    font-size: 12px;
+    color: @huffi_mauve_color;
+}
 .score {
     font-size: 12px;
     color: @huffi_subtext0_color;
@@ -81,6 +92,28 @@ window {
 .row-selected .detail {
     font-size: 11px;
     color: @huffi_mauve_color;
+}
+/* Every row carries a `provider-<id>` class, so one provider can be sized
+   without disturbing the others. A result is read rather than scanned, and is
+   often the only row on screen, so it gets a size of its own.
+
+   This block goes last on purpose. Each rule here ties one provider class to a
+   base class, so it wins over `.title-selected` and friends on specificity and
+   over `.row-selected .detail` on source order — meaning selected and
+   unselected rows come out the same size without repeating every selector. Add
+   a base rule below this and calculator details will silently drop back to
+   11px again. */
+.provider-calculator .title {
+    font-size: 17px;
+}
+.provider-calculator .subtitle {
+    font-size: 13px;
+}
+.provider-calculator .comment {
+    font-size: 13px;
+}
+.provider-calculator .detail {
+    font-size: 12px;
 }
 .badge {
     color: @huffi_mauve_color;

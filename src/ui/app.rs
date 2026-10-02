@@ -28,6 +28,29 @@ use crate::ui::{tasks, theme};
 
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(300);
 
+/// Every widget id [`Launcher::build_row`] binds a field onto.
+///
+/// A template may declare any of these plus whatever structural containers it
+/// likes, but a shipped template that misspells one of these silently loses the
+/// binding — a `subtile` label renders empty and nothing complains. Keeping the
+/// list here, next to the bindings that consume it, lets the theme tests check
+/// the shipped templates against it.
+#[cfg(test)]
+pub(crate) const KNOWN_WIDGET_IDS: &[&str] = &[
+    "row",
+    "clickable",
+    "icon",
+    "title-area",
+    "title",
+    "subtitle",
+    "comment",
+    "scores",
+    "score-base",
+    "score-history",
+    "boost",
+    "delete",
+];
+
 #[derive(Debug, Clone, Copy)]
 enum Step {
     Next,
@@ -59,6 +82,7 @@ struct Row {
     history_score: Option<f64>,
     title: String,
     subtitle: Option<String>,
+    comment: Option<String>,
     details: BTreeMap<String, String>,
     variant: Option<String>,
     icon: Option<Icon>,
@@ -76,6 +100,7 @@ impl From<Scored<EntryMeta>> for Row {
             history_score: scored.history_score,
             title: entry.title,
             subtitle: entry.subtitle,
+            comment: entry.comment,
             details: entry.details,
             variant: entry.variant,
             icon: entry.icon,
@@ -91,6 +116,7 @@ struct BuiltRow {
     row: GBox,
     title: Label,
     sub: Option<Label>,
+    comment: Option<Label>,
     scores: Vec<Label>,
 }
 
@@ -823,6 +849,9 @@ impl Launcher {
             if let Some(sub) = &row.sub {
                 toggle_class(sub, selected, "subtitle-selected", "subtitle");
             }
+            if let Some(comment) = &row.comment {
+                toggle_class(comment, selected, "comment-selected", "comment");
+            }
             for score in &row.scores {
                 toggle_class(score, selected, "score-selected", "score");
             }
@@ -911,6 +940,23 @@ impl Launcher {
             title.set_hexpand(true);
             None
         };
+
+        // The comment is optional in the same way the subtitle is: shown only
+        // when the entry carries one *and* the template declares a `comment`
+        // widget. It holds prose rather than a value, so it belongs below the
+        // title and reads as muted context.
+        let comment = hit.comment.as_ref().and_then(|text| {
+            builder.object::<Label>("comment").inspect(|label| {
+                label.set_text(text);
+                label.add_css_class(if is_selected {
+                    "comment-selected"
+                } else {
+                    "comment"
+                });
+                label.set_halign(Align::Start);
+                label.set_visible(true);
+            })
+        });
 
         let mut scores = Vec::new();
         if let Some(base) = builder.object::<Label>("score-base") {
@@ -1005,6 +1051,7 @@ impl Launcher {
             row,
             title,
             sub,
+            comment,
             scores,
         }
     }

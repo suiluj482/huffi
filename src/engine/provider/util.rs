@@ -114,11 +114,18 @@ impl EntryBuilder {
         self
     }
 
+    /// Set the secondary line under the title.
     pub fn subtitle(mut self, s: impl Into<String>) -> Self {
         self.subtitle = Some(s.into());
         self
     }
 
+    /// Set the long-form description of this entry: prose, a caveat, a
+    /// definition.
+    ///
+    /// The default `entry.ui` does not declare a `comment` widget, so this is
+    /// not shown unless a theme asks for it. Emit what you know; whether it
+    /// reaches the screen is the theme's call.
     pub fn comment(mut self, s: impl Into<String>) -> Self {
         self.comment = Some(s.into());
         self
@@ -171,7 +178,7 @@ impl EntryBuilder {
         self
     }
 
-    /// Select a layout variant for this entry, e.g. `"date"`, resolving
+    /// Select a row layout for this entry, e.g. `"info"`, resolving
     /// `providers/<id>/<variant>/entry.ui` in the active theme.
     ///
     /// See [`EntryMeta::variant`].

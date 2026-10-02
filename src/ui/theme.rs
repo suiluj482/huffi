@@ -247,6 +247,69 @@ mod tests {
         dir
     }
 
+    /// Structural ids the shipped templates add for themselves, on top of the
+    /// ids the renderer binds. A theme may add as many as it likes; the shipped
+    /// ones are listed so that introducing another is a reviewed edit rather
+    /// than an unreviewed attribute.
+    const AUTHOR_IDS: &[&str] = &["details-area", "title-line"];
+
+    /// Every `.ui` template in the embedded theme, as (path, contents).
+    ///
+    /// [`include_dir::Dir::files`] only lists a directory's immediate children,
+    /// so `providers/` and below need walking by hand.
+    fn shipped_templates() -> Vec<(String, String)> {
+        fn collect(dir: &include_dir::Dir<'static>, out: &mut Vec<(String, String)>) {
+            for file in dir.files() {
+                // `path()` is already relative to the root of the embedded
+                // tree, so subdirectories need no prefix of their own.
+                let path = file.path().display().to_string();
+                if path.ends_with(".ui") {
+                    let body = file.contents_utf8().expect("shipped template is UTF-8");
+                    out.push((path, strip_xml_comments(body)));
+                }
+            }
+            for sub in dir.dirs() {
+                collect(sub, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&DEFAULT_THEME_DIR, &mut out);
+        assert!(!out.is_empty(), "no templates found in the embedded theme");
+        out
+    }
+
+    /// Drop `<!-- … -->` so prose in a template's comment isn't mistaken for
+    /// markup. Good enough for the plain, comment-free XML GTK Builder takes.
+    fn strip_xml_comments(xml: &str) -> String {
+        let mut out = String::with_capacity(xml.len());
+        let mut rest = xml;
+        while let Some(start) = rest.find("<!--") {
+            out.push_str(&rest[..start]);
+            match rest[start..].find("-->") {
+                Some(end) => rest = &rest[start + end + 3..],
+                // Unterminated comment: keep what follows it rather than
+                // silently dropping the rest of the file.
+                None => {
+                    out.push_str(&rest[start..]);
+                    return out;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Every `id="…"` value in a template, in document order.
+    fn widget_ids(xml: &str) -> Vec<&str> {
+        xml.match_indices("id=\"")
+            .map(|(at, matched)| {
+                let rest = &xml[at + matched.len()..];
+                let end = rest.find('"').expect("unterminated id attribute");
+                &rest[..end]
+            })
+            .collect()
+    }
+
     #[test]
     fn only_a_missing_named_theme_is_reported() {
         let config_dir = temp_theme_dir("named");
@@ -309,79 +372,89 @@ mod tests {
         );
     }
 
-    /// The calculator templates shipped in the default theme are the only
-    /// in-tree templates that declare `detail-*` widgets, so they're the ones
-    /// worth holding to the provider's actual key set. A `detail-<key>` widget
-    /// the calculator never emits is dead markup, and a key it does emit that
-    /// no template declares is a field nobody can see — both are silent, so
-    /// both are worth catching here.
+    /// The templates shipped in the default theme are the only ones the project
+    /// controls, so they're the ones worth holding to an exact id vocabulary.
     ///
-    /// This is a text check, not a real parse: instantiating the template would
-    /// mean a `GtkBuilder` off the main thread, which gtk4 forbids. So
-    /// well-formedness is still only checked by GTK at runtime; what's checked
-    /// here is that the structural ids and the detail keys line up.
+    /// An id the renderer doesn't know is inert: a misspelled `title` or
+    /// `detail-qantity` leaves a widget that never gets filled, and a row that
+    /// renders half-empty with nothing in the log. Structural containers the
+    /// templates add for themselves are allowed, but only the ones listed in
+    /// [`AUTHOR_IDS`] — so introducing a new one is a deliberate edit here
+    /// rather than a stray attribute nobody reviews.
+    ///
+    /// This is a text check, not a real parse: instantiating a template means a
+    /// `GtkBuilder` off the main thread, which gtk4 forbids. XML
+    /// well-formedness is still only checked by GTK at runtime.
     #[test]
-    fn shipped_calculator_templates_declare_only_real_detail_keys() {
-        use huffi::engine::provider::builtin::calculator::DETAIL_KEYS;
+    fn shipped_templates_only_use_known_widget_ids() {
+        use crate::ui::app::KNOWN_WIDGET_IDS;
         use huffi::engine::provider::is_detail_key;
 
-        let dir = temp_theme_dir("shipped-calc");
-        let theme = Theme::with_root(Some(dir));
-
-        // A key that can't be a widget id is silently dropped by the renderer,
-        // so a key drifting out of the character set would make a field
-        // unreachable rather than fail loudly.
-        for key in DETAIL_KEYS {
-            assert!(
-                is_detail_key(key),
-                "calculator detail key {key:?} is not a usable detail-<key> widget id"
-            );
+        for (path, xml) in shipped_templates() {
+            for id in widget_ids(&xml) {
+                if KNOWN_WIDGET_IDS.contains(&id)
+                    || AUTHOR_IDS.contains(&id)
+                    || id.strip_prefix("detail-").is_some_and(is_detail_key)
+                {
+                    continue;
+                }
+                panic!("{path} declares id {id:?}, which nothing binds");
+            }
         }
+    }
 
-        for variant in [None, Some("date")] {
-            let xml = theme.entry_template(Some("calculator"), variant);
-            let label = variant.unwrap_or("<provider-level>");
-
-            // Without a `row` object the renderer falls back to a bare box, so
-            // a template that lost it degrades every calculator row in silence.
-            assert!(
-                xml.contains("id=\"row\""),
-                "{label} template declares no `row` object"
-            );
-            assert!(
-                xml.contains("id=\"clickable\""),
-                "{label} template declares no `clickable` object, so rows stop \
-                 being click targets"
-            );
-
-            let declared: Vec<&str> = xml
-                .match_indices("id=\"detail-")
-                .map(|(at, matched)| {
-                    let rest = &xml[at + matched.len()..];
-                    let end = rest.find('"').expect("unterminated id attribute");
-                    &rest[..end]
-                })
-                .collect();
-            assert!(!declared.is_empty(), "{label} template declares no details");
-
-            for key in declared {
+    /// `row` is load-bearing: without it the renderer falls back to a bare box,
+    /// so a template that lost it degrades every row it serves in silence.
+    /// `clickable` is the row's click target, so without it rows stop
+    /// responding to clicks.
+    #[test]
+    fn shipped_templates_declare_the_ids_they_rely_on() {
+        for (path, xml) in shipped_templates() {
+            let ids = widget_ids(&xml);
+            for required in ["row", "clickable"] {
                 assert!(
-                    DETAIL_KEYS.contains(&key),
-                    "{label} template declares detail-{key}, which the calculator never emits"
+                    ids.contains(&required),
+                    "{path} declares no `{required}` object"
                 );
             }
         }
+    }
 
-        // Every key the calculator can emit is reachable from some shipped
-        // template, so no detail is unreachable from the default theme.
-        let provider_level = theme.entry_template(Some("calculator"), None).to_string();
-        let date = theme
-            .entry_template(Some("calculator"), Some("date"))
-            .to_string();
+    /// The calculator's detail keys and the shipped calculator templates must
+    /// agree in both directions: a `detail-<key>` widget the calculator never
+    /// emits is dead markup, and a key it does emit that no template declares is
+    /// a field nobody can see. Both are silent, so both are worth catching.
+    #[test]
+    fn shipped_calculator_templates_and_detail_keys_agree() {
+        use huffi::engine::provider::builtin::calculator::DETAIL_KEYS;
+        use huffi::engine::provider::is_detail_key;
+
+        let mut declared: Vec<String> = Vec::new();
+        for (path, xml) in shipped_templates() {
+            if !path.contains("providers/calculator") {
+                continue;
+            }
+            for id in widget_ids(&xml) {
+                if let Some(key) = id.strip_prefix("detail-") {
+                    // A key that can't be a widget id is silently dropped by the
+                    // renderer, so one drifting out of the character set would
+                    // make the field unreachable rather than fail loudly.
+                    assert!(
+                        is_detail_key(key),
+                        "{path} declares detail-{key}, which is not a usable widget id"
+                    );
+                    assert!(
+                        DETAIL_KEYS.contains(&key),
+                        "{path} declares detail-{key}, which the calculator never emits"
+                    );
+                    declared.push(key.to_owned());
+                }
+            }
+        }
+        assert!(!declared.is_empty(), "no calculator detail widgets found");
         for key in DETAIL_KEYS {
-            let declared = format!("id=\"detail-{key}\"");
             assert!(
-                provider_level.contains(&declared) || date.contains(&declared),
+                declared.iter().any(|d| d == key),
                 "calculator emits detail-{key} but no shipped template declares it"
             );
         }
