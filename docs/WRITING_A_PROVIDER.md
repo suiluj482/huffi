@@ -298,8 +298,26 @@ can be styled by users without touching templates — the class is the only
 scoping there is, since a theme has one stylesheet for the whole panel:
 
 ```css
-.provider-my-provider .row { background-color: #1e1e2e; }
-.provider-my-provider .title { color: #cba6f7; }
+.provider-my-provider .row { border-left: 2px solid #cba6f7; }
+.provider-my-provider .title { font-style: italic; }
+```
+
+Your class pairs with the row's built-in ones, which the renderer keeps on the
+widget at all times: `row`, `title`, `subtitle`, `comment`, `score`, plus
+`provider-<id>` and a `variant-<variant>` when the entry names a layout. The
+matching `-selected` classes are *added* on selection rather than swapped in, so
+a rule above applies to selected rows too.
+
+One consequence: a rule scoped to your provider is more specific than any state
+rule, so `.provider-my-provider .title { color: … }` outranks the theme's
+`.title-selected` and keeps your colour on the selected row. Usually that is what
+you want. When it isn't — if the theme's selection colour matters more than yours
+— restate the state rule after yours; the two tie on specificity, so source order
+decides:
+
+```css
+.provider-my-provider .title  { color: #1e1e2e; }
+.row-selected .title-selected { color: @huffi_mauve_color; }
 ```
 
 A provider can also ship its own row layout in the **default theme**,

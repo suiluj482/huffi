@@ -72,6 +72,11 @@ pub struct Theme {
     templates: RefCell<HashMap<TemplateKey, Rc<str>>>,
 }
 
+/// Where a named theme's overlay lives: `<config_dir>/huffi/themes/<name>/`.
+fn theme_root(config_dir: &std::path::Path, name: &str) -> PathBuf {
+    config_dir.join("huffi").join("themes").join(name)
+}
+
 /// Resolve the overlay root for a theme name, and report whether a *named*
 /// theme was asked for but not found.
 ///
@@ -83,7 +88,7 @@ fn user_theme_root(config_dir: Option<&std::path::Path>, name: &str) -> (Option<
         // misconfiguration and must stay quiet.
         return (None, false);
     };
-    let root = config_dir.join("huffi").join("themes").join(name);
+    let root = theme_root(config_dir, name);
     if root.is_dir() {
         (Some(root), false)
     } else {
@@ -97,17 +102,18 @@ impl Theme {
     /// such theme directory.
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
-        let (user_root, missing) = user_theme_root(config::config_dir().as_deref(), &name);
+        let config_dir = config::config_dir();
+        let (user_root, missing) = user_theme_root(config_dir.as_deref(), &name);
         // A misspelled theme name is otherwise indistinguishable from a
         // stylesheet that isn't applying: the overlay simply goes away and the
         // stock default theme renders. Worth a line on stderr.
-        if missing {
-            let at = config::config_dir()
-                .map(|dir| dir.join("huffi").join("themes").join(&name))
-                .unwrap_or_default();
+        //
+        // `missing` implies a config dir, since `user_theme_root` reports a
+        // missing named theme only when it had somewhere to look.
+        if let Some(dir) = config_dir.filter(|_| missing) {
             eprintln!(
                 "huffi: theme {name:?} not found at {} — using the embedded default theme",
-                at.display()
+                theme_root(&dir, &name).display()
             );
         }
         Self {
@@ -240,11 +246,35 @@ fn add_css(display: &gdk::Display, css: &str, priority: u32) {
 mod tests {
     use super::*;
 
-    fn temp_theme_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("huffi-theme-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// A temp theme directory that removes itself when the test's binding drops,
+    /// so a failing or passing run leaves nothing behind in `$TMPDIR`. `tag` must be
+    /// unique per test: the path is keyed by process id, and the test binary runs
+    /// tests on parallel threads.
+    struct TempTheme(PathBuf);
+
+    impl TempTheme {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("huffi-theme-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        /// The directory as a `PathBuf`, for handing to `Theme::with_root`.
+        fn owned(&self) -> PathBuf {
+            self.0.clone()
+        }
+    }
+
+    impl Drop for TempTheme {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// Structural ids the shipped templates add for themselves, on top of the
@@ -312,27 +342,27 @@ mod tests {
 
     #[test]
     fn only_a_missing_named_theme_is_reported() {
-        let config_dir = temp_theme_dir("named");
+        let config_dir = TempTheme::new("named");
         // `user_theme_root` takes the config dir and appends `huffi/themes`,
         // so build a real theme directory underneath it.
-        let theme_dir = config_dir.join("huffi").join("themes").join("mine");
+        let theme_dir = theme_root(config_dir.path(), "mine");
         std::fs::create_dir_all(&theme_dir).unwrap();
 
         // `default` is embedded, so it never has a directory and is not a
         // misconfiguration worth reporting.
         assert_eq!(
-            user_theme_root(Some(config_dir.as_path()), "default"),
+            user_theme_root(Some(config_dir.path()), "default"),
             (None, false)
         );
         // An overlay that exists is not missing.
         assert_eq!(
-            user_theme_root(Some(config_dir.as_path()), "mine"),
+            user_theme_root(Some(config_dir.path()), "mine"),
             (Some(theme_dir), false)
         );
         // A named theme with no directory disables the overlay and is reported,
         // which is what `Theme::new` turns into the stderr warning.
         assert_eq!(
-            user_theme_root(Some(config_dir.as_path()), "typo"),
+            user_theme_root(Some(config_dir.path()), "typo"),
             (None, true)
         );
         // No config dir at all cannot be a typo, and must stay quiet.
@@ -341,8 +371,8 @@ mod tests {
 
     #[test]
     fn embedded_default_resolves_when_user_file_absent() {
-        let dir = temp_theme_dir("missing");
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("missing");
+        let theme = Theme::with_root(Some(dir.owned()));
         let css = theme.resource("style.css").expect("embedded style.css");
         assert!(css.contains("@define-color"));
         let template = theme.entry_template(None, None);
@@ -351,9 +381,9 @@ mod tests {
 
     #[test]
     fn user_file_wins_over_embedded() {
-        let dir = temp_theme_dir("override");
-        std::fs::write(dir.join("style.css"), "/* user css */").unwrap();
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("override");
+        std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
         assert_eq!(
             theme.resource("style.css").as_deref(),
             Some("/* user css */")
@@ -362,9 +392,9 @@ mod tests {
 
     #[test]
     fn missing_user_resource_falls_back_to_embedded() {
-        let dir = temp_theme_dir("fallback");
-        std::fs::write(dir.join("style.css"), "/* user css */").unwrap();
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("fallback");
+        std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
         let template = theme.entry_template(Some("desktop"), None);
         assert!(
             template.contains("id=\"row\""),
@@ -462,15 +492,15 @@ mod tests {
 
     #[test]
     fn provider_template_wins_when_present() {
-        let dir = temp_theme_dir("provider");
-        let provider_dir = dir.join("providers").join("calculator");
+        let dir = TempTheme::new("provider");
+        let provider_dir = dir.path().join("providers").join("calculator");
         std::fs::create_dir_all(&provider_dir).unwrap();
         std::fs::write(
             provider_dir.join("entry.ui"),
             "<interface><object class=\"GtkBox\" id=\"row\"/></interface>",
         )
         .unwrap();
-        let theme = Theme::with_root(Some(dir));
+        let theme = Theme::with_root(Some(dir.owned()));
 
         let calc = theme.entry_template(Some("calculator"), None);
         assert!(calc.contains("GtkBox\" id=\"row\""), "{calc}");
@@ -483,17 +513,15 @@ mod tests {
 
     /// Write a user theme containing a `providers/<id>/<variant>/entry.ui`
     /// alongside the provider-level and theme-wide templates, so the
-    /// resolution chain can be asserted end to end. `tag` must be unique per
-    /// test: [`temp_theme_dir`] clears the directory it returns, and the test
-    /// binary runs tests on parallel threads.
-    fn variant_theme(tag: &str) -> PathBuf {
-        let dir = temp_theme_dir(tag);
+    /// resolution chain can be asserted end to end.
+    fn variant_theme(tag: &str) -> TempTheme {
+        let dir = TempTheme::new(tag);
         for (rel, body) in [
             ("entry.ui", "global"),
             ("providers/calculator/entry.ui", "provider"),
             ("providers/calculator/date/entry.ui", "variant"),
         ] {
-            let path = dir.join(rel);
+            let path = dir.path().join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
         }
@@ -502,7 +530,8 @@ mod tests {
 
     #[test]
     fn variant_template_wins_over_provider_template() {
-        let theme = Theme::with_root(Some(variant_theme("variant-wins")));
+        let dir = variant_theme("variant-wins");
+        let theme = Theme::with_root(Some(dir.owned()));
         let date = theme.entry_template(Some("calculator"), Some("date"));
         assert!(date.contains("variant"), "{date}");
     }
@@ -510,15 +539,15 @@ mod tests {
     /// A theme with a `variants/<name>/entry.ui` that no provider claims. The
     /// "prov" provider has no template of its own, so it should fall through
     /// the provider level to the shared variant.
-    fn shared_variant_theme(tag: &str) -> PathBuf {
-        let dir = temp_theme_dir(tag);
+    fn shared_variant_theme(tag: &str) -> TempTheme {
+        let dir = TempTheme::new(tag);
         for (rel, body) in [
             ("entry.ui", "global"),
             ("providers/calc/entry.ui", "provider"),
             ("providers/calc/priv/entry.ui", "priv-variant"),
             ("variants/shared/entry.ui", "shared-variant"),
         ] {
-            let path = dir.join(rel);
+            let path = dir.path().join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
         }
@@ -527,21 +556,24 @@ mod tests {
 
     #[test]
     fn shared_variant_applies_to_a_provider_with_no_template_of_its_own() {
-        let theme = Theme::with_root(Some(shared_variant_theme("shared-applies")));
+        let dir = shared_variant_theme("shared-applies");
+        let theme = Theme::with_root(Some(dir.owned()));
         let row = theme.entry_template(Some("prov"), Some("shared"));
         assert!(row.contains("shared-variant"), "{row}");
     }
 
     #[test]
     fn shared_variant_applies_when_there_is_no_provider_at_all() {
-        let theme = Theme::with_root(Some(shared_variant_theme("shared-no-provider")));
+        let dir = shared_variant_theme("shared-no-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
         let row = theme.entry_template(None, Some("shared"));
         assert!(row.contains("shared-variant"), "{row}");
     }
 
     #[test]
     fn provider_variant_wins_over_shared_variant() {
-        let theme = Theme::with_root(Some(shared_variant_theme("shared-vs-provider")));
+        let dir = shared_variant_theme("shared-vs-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
         let row = theme.entry_template(Some("calc"), Some("priv"));
         assert!(row.contains("priv-variant"), "{row}");
     }
@@ -551,45 +583,49 @@ mod tests {
     /// having its layout replaced by the shared variant file.
     #[test]
     fn provider_template_wins_over_shared_variant_for_the_same_variant_name() {
-        let dir = temp_theme_dir("shared-after-provider");
+        let dir = TempTheme::new("shared-after-provider");
         for (rel, body) in [
             ("entry.ui", "global"),
             ("providers/calc/entry.ui", "provider"),
             ("variants/shared/entry.ui", "shared-variant"),
         ] {
-            let path = dir.join(rel);
+            let path = dir.path().join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
         }
-        let theme = Theme::with_root(Some(dir));
+        let theme = Theme::with_root(Some(dir.owned()));
         let row = theme.entry_template(Some("calc"), Some("shared"));
         assert!(row.contains("provider"), "{row}");
     }
 
     #[test]
     fn unknown_variant_falls_back_to_provider_template() {
-        let theme = Theme::with_root(Some(variant_theme("variant-unknown")));
+        let dir = variant_theme("variant-unknown");
+        let theme = Theme::with_root(Some(dir.owned()));
         let number = theme.entry_template(Some("calculator"), Some("number"));
         assert!(number.contains("provider"), "{number}");
     }
 
     #[test]
     fn unknown_provider_and_variant_fall_back_to_global_template() {
-        let theme = Theme::with_root(Some(variant_theme("variant-no-provider")));
+        let dir = variant_theme("variant-no-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
         let other = theme.entry_template(Some("desktop"), Some("date"));
         assert!(other.contains("global"), "{other}");
     }
 
     #[test]
     fn variant_without_provider_id_uses_global_template() {
-        let theme = Theme::with_root(Some(variant_theme("variant-unscoped")));
+        let dir = variant_theme("variant-unscoped");
+        let theme = Theme::with_root(Some(dir.owned()));
         let unowned = theme.entry_template(None, Some("date"));
         assert!(unowned.contains("global"), "{unowned}");
     }
 
     #[test]
     fn each_variant_is_cached_separately() {
-        let theme = Theme::with_root(Some(variant_theme("variant-cache")));
+        let dir = variant_theme("variant-cache");
+        let theme = Theme::with_root(Some(dir.owned()));
         let date = theme.entry_template(Some("calculator"), Some("date"));
         let number = theme.entry_template(Some("calculator"), Some("number"));
         assert!(!Rc::ptr_eq(&date, &number));
@@ -605,9 +641,9 @@ mod tests {
 
     #[test]
     fn user_resource_only_reads_user_layer() {
-        let dir = temp_theme_dir("user-only");
-        std::fs::write(dir.join("style.css"), "/* u */").unwrap();
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("user-only");
+        std::fs::write(dir.path().join("style.css"), "/* u */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
         assert_eq!(theme.user_resource("style.css").as_deref(), Some("/* u */"));
 
         let none = Theme::with_root(None);
@@ -616,8 +652,8 @@ mod tests {
 
     #[test]
     fn entry_template_is_cached() {
-        let dir = temp_theme_dir("cache");
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("cache");
+        let theme = Theme::with_root(Some(dir.owned()));
         let a = theme.entry_template(Some("desktop"), None);
         // Pointer equality, not just equal contents: the second call must hand
         // back the very same allocation rather than re-resolving the theme.
@@ -627,8 +663,8 @@ mod tests {
 
     #[test]
     fn default_template_is_cached_separately_from_provider_templates() {
-        let dir = temp_theme_dir("cache-keys");
-        let theme = Theme::with_root(Some(dir));
+        let dir = TempTheme::new("cache-keys");
+        let theme = Theme::with_root(Some(dir.owned()));
         let default = theme.entry_template(None, None);
         let desktop = theme.entry_template(Some("desktop"), None);
         assert!(!Rc::ptr_eq(&default, &desktop));

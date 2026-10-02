@@ -844,16 +844,16 @@ impl Launcher {
         let rows = self.state.borrow();
         for (i, row) in rows.rows.iter().enumerate() {
             let selected = page_base + i == selected;
-            toggle_class(&row.row, selected, "row-selected", "row");
-            toggle_class(&row.title, selected, "title-selected", "title");
+            toggle_selected(&row.row, selected, "row-selected");
+            toggle_selected(&row.title, selected, "title-selected");
             if let Some(sub) = &row.sub {
-                toggle_class(sub, selected, "subtitle-selected", "subtitle");
+                toggle_selected(sub, selected, "subtitle-selected");
             }
             if let Some(comment) = &row.comment {
-                toggle_class(comment, selected, "comment-selected", "comment");
+                toggle_selected(comment, selected, "comment-selected");
             }
             for score in &row.scores {
-                toggle_class(score, selected, "score-selected", "score");
+                toggle_selected(score, selected, "score-selected");
             }
         }
         drop(rows);
@@ -880,7 +880,7 @@ impl Launcher {
             .object::<GBox>("row")
             .unwrap_or_else(|| GBox::new(Orientation::Horizontal, 0));
         row.set_valign(Align::Center);
-        row.add_css_class(if is_selected { "row-selected" } else { "row" });
+        state_class(&row, is_selected, "row", "row-selected");
         if let Some(id) = &hit.provider_id {
             row.add_css_class(&format!("provider-{id}"));
             if let Some(variant) = &hit.variant {
@@ -905,11 +905,7 @@ impl Launcher {
         // declares `title` with no `label` property, so the text has to come
         // from here or the row renders blank.
         title.set_text(&hit.title);
-        title.add_css_class(if is_selected {
-            "title-selected"
-        } else {
-            "title"
-        });
+        state_class(&title, is_selected, "title", "title-selected");
         title.set_ellipsize(pango::EllipsizeMode::End);
         title.set_halign(Align::Start);
         title.set_xalign(0.0);
@@ -928,11 +924,7 @@ impl Launcher {
             title.set_hexpand(false);
             builder.object::<Label>("subtitle").inspect(|sub_label| {
                 sub_label.set_text(sub);
-                sub_label.add_css_class(if is_selected {
-                    "subtitle-selected"
-                } else {
-                    "subtitle"
-                });
+                state_class(sub_label, is_selected, "subtitle", "subtitle-selected");
                 sub_label.set_halign(Align::Start);
                 sub_label.set_visible(true);
             })
@@ -948,11 +940,7 @@ impl Launcher {
         let comment = hit.comment.as_ref().and_then(|text| {
             builder.object::<Label>("comment").inspect(|label| {
                 label.set_text(text);
-                label.add_css_class(if is_selected {
-                    "comment-selected"
-                } else {
-                    "comment"
-                });
+                state_class(label, is_selected, "comment", "comment-selected");
                 label.set_halign(Align::Start);
                 label.set_visible(true);
             })
@@ -961,22 +949,14 @@ impl Launcher {
         let mut scores = Vec::new();
         if let Some(base) = builder.object::<Label>("score-base") {
             base.set_text(&format!("{:.2}", hit.base_score));
-            base.add_css_class(if is_selected {
-                "score-selected"
-            } else {
-                "score"
-            });
+            state_class(&base, is_selected, "score", "score-selected");
             scores.push(base);
         }
         if let Some(h) = hit.history_score
             && let Some(history) = builder.object::<Label>("score-history")
         {
             history.set_text(&format!("{h:.2}"));
-            history.add_css_class(if is_selected {
-                "score-selected"
-            } else {
-                "score"
-            });
+            state_class(&history, is_selected, "score", "score-selected");
             history.set_visible(true);
             scores.push(history);
         }
@@ -1123,17 +1103,35 @@ impl Launcher {
     }
 }
 
-fn toggle_class(
+/// Give a widget the classes for its role and, when the row is selected, for
+/// its state.
+///
+/// The two **coexist** rather than replace one another: `title` styles every
+/// title and `title-selected` layers the selected state on top. That keeps a
+/// rule from having to be restated per state — `.title { font-size: 17px }`
+/// covers both — and it means a state rule can say only what actually differs,
+/// instead of repeating the role's declarations to beat it.
+fn state_class(
     widget: &impl IsA<gtk4::Widget>,
-    selected: bool,
+    is_selected: bool,
+    role_class: &str,
     selected_class: &str,
-    base_class: &str,
 ) {
-    if selected {
+    widget.add_css_class(role_class);
+    if is_selected {
         widget.add_css_class(selected_class);
-        widget.remove_css_class(base_class);
+    }
+}
+
+/// Move a widget in and out of the selected state, leaving its role class on.
+///
+/// The counterpart to [`state_class`] for rows that already exist: selection
+/// moves far more often than rows are rebuilt, so this touches one class and
+/// leaves the row's markup and styling otherwise intact.
+fn toggle_selected(widget: &impl IsA<gtk4::Widget>, is_selected: bool, selected_class: &str) {
+    if is_selected {
+        widget.add_css_class(selected_class);
     } else {
-        widget.add_css_class(base_class);
         widget.remove_css_class(selected_class);
     }
 }

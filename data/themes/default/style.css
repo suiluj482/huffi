@@ -35,6 +35,10 @@ window {
     background-color: @huffi_mauve_color;
     color: @huffi_base_color;
 }
+/* Every widget keeps its role class when selected and gains the matching
+   `-selected` class alongside, so a state rule below only has to state what
+   actually differs. That is why none of these repeat the font-size or padding
+   from the rule above them. */
 .row {
     background-color: @huffi_surface0_color;
     padding: 6px;
@@ -42,15 +46,12 @@ window {
 }
 .row-selected {
     background-color: @huffi_surface1_color;
-    padding: 6px;
-    border-bottom: 1px solid @huffi_base_color;
 }
 .title {
     font-size: 15px;
     color: @huffi_text_color;
 }
 .title-selected {
-    font-size: 15px;
     color: @huffi_mauve_color;
 }
 .subtitle {
@@ -59,8 +60,6 @@ window {
     color: @huffi_subtext0_color;
 }
 .subtitle-selected {
-    font-size: 12px;
-    font-style: italic;
     color: @huffi_mauve_color;
 }
 /* Free-form prose below the title and subtitle: a substance's documentation,
@@ -71,7 +70,6 @@ window {
     color: @huffi_subtext0_color;
 }
 .comment-selected {
-    font-size: 12px;
     color: @huffi_mauve_color;
 }
 .score {
@@ -79,7 +77,6 @@ window {
     color: @huffi_subtext0_color;
 }
 .score-selected {
-    font-size: 12px;
     color: @huffi_mauve_color;
 }
 /* Named detail fields, bound onto `detail-<key>` widgets. Selection is
@@ -97,12 +94,19 @@ window {
    without disturbing the others. A result is read rather than scanned, and is
    often the only row on screen, so it gets a size of its own.
 
-   This block goes last on purpose. Each rule here ties one provider class to a
-   base class, so it wins over `.title-selected` and friends on specificity and
-   over `.row-selected .detail` on source order — meaning selected and
-   unselected rows come out the same size without repeating every selector. Add
-   a base rule below this and calculator details will silently drop back to
-   11px again. */
+   One rule per widget is enough here because a selected row keeps `title`,
+   `subtitle` and `comment` and only gains the `-selected` variant — which
+   those rules don't touch, since a size should not change when the selection
+   moves onto a row.
+
+   This block goes last on purpose: a later rule of equal specificity wins, and
+   `.row-selected .detail` is one of those. Add a base rule below this and
+   calculator details will silently drop back to 11px again.
+
+   Note the flip side, which a theme author needs to know: a provider-scoped
+   rule is *more* specific than any state rule, so `.provider-my .row` beats
+   `.row-selected` and paints over the selection highlight. Restate
+   `.row-selected` after it to keep the highlight. */
 .provider-calculator .title {
     font-size: 17px;
 }

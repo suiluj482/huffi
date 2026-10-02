@@ -106,8 +106,8 @@ scope a rule to the rows you mean. Rows carry:
 
 | Class                        | On every row? | Meaning                                 |
 |------------------------------|---------------|-----------------------------------------|
-| `row` / `row-selected`       | yes           | unselected / selected state             |
-| `title` / `title-selected`   | yes           | the title label                         |
+| `row` / `row-selected`       | yes           | the row / the selected row              |
+| `title` / `title-selected`   | yes           | the title label / when selected         |
 | `subtitle` / `subtitle-selected` | when present | the subtitle label                  |
 | `comment` / `comment-selected`   | when present | the comment label, for prose           |
 | `score` / `score-selected`   | when declared | both score labels share these two       |
@@ -115,6 +115,21 @@ scope a rule to the rows you mean. Rows carry:
 | `provider-<id>`              | provider rows | which provider produced it              |
 | `provider-<id>-<variant>`    | variant rows  | this provider's layout variant          |
 | `variant-<variant>`          | variant rows  | the layout variant, provider-independent |
+
+Each `-selected` class **coexists** with the class it qualifies rather than
+replacing it: a selected row's title carries both `title` and `title-selected`.
+The pair therefore names a role and a state, so `.title { … }` styles every
+title and `.title-selected { … }` styles only the state — and a state rule needs
+to state only what differs:
+
+```css
+.title             { font-size: 15px; color: @huffi_text_color; }
+.title-selected    { color: @huffi_mauve_color; }
+```
+
+It also means a state can be reached from the row instead of the widget, which is
+how `.row-selected .detail` recolours every detail in a selected row at once —
+the renderer never touches the detail's classes, so any template inherits it.
 
 `.provider-calculator .title` cannot match a desktop row, because a desktop row
 does not carry `provider-calculator`. That is the whole of the isolation
@@ -137,11 +152,6 @@ Of the two variant classes, `variant-<variant>` is the one that scales:
 `.variant-info .title` styles every provider's info rows with one rule, where
 `.provider-calculator-info` is specific to one provider.
 
-Selection is expressed by a *second* class rather than a `.selected` prefix,
-which is why a stylesheet can also do `.row-selected .detail { … }` and recolour
-every detail in a selected row at once — the renderer never touches that, so any
-template inherits it for free.
-
 ### Sizing one provider differently
 
 Pairing a base class with a provider class is enough to restyle a single
@@ -154,12 +164,27 @@ screen:
 .provider-calculator .detail  { font-size: 12px; }
 ```
 
-One rule per widget covers both the selected and unselected states, but only
-because of how specificity falls out: `.provider-calculator .title` (two classes)
-outranks `.title-selected` (one), and it beats `.row-selected .detail` on source
-order because it is written later. So **put provider-scoped rules at the end of
-the stylesheet**. A base rule added below one of these silently takes precedence
-again, which is exactly the kind of regression that survives a test suite.
+One rule per widget covers both the selected and unselected states, because the
+role class survives selection and the state rules don't set a size.
+
+There is one consequence worth knowing, and it runs the other way from the last.
+A provider-scoped rule is *more* specific than a state rule, so
+`.provider-my .row { background-color: … }` outranks `.row-selected` and paints
+over the selection highlight — and `.provider-my .title { color: … }` likewise
+outranks `.title-selected`. That is ordinary CSS specificity, and it is usually
+what you want: a provider that sets a row's background has claimed it. When it
+isn't, restate the state rule afterwards — they tie on specificity, so source
+order decides:
+
+```css
+.provider-my .row  { background-color: #1e1e2e; }
+.row-selected .row { background-color: @huffi_surface1_color; }
+```
+
+Beyond that, **put provider-scoped rules at the end of the stylesheet**, so they
+beat the state rules above them on equal specificity. A base rule written below
+one of them silently takes precedence again, which is exactly the kind of
+regression that survives a test suite.
 
 ### Styling the rest of the panel
 
@@ -272,12 +297,15 @@ unrelated fields: the headline, a short qualifier, and prose. A theme that
 declares all three decides the arrangement; a theme that declares only some is
 fine, since each is filled only when the entry has it.
 
-Two details about the renderer that are easy to get wrong: a template supplies
+Three details about the renderer that are easy to get wrong. A template supplies
 the *label*, not its text, so `title` must be declared without a `label`
 property — otherwise the renderer sets the text but you have pinned a competing
-one, and the row renders blank. And an optional widget such as `subtitle` or
-`comment` should be declared `visible=false`, since the renderer shows it only
-when the entry actually has that field.
+one, and the row renders blank. An optional widget such as `subtitle` or
+`comment` should be declared `visible=false`, since the renderer reveals it only
+when the entry actually has that field. And `boost` / `delete` are the one pair
+the renderer *hides* as well as reveals, setting visibility from the presence of
+a history key — so `visible=false` on those is belt-and-braces rather than
+load-bearing, unlike `subtitle`.
 
 ### Named details
 

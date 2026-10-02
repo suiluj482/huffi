@@ -91,11 +91,14 @@ pub struct EntryMeta {
     /// a title and subtitle can't carry — see [`CalculatorProvider`], which uses
     /// it for quantities, dimensionality, and measured properties.
     pub details: BTreeMap<String, String>,
-    /// Layout variant for this entry, e.g. `"info"`. Selects a row template
-    /// under `providers/<id>/<variant>/entry.ui` in the active theme, falling
-    /// back to `providers/<id>/entry.ui` and then the theme-wide `entry.ui`.
-    /// Rows also get a `provider-<id>-<variant>` CSS class so variants can be
-    /// styled from the provider's stylesheet.
+    /// Layout variant for this entry, e.g. `"info"`. Selects a row template by
+    /// walking the theme's positions for this variant: `providers/<id>/<variant>`,
+    /// then `providers/<id>`, then `variants/<variant>`, then the theme-wide
+    /// `entry.ui`. See [`EntryBuilder::variant`].
+    ///
+    /// Rows also get a provider-independent `variant-<variant>` CSS class as well
+    /// as `provider-<id>-<variant>`, so a theme can style one layout across every
+    /// provider that reports it.
     pub variant: Option<String>,
     /// Query the UI applies when the entry is tab-selected, e.g. a
     /// calculator result as `=42`.

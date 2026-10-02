@@ -15,8 +15,9 @@
   substance or a definition, whose prose and long value lists want their own
   arrangement. See `providers/calculator/info/entry.ui`.
 
-  `boost` / `delete` are declared hidden because the renderer only reveals them
-  for entries that have a history key, and doesn't start them hidden itself.
+  `boost` / `delete` are declared hidden as belt-and-braces. The renderer does
+  set their visibility itself — visible only for an entry that has a history key —
+  so this property is redundant rather than load-bearing.
 -->
 <interface>
   <object class="GtkBox" id="row">

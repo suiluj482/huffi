@@ -72,38 +72,11 @@ impl Provider for CalculatorProvider {
         if ctx.query.is_empty() {
             // The placeholder is a value like any other, so it is copied and
             // re-queried on selection just as a result would be.
-            return vec![
-                self.base(PLACEHOLDER)
-                    .clipboard(PLACEHOLDER)
-                    .set_query(format!("={PLACEHOLDER}"))
-                    .score(1.0),
-            ];
+            return vec![self.row(PLACEHOLDER).score(1.0)];
         }
 
         match eval(rink, ctx.query) {
-            Ok(reply) => {
-                let shown = present(&reply);
-                // The title doubles as the clipboard and as the query to
-                // re-evaluate on tab, because it is built from the result's own
-                // canonical form rather than from a sentence describing it.
-                let mut e = self
-                    .base(&shown.title)
-                    .details(shown.details)
-                    .clipboard(shown.title.clone())
-                    .set_query(format!("={}", shown.title));
-                // Only claim a field when the result actually has one. A theme
-                // that declares the widget still decides whether to show it.
-                if let Some(variant) = shown.variant {
-                    e = e.variant(variant);
-                }
-                if let Some(subtitle) = shown.subtitle {
-                    e = e.subtitle(subtitle);
-                }
-                if let Some(comment) = shown.comment {
-                    e = e.comment(comment);
-                }
-                vec![e.score(1.0)]
-            }
+            Ok(reply) => vec![self.present(&reply)],
             // A failed expression is a legitimate result: the error becomes the
             // title, and there is nothing to copy or re-query.
             Err(err) => vec![self.base(&err.to_string()).score(1.0)],
@@ -120,123 +93,127 @@ impl CalculatorProvider {
         }
         e
     }
-}
 
-/// One rink result arranged into the parts a row is built from.
-///
-/// A result's own `Display` is a complete *sentence* — `water: <doc> {…}`,
-/// `Definition: lightyear = …` — which makes a poor title and a hopeless thing
-/// to copy. Each part here is instead the smallest canonical form of one fact,
-/// so the title doubles as both the clipboard value and the expression to
-/// re-evaluate on tab.
-#[derive(Debug)]
-struct Presentation {
-    /// Headline reading, and what gets copied.
-    title: String,
-    /// Short qualifier under the title, e.g. a date's `in 3 days`.
-    subtitle: Option<String>,
-    /// Prose below both, e.g. a substance's documentation.
-    comment: Option<String>,
-    /// Structured fields too big for the three lines above.
-    details: BTreeMap<String, String>,
-    /// Layout variant, or `None` when the stock row layout already fits.
-    variant: Option<&'static str>,
-}
-
-/// Split a rink result into title, subtitle, comment, details, and variant.
-///
-/// Variants name *layouts*, not result kinds, so two kinds that render the same
-/// way share one: a conversion is rink's bare value with no distinguishing
-/// structure, so it is a `number` row. Only three layouts exist because only
-/// three arrangements of these parts do. Named explicitly rather than derived
-/// from the enum variant, so rink's own naming can't leak into theme paths.
-fn present(reply: &QueryReply) -> Presentation {
-    let mut shown = Presentation {
-        title: reply.to_string(),
-        subtitle: None,
-        comment: None,
-        details: BTreeMap::new(),
-        variant: None,
-    };
-    let details = &mut shown.details;
-
-    match reply {
-        QueryReply::Number(parts) => {
+    /// Arrange one rink result into a row.
+    ///
+    /// A result's own `Display` is a complete *sentence* — `water: <doc> {…}`,
+    /// `Definition: lightyear = …` — which makes a poor title and a hopeless thing
+    /// to copy. Each part is instead the smallest canonical form of one fact.
+    ///
+    /// Variants name *layouts*, not result kinds, so two kinds that render the same
+    /// way share one: a conversion is rink's bare value with no distinguishing
+    /// structure, so it is a `number` row. Only three layouts exist because only
+    /// three arrangements of these parts do. Named explicitly rather than derived
+    /// from the enum variant, so rink's own naming can't leak into theme paths.
+    fn present(&self, reply: &QueryReply) -> Entry {
+        let row = match reply {
             // `number_value` rather than rink's `n u w`: the trailing `w` is
             // the parenthesised quantity, which travels as the `quantity`
             // detail instead, and `n` would prefix a bare approximation with
             // `approx.`. A title reading `approx. 1.609 km (length)` is doing
             // three jobs.
-            shown.title = number_value(parts).unwrap_or_else(|| reply.to_string());
-            number_details(parts, details);
-            shown.variant = Some("number");
-        }
-        QueryReply::Conversion(c) => {
-            shown.title = number_value(&c.value).unwrap_or_else(|| reply.to_string());
-            number_details(&c.value, details);
-            shown.variant = Some("number");
-        }
-        QueryReply::Date(d) => {
+            QueryReply::Number(parts) => self
+                .row(&number_value(parts).unwrap_or_else(|| reply.to_string()))
+                .variant("number")
+                .details(number_details(parts)),
+            QueryReply::Conversion(c) => self
+                .row(&number_value(&c.value).unwrap_or_else(|| reply.to_string()))
+                .variant("number")
+                .details(number_details(&c.value)),
             // `string` rather than `rfc3339`: it is what a person reads, and it
-            // is the form that parses back when the row is tab-selected.
-            shown.title = d.string.clone();
-            shown.subtitle = d.human.clone();
-        }
-        QueryReply::Substance(s) => {
-            shown.title = s.name.clone();
-            // `amount` is the quantity of the substance, which for a bare
-            // `=water` is a dimensionless 1 and says nothing. Only worth a
-            // line when it carries a unit, as in `=2 kg water`.
-            shown.subtitle = s
-                .amount
-                .unit
-                .is_some()
-                .then(|| number_value(&s.amount))
-                .flatten();
-            shown.comment = s.doc.as_ref().map(|d| d.text.clone());
-            let properties: Vec<String> = s
-                .properties
-                .iter()
-                .filter_map(|p| number_value(&p.value).map(|v| format!("{}: {}", p.name, v)))
-                .collect();
-            if !properties.is_empty() {
-                details.insert("properties".into(), properties.join(", "));
+            // is the form that parses back when the row is tab-selected. The
+            // relative form belongs beside it, not in place of it.
+            QueryReply::Date(d) => {
+                let row = self.row(&d.string);
+                match &d.human {
+                    Some(human) => row.subtitle(human),
+                    None => row,
+                }
             }
-            shown.variant = Some("info");
-        }
-        QueryReply::Def(d) => {
-            shown.title = d.canon_name.clone();
-            shown.subtitle = d.value.as_ref().and_then(number_value);
-            shown.comment = d.doc.as_ref().map(|d| d.text.clone());
-            put(details, "def", d.def.as_deref());
-            shown.variant = Some("info");
-        }
-        // These read as a single line of already-formatted text, so there is
-        // nothing to take apart and the stock title-only row fits.
-        QueryReply::Duration(_)
-        | QueryReply::Factorize(_)
-        | QueryReply::UnitsFor(_)
-        | QueryReply::UnitList(_)
-        | QueryReply::Search(_) => shown.variant = Some("list"),
+            QueryReply::Substance(s) => {
+                let mut row = self.row(&s.name).variant("info");
+                // `amount` is the quantity of the substance, which for a bare
+                // `=water` is a dimensionless 1 and says nothing. Only worth a
+                // line when it carries a unit, as in `=2 kg water`.
+                if s.amount.unit.is_some()
+                    && let Some(amount) = number_value(&s.amount)
+                {
+                    row = row.subtitle(amount);
+                }
+                if let Some(doc) = &s.doc {
+                    row = row.comment(doc.text.clone());
+                }
+                let properties: Vec<String> = s
+                    .properties
+                    .iter()
+                    .filter_map(|p| number_value(&p.value).map(|v| format!("{}: {}", p.name, v)))
+                    .collect();
+                if !properties.is_empty() {
+                    row = row.detail("properties", properties.join(", "));
+                }
+                row
+            }
+            QueryReply::Def(d) => {
+                let mut row = self.row(&d.canon_name).variant("info");
+                if let Some(value) = d.value.as_ref().and_then(number_value) {
+                    row = row.subtitle(value);
+                }
+                if let Some(doc) = &d.doc {
+                    row = row.comment(doc.text.clone());
+                }
+                if let Some(def) = presentable(d.def.as_deref()) {
+                    row = row.detail("def", def);
+                }
+                row
+            }
+            // These read as a single line of already-formatted text, so there is
+            // nothing to take apart and the stock title-only row fits.
+            QueryReply::Duration(_)
+            | QueryReply::Factorize(_)
+            | QueryReply::UnitsFor(_)
+            | QueryReply::UnitList(_)
+            | QueryReply::Search(_) => self.row(&reply.to_string()).variant("list"),
+        };
+        // A result is the answer to what was typed, so it always ranks above
+        // the providers' own suggestions, however well those match the query.
+        row.score(1.0)
     }
 
-    shown
+    /// Start a row from its headline reading.
+    ///
+    /// The title is also the clipboard value and the query that re-evaluates it,
+    /// because all three are the same canonical form of one fact. Every result
+    /// needs all three, so they are set once here rather than in each arm.
+    fn row(&self, title: &str) -> crate::engine::provider::EntryBuilder {
+        self.base(title)
+            .clipboard(title)
+            .set_query(format!("={title}"))
+    }
 }
 
 /// The fields a numeric result contributes: its physical quantity, and its
 /// dimensionality when that says something the unit doesn't.
-fn number_details(parts: &NumberParts, details: &mut BTreeMap<String, String>) {
-    put(details, "quantity", parts.quantity.as_deref());
+fn number_details(parts: &NumberParts) -> BTreeMap<String, String> {
+    let mut details = BTreeMap::new();
+    put(&mut details, "quantity", parts.quantity.as_deref());
     if parts.dimensions.as_deref() != parts.unit.as_deref() {
-        put(details, "dimensions", parts.dimensions.as_deref());
+        put(&mut details, "dimensions", parts.dimensions.as_deref());
     }
+    details
+}
+
+/// A detail's value, with blank treated as absent: rink's formatter compacts
+/// whitespace, so a part the pattern didn't match comes back as an empty string
+/// rather than `None`, and an empty detail would render a blank label.
+fn presentable(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
 }
 
 /// Record a detail under `key`, skipping anything unset or blank. rink's
 /// formatter compacts whitespace, so a part the pattern didn't match comes
 /// back as an empty string rather than `None`.
 fn put(details: &mut BTreeMap<String, String>, key: &str, value: Option<&str>) {
-    if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
+    if let Some(value) = presentable(value) {
         details.insert(key.to_owned(), value.to_owned());
     }
 }
@@ -275,6 +252,12 @@ mod tests {
     };
 
     use super::*;
+
+    /// One result's entry fields, so assertions read `shown.title` rather than
+    /// `shown.entry.title`.
+    fn shown(reply: &QueryReply) -> crate::engine::provider::EntryMeta {
+        CalculatorProvider::new().present(reply).entry
+    }
 
     fn detail<'a>(details: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
         details.get(key).map(String::as_str)
@@ -317,7 +300,7 @@ mod tests {
 
     #[test]
     fn number_title_leaves_the_quantity_to_its_own_detail() {
-        let shown = present(&QueryReply::Number(NumberParts {
+        let shown = shown(&QueryReply::Number(NumberParts {
             approx_value: Some("1.609".into()),
             unit: Some("km".into()),
             quantity: Some("length".into()),
@@ -328,7 +311,7 @@ mod tests {
         assert_eq!(detail(&shown.details, "quantity"), Some("length"));
         // `dimensions` equals `unit` here, so it isn't worth repeating.
         assert_eq!(detail(&shown.details, "dimensions"), None);
-        assert_eq!(shown.variant, Some("number"));
+        assert_eq!(shown.variant.as_deref(), Some("number"));
     }
 
     /// The title is the exact reading when rink has one and the approximation
@@ -353,7 +336,7 @@ mod tests {
             },
         ];
         for parts in cases {
-            let shown = present(&QueryReply::Number(parts.clone()));
+            let shown = shown(&QueryReply::Number(parts.clone()));
             assert!(
                 !shown.details.contains_key("exact") && !shown.details.contains_key("approx"),
                 "{shown:?}"
@@ -363,7 +346,7 @@ mod tests {
 
     #[test]
     fn number_exposes_dimensionality_when_it_differs_from_the_unit() {
-        let shown = present(&QueryReply::Number(NumberParts {
+        let shown = shown(&QueryReply::Number(NumberParts {
             exact_value: Some("1/3".into()),
             unit: Some("m/s".into()),
             dimensions: Some("L T^-1".into()),
@@ -375,7 +358,7 @@ mod tests {
 
     #[test]
     fn dimensionless_number_omits_quantity_and_dimensions() {
-        let shown = present(&QueryReply::Number(NumberParts {
+        let shown = shown(&QueryReply::Number(NumberParts {
             exact_value: Some("42".into()),
             ..Default::default()
         }));
@@ -388,7 +371,7 @@ mod tests {
     /// is the same layout and must not claim a variant of its own.
     #[test]
     fn conversion_shares_the_number_layout() {
-        let shown = present(&QueryReply::Conversion(Box::new(ConversionReply {
+        let shown = shown(&QueryReply::Conversion(Box::new(ConversionReply {
             value: NumberParts {
                 exact_value: Some("1/3".into()),
                 unit: Some("m/s".into()),
@@ -398,12 +381,12 @@ mod tests {
         })));
         assert_eq!(shown.title, "1/3 m/s");
         assert_eq!(detail(&shown.details, "quantity"), Some("speed"));
-        assert_eq!(shown.variant, Some("number"));
+        assert_eq!(shown.variant.as_deref(), Some("number"));
     }
 
     #[test]
     fn date_splits_readable_time_from_relative_time() {
-        let shown = present(&QueryReply::Date(date(Some("in 3 days"))));
+        let shown = shown(&QueryReply::Date(date(Some("in 3 days"))));
         assert_eq!(shown.title, "2026-10-03 00:00:00 [Europe/Berlin]");
         assert_eq!(shown.subtitle.as_deref(), Some("in 3 days"));
         assert!(shown.comment.is_none());
@@ -415,7 +398,7 @@ mod tests {
 
     #[test]
     fn date_without_humanization_leaves_the_subtitle_unset() {
-        let shown = present(&QueryReply::Date(date(None)));
+        let shown = shown(&QueryReply::Date(date(None)));
         assert_eq!(shown.title, "2026-10-03 00:00:00 [Europe/Berlin]");
         assert_eq!(shown.subtitle, None);
         assert!(shown.details.is_empty());
@@ -423,7 +406,7 @@ mod tests {
 
     #[test]
     fn substance_uses_name_amount_and_prose() {
-        let shown = present(&QueryReply::Substance(substance("water")));
+        let shown = shown(&QueryReply::Substance(substance("water")));
         assert_eq!(shown.title, "water");
         // The fixture's amount is a dimensionless 1, which says nothing.
         assert_eq!(shown.subtitle, None);
@@ -432,7 +415,7 @@ mod tests {
             detail(&shown.details, "properties"),
             Some("molar mass: 18.015 g/mol")
         );
-        assert_eq!(shown.variant, Some("info"));
+        assert_eq!(shown.variant.as_deref(), Some("info"));
     }
 
     /// `=2 kg water` has an amount worth a line of its own, unlike `=water`.
@@ -444,14 +427,14 @@ mod tests {
             unit: Some("kilogram".into()),
             ..Default::default()
         };
-        let shown = present(&QueryReply::Substance(reply));
+        let shown = shown(&QueryReply::Substance(reply));
         assert_eq!(shown.title, "water");
         assert_eq!(shown.subtitle.as_deref(), Some("2 kilogram"));
     }
 
     #[test]
     fn def_uses_name_value_and_prose() {
-        let shown = present(&QueryReply::Def(Box::new(DefReply {
+        let shown = shown(&QueryReply::Def(Box::new(DefReply {
             canon_name: "lightyear".into(),
             def: Some("9460730472580800 m".into()),
             def_expr: None,
@@ -465,12 +448,12 @@ mod tests {
         assert_eq!(shown.subtitle.as_deref(), Some("9.461"));
         assert_eq!(shown.comment.as_deref(), Some("a distance"));
         assert_eq!(detail(&shown.details, "def"), Some("9460730472580800 m"));
-        assert_eq!(shown.variant, Some("info"));
+        assert_eq!(shown.variant.as_deref(), Some("info"));
     }
 
     #[test]
     fn def_without_value_or_doc_omits_them() {
-        let shown = present(&QueryReply::Def(Box::new(DefReply {
+        let shown = shown(&QueryReply::Def(Box::new(DefReply {
             canon_name: "foo".into(),
             def: Some("1 m".into()),
             def_expr: None,
@@ -491,7 +474,7 @@ mod tests {
             amount: NumberParts::default(),
             properties: vec![],
         };
-        let shown = present(&QueryReply::Substance(bare));
+        let shown = shown(&QueryReply::Substance(bare));
         assert_eq!(shown.title, "unobtainium");
         assert_eq!(shown.subtitle, None);
         assert_eq!(shown.comment, None);
@@ -529,12 +512,12 @@ mod tests {
             QueryReply::Search(SearchReply { results: vec![] }),
         ];
         for reply in cases {
-            let shown = present(&reply);
+            let shown = shown(&reply);
             assert_eq!(shown.title, reply.to_string());
             assert_eq!(shown.subtitle, None);
             assert_eq!(shown.comment, None);
             assert!(shown.details.is_empty());
-            assert_eq!(shown.variant, Some("list"));
+            assert_eq!(shown.variant.as_deref(), Some("list"));
         }
     }
 
@@ -569,7 +552,7 @@ mod tests {
             QueryReply::Search(SearchReply { results: vec![] }),
         ];
         for reply in cases {
-            let shown = present(&reply);
+            let shown = shown(&reply);
             assert!(!shown.title.trim().is_empty(), "{reply:?}");
         }
     }
@@ -580,13 +563,13 @@ mod tests {
     #[test]
     fn variant_names_are_path_safe_and_collapse_to_three_layouts() {
         let names = [
-            present(&QueryReply::Number(NumberParts::default())).variant,
-            present(&QueryReply::Conversion(Box::new(ConversionReply {
+            shown(&QueryReply::Number(NumberParts::default())).variant,
+            shown(&QueryReply::Conversion(Box::new(ConversionReply {
                 value: NumberParts::default(),
             })))
             .variant,
-            present(&QueryReply::Substance(substance("water"))).variant,
-            present(&QueryReply::Def(Box::new(DefReply {
+            shown(&QueryReply::Substance(substance("water"))).variant,
+            shown(&QueryReply::Def(Box::new(DefReply {
                 canon_name: "foo".into(),
                 def: None,
                 def_expr: None,
@@ -594,11 +577,11 @@ mod tests {
                 doc: None,
             })))
             .variant,
-            present(&QueryReply::Search(SearchReply { results: vec![] })).variant,
+            shown(&QueryReply::Search(SearchReply { results: vec![] })).variant,
         ];
-        let mut unique: Vec<&str> = Vec::new();
+        let mut unique: Vec<String> = Vec::new();
         for name in names {
-            let name = name.expect("every listed kind names a layout");
+            let name = name.as_deref().expect("every listed kind names a layout");
             assert!(
                 !name.is_empty()
                     && name
@@ -606,14 +589,14 @@ mod tests {
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
                 "variant name {name:?} must be usable as a directory name"
             );
-            if !unique.contains(&name) {
-                unique.push(name);
+            if !unique.iter().any(|u| u.as_str() == name) {
+                unique.push(name.to_owned());
             }
         }
         unique.sort_unstable();
-        assert_eq!(unique, ["info", "list", "number"]);
+        assert_eq!(unique, ["info", "list", "number"].map(String::from));
         // A date is deliberately absent: title plus subtitle needs no variant.
-        assert_eq!(present(&QueryReply::Date(date(None))).variant, None);
+        assert_eq!(shown(&QueryReply::Date(date(None))).variant, None);
     }
 
     /// Checks which parts real replies populate, as opposed to which the
@@ -626,10 +609,10 @@ mod tests {
     #[test]
     fn real_replies_fill_the_expected_parts() {
         let mut ctx = simple_context().unwrap();
-        let mut show = |q: &str| present(&eval(&mut ctx, q).unwrap());
+        let mut show = |q: &str| shown(&eval(&mut ctx, q).unwrap());
 
         let number = show("18.015 g/mol");
-        assert_eq!(number.variant, Some("number"));
+        assert_eq!(number.variant.as_deref(), Some("number"));
         // Note rink normalises to base units, so the title is `0.018015
         // kilogram / mole`, not what was typed. That is the canonical reading
         // and what the clipboard gets; the unit that was typed is not
@@ -651,7 +634,7 @@ mod tests {
         assert!(date.subtitle.is_some(), "{date:?}");
 
         let substance = show("water");
-        assert_eq!(substance.variant, Some("info"));
+        assert_eq!(substance.variant.as_deref(), Some("info"));
         assert_eq!(substance.title, "water");
         assert!(substance.subtitle.is_none(), "{substance:?}");
         assert!(
@@ -666,7 +649,7 @@ mod tests {
         // A documented unit is where the comment earns its place: rink's docs
         // are sparse for substances but present for many units.
         let unit = show("pascal");
-        assert_eq!(unit.variant, Some("info"));
+        assert_eq!(unit.variant.as_deref(), Some("info"));
         assert_eq!(unit.title, "pascal");
         assert!(
             unit.comment
@@ -679,7 +662,7 @@ mod tests {
         // `1/3 m/s` normalizes to base units, so the unit is a compound
         // expression rather than the one that was typed.
         let def = show("lightyear");
-        assert_eq!(def.variant, Some("info"));
+        assert_eq!(def.variant.as_deref(), Some("info"));
         assert_eq!(def.title, "lightyear");
         assert!(def.subtitle.is_some(), "{def:?}");
         assert!(def.details.contains_key("def"), "{:?}", def.details);
@@ -711,9 +694,9 @@ mod tests {
     fn titles_round_trip_as_queries() {
         let mut ctx = simple_context().unwrap();
         for q in ["water", "lightyear", "18.015 g/mol"] {
-            let title = present(&eval(&mut ctx, q).unwrap()).title;
+            let title = shown(&eval(&mut ctx, q).unwrap()).title;
             let again = eval(&mut ctx, &title)
-                .map(|reply| present(&reply).title)
+                .map(|reply| shown(&reply).title)
                 .unwrap_or_else(|err| err.to_string());
             assert_eq!(again, title, "re-querying the title of {q:?} moved it");
         }

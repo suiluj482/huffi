@@ -3,10 +3,10 @@
   Default entry-row template (GTK Builder XML).
 
   Widget ids the row renderer binds to:
-    row           GtkBox  – the row container (gets css classes `row` /
-                            `row-selected` plus `provider-<id>` and, when the
-                            entry names one, `variant-<variant>` and
-                            `provider-<id>-<variant>`)
+    row           GtkBox  – the row container (gets css classes `row` plus
+                            `row-selected` when selected, and `provider-<id>`
+                            and, when the entry names one, `variant-<variant>`
+                            and `provider-<id>-<variant>`)
     clickable     GtkBox  – click target; receives the pointer cursor and a
                             click controller which selects / double-click submits
     icon          GtkImage – entry icon (pixel size is set from [ui].icon_size)
@@ -96,6 +96,7 @@
         <property name="label">+</property>
         <property name="focusable">false</property>
         <property name="valign">center</property>
+        <property name="visible">false</property>
       </object>
     </child>
     <child>
@@ -103,6 +104,7 @@
         <property name="label">−</property>
         <property name="focusable">false</property>
         <property name="valign">center</property>
+        <property name="visible">false</property>
       </object>
     </child>
   </object>

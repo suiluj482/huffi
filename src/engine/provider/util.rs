@@ -178,8 +178,10 @@ impl EntryBuilder {
         self
     }
 
-    /// Select a row layout for this entry, e.g. `"info"`, resolving
-    /// `providers/<id>/<variant>/entry.ui` in the active theme.
+    /// Select a row layout for this entry, e.g. `"info"`. A variant names a
+    /// *layout* rather than a result kind, so prefer a name another provider
+    /// could plausibly want too — that is what lets a theme ship one
+    /// `variants/<name>/entry.ui` for every provider reporting it.
     ///
     /// See [`EntryMeta::variant`].
     pub fn variant(mut self, name: impl Into<String>) -> Self {
