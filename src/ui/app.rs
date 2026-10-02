@@ -20,7 +20,7 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
 use huffi::engine::provider::ProviderMeta;
-use huffi::engine::provider::{EntryMeta, Icon};
+use huffi::engine::provider::{EntryMeta, Icon, is_detail_key};
 use huffi::engine::scoring::Scored;
 
 use crate::ui::control::{self, ControlRequest};
@@ -253,7 +253,6 @@ impl Launcher {
                 move |providers| {
                     if let Some(this) = weak.upgrade() {
                         this.state.borrow_mut().providers = providers;
-                        this.load_provider_css();
                         this.render_list();
                     }
                 }
@@ -261,20 +260,6 @@ impl Launcher {
         );
 
         this
-    }
-
-    /// Register the per-provider stylesheets for the current provider list.
-    fn load_provider_css(self: &Rc<Self>) {
-        let ids: Vec<String> = self
-            .state
-            .borrow()
-            .providers
-            .iter()
-            .map(|p| p.id.clone())
-            .collect();
-        if let Some(display) = gdk::Display::default() {
-            theme::load_provider_css(&display, &self.theme, &ids);
-        }
     }
 
     pub fn show_with_query(self: &Rc<Self>, query: String) {
@@ -955,7 +940,15 @@ impl Launcher {
         // some key simply doesn't show that field, and a widget whose key the
         // entry doesn't carry stays hidden. Selection state is handled purely
         // in CSS (`.row-selected .detail`), so there's nothing to track here.
+        //
+        // A key that can't be a GTK object id is skipped rather than looked up
+        // as-is: `EntryBuilder::detail` debug-asserts on it, so this only
+        // happens in a release build whose provider is already broken, and
+        // dropping the field is better than looking up an id we can't trust.
         for (key, value) in &hit.details {
+            if !is_detail_key(key) {
+                continue;
+            }
             let id = format!("detail-{key}");
             if let Some(label) = builder.object::<Label>(&id) {
                 label.set_text(value);

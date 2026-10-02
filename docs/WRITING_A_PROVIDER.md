@@ -280,34 +280,37 @@ If no action is set, selection does nothing (`Action::NoOp`).
 ## Theming provider entries
 
 Each entry row is rendered from the active theme's GTK Builder template
-(`entry.ui`) and styled by its stylesheet. Every row carries a
+(`entry.ui`) and styled by the theme's stylesheet. Every row carries a
 `provider-<id>` CSS class automatically, so rows that come from your provider
-can be styled by users without touching templates:
+can be styled by users without touching templates — the class is the only
+scoping there is, since a theme has one stylesheet for the whole panel:
 
 ```css
 .provider-my-provider .row { background-color: #1e1e2e; }
 .provider-my-provider .title { color: #cba6f7; }
 ```
 
-A provider can also ship its own row layout and scoped stylesheet in the
-**default theme**, alongside the code that produces its entries, so the
-default look is customized out of the box:
+A provider can also ship its own row layout in the **default theme**,
+alongside the code that produces its entries, so the default look is customized
+out of the box:
 
 ```text
 data/themes/default/providers/<your provider id>/
-  style.css   # loaded for this provider's rows only
-  entry.ui    # GTK Builder row template (see the default entry.ui for ids)
+  entry.ui    # GTK Builder row template
   <variant>/
     entry.ui  # optional row template for one layout variant of this provider
 ```
 
 Users override any of these by placing a file at the same relative path
 inside their own theme (`~/.config/huffi/themes/<name>/providers/<id>/`).
-The renderer binds entry fields onto the documented widget ids (`row`,
-`clickable`, `icon`, `title`, `subtitle`, `score-base`, `score-history`,
-`boost`, `delete`); a template that omits a widget simply doesn't show it.
 Since provider ids are stable (never overridden by config), they double as
 theme keys.
+
+What the renderer binds onto a template, the ids you may declare in it, and the
+order in which a row picks one are all covered in
+**[`THEMING.md`](THEMING.md)** — read it before writing an `entry.ui` rather
+than copying the ids out of the default one, since it also documents which ids
+are optional and which are effectively required.
 
 ### Named details and layout variants
 
@@ -331,25 +334,24 @@ entry("result", "1.609 km")
 </child>
 ```
 
-There is no catch-all widget: a template renders exactly the details it
-declares, so users can drop any field they don't care about.
+Keys must match `[a-z0-9-]+`, since they become part of a GTK object id;
+`EntryBuilder::detail` asserts this in debug builds, so a bad key shows up in
+your tests rather than as a field that quietly never appears. There is no
+catch-all widget: a template renders exactly the details it declares, so
+users can drop any field they don't care about.
 
 When different kinds of result want genuinely different layouts rather than
 just a different set of details, add `.variant()`. It selects a more specific
-template, and resolution falls through one level at a time, so you only need to
-write the file that actually differs:
+template (see [`THEMING.md`](THEMING.md#which-template-a-row-uses)), and resolution
+falls through one level at a time, so you only need to write the file that
+actually differs.
 
-```text
-providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
-    →  variants/<variant>/entry.ui  →  entry.ui
-```
-
-**Choosing variant names.** A variant name is a piece of shared vocabulary, not
-a private label, because of the last position in that chain: a theme can ship
-`variants/<name>/entry.ui` once and have every provider that reports `<name>`
-use it. That only pays off if the names mean the same thing across providers,
-so prefer names that describe the *layout* a row wants and that you can imagine
-another provider also wanting:
+**Choosing variant names.** A variant name is shared vocabulary, not a private
+label, because the chain ends in a `variants/<name>/entry.ui` position that any
+theme can fill: one file there serves every provider reporting `<name>`. That
+only pays off if the name means the same thing across providers, so prefer names
+describing the *layout* a row wants and that you can imagine another provider
+also wanting:
 
 ```rust
 entry("water", "water").variant("list")   // a row with a tall, wrapping detail
@@ -357,24 +359,22 @@ entry("lightyear", "lightyear")           // no variant: title + details is fine
 ```
 
 Naming them after your provider's own result types (`unit-definition`,
-`substance`) works too, but then only you can ever use them and the shared
-position is dead weight. If a layout is really yours alone, `providers/<id>/`
-already expresses that, and a variant name you don't share is better expressed
-as not using `.variant()` at all.
-
-Whatever you pick, keep the *provider-scoped* file for the cases where your
-provider needs something the generic layout can't do, and leave the shared one
-alone. A shared template can only populate generic widget ids (`title`,
-`subtitle`, `detail-<key>`), since a key like `detail-human` means nothing to a
-provider that doesn't define it.
+`substance`) works too, but then only you can ever use them and that shared
+position is dead weight. If a layout really is yours alone,
+`providers/<id>/` already expresses it, and a variant name you don't share is
+better expressed as not using `.variant()` at all. Either way, keep the
+*provider-scoped* file for what your provider needs that a generic layout can't
+do, and leave the shared position alone — it can only populate generic widget
+ids, since a key like `detail-human` means nothing to a provider that doesn't
+define it.
 
 Rows also get `variant-<variant>` and `provider-<id>-<variant>` CSS classes, so
 a variant can be styled without its own template — the first is
 provider-independent, the second is specific to you. The bundled calculator
 provider is the worked example: it sets a variant from the kind of result rink
 returned, so `providers/calculator/entry.ui` handles ordinary numbers and
-`providers/calculator/date/entry.ui` gives dates a taller row with their
-humanized time underneath.
+`providers/calculator/date/entry.ui` gives dates a rearranged row with their
+humanized time beside the title.
 
 ## Complete example: always-active provider
 
@@ -446,7 +446,7 @@ Two details worth copying:
 
 The provider takes no `.extra` config and its `InitContext.extra` is `None`, so
 there is nothing to document in `config.toml`; the keys are user-visible through
-the default theme instead (see [`CONFIG.md`](CONFIG.md#themes)).
+the default theme instead (see [`THEMING.md`](THEMING.md)).
 
 ## Registering a provider
 
@@ -471,4 +471,4 @@ is passed through `InitContext`. Built-ins are registered in
 [`entry()`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs
-[`CONFIG.md`]: CONFIG.md#themes
+[`THEMING.md`]: THEMING.md

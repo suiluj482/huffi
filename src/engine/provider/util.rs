@@ -58,6 +58,24 @@ impl Action {
     }
 }
 
+/// Whether `key` is usable as a named-detail key: a non-empty run of
+/// `[a-z0-9-]`, since the row renderer turns it into a `detail-<key>` GTK
+/// object id and looks the widget up under exactly that name.
+///
+/// Enforced by `debug_assert!` in [`EntryBuilder::detail`] rather than a
+/// panic. `Provider::query` returns a plain `Vec<Entry>`, so a provider has no
+/// way to report a bad key; a hard assert would mean one bad key in a
+/// third-party provider crashes the launcher on every keystroke. This way
+/// development builds and the test suite fail loudly at the point of the
+/// mistake, while a release build degrades safely — the renderer skips keys
+/// failing this check, so the field is simply not shown.
+pub fn is_detail_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
     EntryBuilder {
         id: id.into(),
@@ -127,17 +145,29 @@ impl EntryBuilder {
 
     /// Add a named display field, bound by the row renderer onto a
     /// `detail-<key>` widget in the active theme's row template. Keys must
-    /// match `[a-z0-9-]+`. A later detail with the same key replaces this one.
+    /// match `[a-z0-9-]+` (see [`is_detail_key`]). A later detail with the same
+    /// key replaces this one.
     ///
     /// See [`EntryMeta::details`].
     pub fn detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.details.insert(key.into(), value.into());
+        let key = key.into();
+        debug_assert!(
+            is_detail_key(&key),
+            "detail key {key:?} must match [a-z0-9-]+ to become a detail-<key> widget id"
+        );
+        self.details.insert(key, value.into());
         self
     }
 
     /// Add several named display fields at once. Later keys win.
     pub fn details(mut self, fields: impl IntoIterator<Item = (String, String)>) -> Self {
         self.details.extend(fields);
+        for key in self.details.keys() {
+            debug_assert!(
+                is_detail_key(key),
+                "detail key {key:?} must match [a-z0-9-]+ to become a detail-<key> widget id"
+            );
+        }
         self
     }
 
@@ -349,6 +379,34 @@ mod tests {
     use super::*;
     use serde::Deserialize;
 
+    #[test]
+    fn detail_keys_must_be_lowercase_word_chars() {
+        for good in ["quantity", "exact", "doc", "abs-time", "x1", "9lives", "-"] {
+            assert!(is_detail_key(good), "{good:?} should be a valid detail key");
+        }
+        for bad in [
+            "", "Quantity", "abs_time", "abs time", "abs.time", "abs/time", "ümlaut",
+        ] {
+            assert!(!is_detail_key(bad), "{bad:?} should not be a detail key");
+        }
+    }
+
+    #[test]
+    fn details_reach_the_entry_under_their_keys() {
+        let meta = entry("id", "title")
+            .detail("quantity", "length")
+            .details([
+                ("exact".to_owned(), "1/3".to_owned()),
+                ("dimensions".to_owned(), "L T^-1".to_owned()),
+            ])
+            .build();
+        let details = &meta.entry.details;
+        assert_eq!(details["quantity"], "length");
+        assert_eq!(details["exact"], "1/3");
+        assert_eq!(details["dimensions"], "L T^-1");
+        assert!(details.keys().all(|k| is_detail_key(k)));
+    }
+
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(default)]
     struct DummyConfig {
@@ -380,7 +438,9 @@ mod tests {
     fn parse_extra_config_non_critical_error_when_invalid() {
         let extra = Some(serde_json::json!({ "weight": "not a number" }));
         match parse_extra_config::<DummyConfig>(&extra) {
-            Err(ProviderResult::Config { critical: false, .. }) => {}
+            Err(ProviderResult::Config {
+                critical: false, ..
+            }) => {}
             other => panic!("expected non-critical Config error, got {other:?}"),
         }
     }

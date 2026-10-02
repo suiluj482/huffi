@@ -194,11 +194,15 @@ weight_comment = 0.9      # comments match a bit harder
   paths and UI size plus `[engine.*]` tables for scoring constants, provider
   settings, and external binaries; flags always override it. See
   [docs/CONFIG.md](docs/CONFIG.md).
-- **Theming** — themes are directories of a global stylesheet and per-provider
-  GTK Builder row templates (CSS + XML). The default theme ships embedded;
-  copying it to `~/.config/huffi/themes/<name>/` and setting `[ui] theme`
-  overrides any part of it, and every provider's rows are addressable through
-  a `provider-<id>` CSS class. See [docs/CONFIG.md](docs/CONFIG.md).
+- **Theming** — themes are directories of CSS and GTK Builder row templates
+  (CSS + XML), layered over the embedded default file by file and selected with
+  `[ui] theme`. A row picks a template from up to four positions, so a theme can
+  restyle one provider's rows, one layout variant, or one variant *shared* by
+  every provider that reports it. Every row carries `provider-<id>`,
+  `variant-<variant>` and `title`/`score`/`detail` classes, and providers can
+  attach named key/value details that a template opts into one at a time — so a
+  theme shows exactly the fields it asks for. See
+  [docs/THEMING.md](docs/THEMING.md).
 - **Nix flake** — reproducible builds for `x86_64-linux` and
   `aarch64-linux`, dev shell with all Wayland/GTK dependencies, and a Home
   Manager module that installs `huffi` and keeps it warm on login.

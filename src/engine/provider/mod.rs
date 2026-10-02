@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::PreprocessedQuery;
-pub use util::{Action, EntryBuilder, ProviderMetaBuilder, entry, parse_extra_config};
+pub use util::{
+    Action, EntryBuilder, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
+};
 
 /// A source for an entry's icon. Providers describe *what* to show without
 /// resolving it to a concrete image; the UI is responsible for turning this
@@ -80,12 +82,12 @@ pub struct EntryMeta {
     pub icon: Option<Icon>,
     /// Named display fields, bound by the row renderer onto `detail-<key>`
     /// widgets in the active theme's row template. Keys must match
-    /// `[a-z0-9-]+`, since they become part of a GTK object id; a detail with
-    /// no matching widget in the template is simply not shown, and a widget
-    /// with no matching detail stays hidden. Providers choose the key
-    /// vocabulary, so this is the channel for structured results a title and
-    /// subtitle can't carry — see [`CalculatorProvider`], which uses it for
-    /// quantities, dimensionality, and humanized dates.
+    /// `[a-z0-9-]+` (see [`is_detail_key`]), since they become part of a GTK
+    /// object id; a detail with no matching widget in the template is simply
+    /// not shown, and a widget with no matching detail stays hidden. Providers
+    /// choose the key vocabulary, so this is the channel for structured results
+    /// a title and subtitle can't carry — see [`CalculatorProvider`], which uses
+    /// it for quantities, dimensionality, and humanized dates.
     pub details: BTreeMap<String, String>,
     /// Layout variant for this entry, e.g. `"date"`. Selects a row template
     /// under `providers/<id>/<variant>/entry.ui` in the active theme, falling

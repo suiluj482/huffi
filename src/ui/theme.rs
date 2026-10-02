@@ -5,13 +5,12 @@
 //!
 //! ```text
 //! <theme>/
-//!   style.css            # global stylesheet
+//!   style.css            # the one stylesheet
 //!   entry.ui             # default GTK Builder row template
 //!   variants/<name>/
 //!     entry.ui           # optional, row layout for one layout variant,
 //!                        #   for every provider that reports it
 //!   providers/<id>/
-//!     style.css          # optional, scoped to that provider's rows
 //!     entry.ui           # optional, custom row layout for that provider
 //!     <variant>/
 //!       entry.ui         # optional, row layout for one layout variant of
@@ -20,14 +19,11 @@
 //!
 //! The user's theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
 //! selected with `[ui] theme = "<name>"`. Files in the user theme overlay the
-//! embedded default file by file; CSS layers are registered at APPLICATION
-//! priority for the embedded default and USER priority for the user's
-//! override. The legacy `~/.config/huffi/style.css` keeps being loaded on top
-//! for backwards compatibility.
+//! embedded default file by file; the single `style.css` layers at APPLICATION
+//! priority for the embedded default and USER priority for the user's override.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -76,15 +72,46 @@ pub struct Theme {
     templates: RefCell<HashMap<TemplateKey, Rc<str>>>,
 }
 
+/// Resolve the overlay root for a theme name, and report whether a *named*
+/// theme was asked for but not found.
+///
+/// `default` is embedded and so never has a directory to find; that is a
+/// normal outcome, not a misconfiguration, so it is not reported.
+fn user_theme_root(config_dir: Option<&std::path::Path>, name: &str) -> (Option<PathBuf>, bool) {
+    let Some(config_dir) = config_dir else {
+        // Nowhere to look for a user theme at all, which is not a
+        // misconfiguration and must stay quiet.
+        return (None, false);
+    };
+    let root = config_dir.join("huffi").join("themes").join(name);
+    if root.is_dir() {
+        (Some(root), false)
+    } else {
+        (None, name != "default")
+    }
+}
+
 impl Theme {
     /// Resolve the selected theme. `default` is always available (embedded);
     /// any other name falls back to the embedded default when the user has no
     /// such theme directory.
     pub fn new(name: impl Into<String>) -> Self {
-        let user_root =
-            config::config_dir().map(|dir| dir.join("huffi").join("themes").join(name.into()));
+        let name = name.into();
+        let (user_root, missing) = user_theme_root(config::config_dir().as_deref(), &name);
+        // A misspelled theme name is otherwise indistinguishable from a
+        // stylesheet that isn't applying: the overlay simply goes away and the
+        // stock default theme renders. Worth a line on stderr.
+        if missing {
+            let at = config::config_dir()
+                .map(|dir| dir.join("huffi").join("themes").join(&name))
+                .unwrap_or_default();
+            eprintln!(
+                "huffi: theme {name:?} not found at {} — using the embedded default theme",
+                at.display()
+            );
+        }
         Self {
-            user_root: user_root.filter(|root| root.is_dir()),
+            user_root,
             templates: RefCell::new(HashMap::new()),
         }
     }
@@ -177,30 +204,16 @@ impl Theme {
 }
 
 /// Register the global `style.css` stylesheet, default layer at APPLICATION
-/// priority and user overlay (plus the legacy `~/.config/huffi/style.css`) at
-/// USER priority.
+/// priority and user overlay at USER priority.
+///
+/// A theme has exactly one stylesheet. `providers/<id>/style.css` is not a
+/// thing: GTK registers a sheet for the whole display and cannot attach one to
+/// a subtree, so per-provider sheets would all be live for all rows and would
+/// resolve ties by provider registration order rather than by anything a theme
+/// author chose. Rows carry `provider-<id>`, and that class is the whole
+/// scoping mechanism — see `docs/THEMING.md`.
 pub fn load_css(display: &gdk::Display, theme: &Theme) {
     add_css_layer(display, theme, "style.css");
-
-    if let Some(config_dir) = config::config_dir() {
-        let user_css = config_dir.join("huffi").join("style.css");
-        if user_css.exists() {
-            add_css(
-                display,
-                &css_from_path(&user_css),
-                gtk4::STYLE_PROVIDER_PRIORITY_USER,
-            );
-        }
-    }
-}
-
-/// Register each provider's scoped `providers/<id>/style.css`, same default/
-/// user layering as the global stylesheet. Called once the provider list is
-/// known.
-pub fn load_provider_css(display: &gdk::Display, theme: &Theme, provider_ids: &[String]) {
-    for id in provider_ids {
-        add_css_layer(display, theme, &format!("providers/{id}/style.css"));
-    }
 }
 
 /// Add one stylesheet: the embedded default at APPLICATION priority, with the
@@ -215,10 +228,6 @@ fn add_css_layer(display: &gdk::Display, theme: &Theme, rel: &str) {
     if let Some(css) = theme.user_resource(rel) {
         add_css(display, &css, gtk4::STYLE_PROVIDER_PRIORITY_USER);
     }
-}
-
-fn css_from_path(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_default()
 }
 
 fn add_css(display: &gdk::Display, css: &str, priority: u32) {
@@ -236,6 +245,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn only_a_missing_named_theme_is_reported() {
+        let config_dir = temp_theme_dir("named");
+        // `user_theme_root` takes the config dir and appends `huffi/themes`,
+        // so build a real theme directory underneath it.
+        let theme_dir = config_dir.join("huffi").join("themes").join("mine");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+
+        // `default` is embedded, so it never has a directory and is not a
+        // misconfiguration worth reporting.
+        assert_eq!(
+            user_theme_root(Some(config_dir.as_path()), "default"),
+            (None, false)
+        );
+        // An overlay that exists is not missing.
+        assert_eq!(
+            user_theme_root(Some(config_dir.as_path()), "mine"),
+            (Some(theme_dir), false)
+        );
+        // A named theme with no directory disables the overlay and is reported,
+        // which is what `Theme::new` turns into the stderr warning.
+        assert_eq!(
+            user_theme_root(Some(config_dir.as_path()), "typo"),
+            (None, true)
+        );
+        // No config dir at all cannot be a typo, and must stay quiet.
+        assert_eq!(user_theme_root(None, "mine"), (None, false));
     }
 
     #[test]
@@ -285,9 +323,20 @@ mod tests {
     #[test]
     fn shipped_calculator_templates_declare_only_real_detail_keys() {
         use huffi::engine::provider::builtin::calculator::DETAIL_KEYS;
+        use huffi::engine::provider::is_detail_key;
 
         let dir = temp_theme_dir("shipped-calc");
         let theme = Theme::with_root(Some(dir));
+
+        // A key that can't be a widget id is silently dropped by the renderer,
+        // so a key drifting out of the character set would make a field
+        // unreachable rather than fail loudly.
+        for key in DETAIL_KEYS {
+            assert!(
+                is_detail_key(key),
+                "calculator detail key {key:?} is not a usable detail-<key> widget id"
+            );
+        }
 
         for variant in [None, Some("date")] {
             let xml = theme.entry_template(Some("calculator"), variant);

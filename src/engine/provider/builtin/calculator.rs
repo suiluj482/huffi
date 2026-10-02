@@ -87,8 +87,8 @@ impl Provider for CalculatorProvider {
         }
 
         match eval(rink, ctx.query) {
-            // `Display` for a reply is rink's own one-line rendering, the same
-            // string `one_line` used to return.
+            // `Display` for a reply is rink's own one-line rendering, used
+            // here for both the row title and the clipboard copy.
             Ok(reply) => {
                 let title = reply.to_string();
                 vec![
