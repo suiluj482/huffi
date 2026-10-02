@@ -76,8 +76,9 @@ pub struct EntryMeta {
     pub title: String,
     /// Secondary label shown below the title.
     pub subtitle: Option<String>,
-    /// Free-form prose shown below the title and subtitle. Also fuzzy-matched,
-    /// so it counts towards ranking.
+    /// Long-form prose: a description, a caveat, a definition. Only shown by a
+    /// theme that declares a `comment` widget, and not searched unless the
+    /// provider adds it to its match fields.
     pub comment: Option<String>,
     /// Icon shown next to the title: a themed name or an explicit file path.
     pub icon: Option<Icon>,

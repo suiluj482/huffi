@@ -229,6 +229,12 @@ entry("firefox.desktop", "Firefox")
 Fields are scored independently and combined as a weighted average. A match
 in a higher-weighted field boosts the result more.
 
+Nothing outside `fields` is searched. `title`, `subtitle`, `comment`, and
+`details` exist to be *displayed*, and are invisible to the matcher unless you
+list their text here — which is why the example repeats "Firefox" as both the
+title and a field. If a comment should be findable by its wording, add it and
+give it a weight.
+
 **`.score(s)`** — a static score bypasses fuzzy matching entirely. The entry
 gets a fixed base score that the history-blending step operates on. Useful
 for entries that are always relevant regardless of query (e.g. a calculator
