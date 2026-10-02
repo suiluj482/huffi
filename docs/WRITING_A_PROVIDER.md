@@ -174,10 +174,12 @@ entry("my-entry-id", "Display Name")
 
 | Method | Type | Purpose |
 |---|---|---|
-| `.subtitle(s)` | `String` | Secondary text shown beside the title in the UI |
-| `.comment(s)` | `String` | Longer description (used as a fallback subtitle) |
+| `.subtitle(s)` | `String` | Short qualifier shown under the title |
+| `.comment(s)` | `String` | Long-form prose: a description, a caveat, a definition. **Not** shown by the default `entry.ui`; only a theme that declares a `comment` widget renders it |
 | `.icon(name\|path)` | `String` / path | Icon to show. A string maps to a themed freedesktop icon name (see `.icon_name`); a `Path` to an explicit icon file (see `.icon_path`) |
-| `.extra(json)` | `serde_json::Value` | Arbitrary metadata attached to the entry, surfaced on the query hit |
+| `.detail(key, value)` | `String`, `String` | Named display field, rendered by a theme onto a `detail-<key>` widget. Key must match `[a-z0-9-]+` |
+| `.details(fields)` | iterable of `(String, String)` | Add several `.detail()` fields at once |
+| `.variant(name)` | `String` | Pick a layout variant, e.g. `"list"`, resolving `providers/<id>/<variant>/entry.ui` |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
@@ -189,6 +191,12 @@ entry("my-entry-id", "Display Name")
 
 Only one of `.score()` or `.match_fields()` may be used on a single entry.
 If neither is called, the entry gets a default score of `1.0`.
+
+**Fill in everything you know.** None of these methods is "extra" — the UI is
+where display decisions get made, so a field you omit is information that can
+never be shown, while one you supply is merely hidden until a theme asks for it.
+Skip a field when you genuinely don't have a value for it, not to keep a row
+short.
 
 ### Icons
 
@@ -220,6 +228,12 @@ entry("firefox.desktop", "Firefox")
 
 Fields are scored independently and combined as a weighted average. A match
 in a higher-weighted field boosts the result more.
+
+Nothing outside `fields` is searched. `title`, `subtitle`, `comment`, and
+`details` exist to be *displayed*, and are invisible to the matcher unless you
+list their text here — which is why the example repeats "Firefox" as both the
+title and a field. If a comment should be findable by its wording, add it and
+give it a weight.
 
 **`.score(s)`** — a static score bypasses fuzzy matching entirely. The entry
 gets a fixed base score that the history-blending step operates on. Useful
@@ -275,6 +289,124 @@ When the user selects an entry, its `Action` is performed:
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
+## Theming provider entries
+
+Each entry row is rendered from the active theme's GTK Builder template
+(`entry.ui`) and styled by the theme's stylesheet. Every row carries a
+`provider-<id>` CSS class automatically, so rows that come from your provider
+can be styled by users without touching templates — the class is the only
+scoping there is, since a theme has one stylesheet for the whole panel:
+
+```css
+.provider-my-provider .row { border-left: 2px solid #cba6f7; }
+.provider-my-provider .title { font-style: italic; }
+```
+
+Your class pairs with the row's built-in ones, which the renderer keeps on the
+widget at all times: `row`, `title`, `subtitle`, `comment`, `score`, plus
+`provider-<id>` and a `variant-<variant>` when the entry names a layout. The
+matching `-selected` classes are *added* on selection rather than swapped in, so
+a rule above applies to selected rows too.
+
+One consequence: a rule scoped to your provider is more specific than any state
+rule, so `.provider-my-provider .title { color: … }` outranks the theme's
+`.title-selected` and keeps your colour on the selected row. Usually that is what
+you want. When it isn't — if the theme's selection colour matters more than yours
+— restate the state rule after yours; the two tie on specificity, so source order
+decides:
+
+```css
+.provider-my-provider .title  { color: #1e1e2e; }
+.row-selected .title-selected { color: @huffi_mauve_color; }
+```
+
+A provider can also ship its own row layout in the **default theme**,
+alongside the code that produces its entries, so the default look is customized
+out of the box:
+
+```text
+data/themes/default/providers/<your provider id>/
+  entry.ui    # GTK Builder row template
+  <variant>/
+    entry.ui  # optional row template for one layout variant of this provider
+```
+
+Users override any of these by placing a file at the same relative path
+inside their own theme (`~/.config/huffi/themes/<name>/providers/<id>/`).
+Since provider ids are stable (never overridden by config), they double as
+theme keys.
+
+What the renderer binds onto a template, the ids you may declare in it, and the
+order in which a row picks one are all covered in
+**[`THEMING.md`](THEMING.md)** — read it before writing an `entry.ui` rather
+than copying the ids out of the default one, since it also documents which ids
+are optional and which are effectively required.
+
+### Named details and layout variants
+
+A title and a subtitle can't carry a structured result — a unit's quantity and
+dimensionality, or a substance's dozen measured properties. Use `.detail()` for
+those. Keys are provider-defined, so pick a vocabulary your result shape can
+support (`quantity`, `dimensions`, `properties`, ...) and document it; a theme
+then renders whichever subset it declares, by declaring a `detail-<key>` label:
+
+```rust
+entry("result", "1.609 km")
+    .detail("quantity", "length")
+    .detail("dimensions", "L")
+```
+
+```xml
+<child>
+  <object class="GtkLabel" id="detail-quantity">
+    <property name="visible">false</property>
+  </object>
+</child>
+```
+
+Keys must match `[a-z0-9-]+`, since they become part of a GTK object id;
+`EntryBuilder::detail` asserts this in debug builds, so a bad key shows up in
+your tests rather than as a field that quietly never appears. There is no
+catch-all widget: a template renders exactly the details it declares, so
+users can drop any field they don't care about.
+
+When different kinds of result want genuinely different layouts rather than
+just a different set of details, add `.variant()`. It selects a more specific
+template (see [`THEMING.md`](THEMING.md#which-template-a-row-uses)), and resolution
+falls through one level at a time, so you only need to write the file that
+actually differs.
+
+**Choosing variant names.** A variant name is shared vocabulary, not a private
+label, because the chain ends in a `variants/<name>/entry.ui` position that any
+theme can fill: one file there serves every provider reporting `<name>`. That
+only pays off if the name means the same thing across providers, so prefer names
+describing the *layout* a row wants and that you can imagine another provider
+also wanting:
+
+```rust
+entry("water", "water").variant("list")   // a row with a tall, wrapping detail
+entry("lightyear", "lightyear")           // no variant: title + details is fine
+```
+
+Naming them after your provider's own result types (`unit-definition`,
+`substance`) works too, but then only you can ever use them and that shared
+position is dead weight. If a layout really is yours alone,
+`providers/<id>/` already expresses it, and a variant name you don't share is
+better expressed as not using `.variant()` at all. Either way, keep the
+*provider-scoped* file for what your provider needs that a generic layout can't
+do, and leave the shared position alone — it can only populate generic widget
+ids, since a key like `detail-human` means nothing to a provider that doesn't
+define it.
+
+Rows also get `variant-<variant>` and `provider-<id>-<variant>` CSS classes, so
+a variant can be styled without its own template — the first is
+provider-independent, the second is specific to you. The bundled calculator
+provider is the worked example: it names its three variants after *arrangements*
+rather than after kinds of answer, so `providers/calculator/entry.ui` handles
+most rows and the single `providers/calculator/info/entry.ui` adds a prose
+comment for the substance and unit rows that have documentation to show. A date
+gets no variant at all — a title plus a subtitle is already the stock row.
+
 ## Complete example: always-active provider
 
 ```rust
@@ -313,6 +445,40 @@ expressions with [`rink-core`], and returns a single entry with the computed
 result as its title and a `.set_query("= …")` query suggestion so `Tab`
 chains calculations.
 
+It's also the worked example for structured results. Rather than asking rink
+for one formatted string, it takes the typed `QueryReply` and derives two
+things from the kind it got back:
+
+```rust
+match eval(rink, ctx.query) {
+    Ok(reply) => vec![self
+        .base(&reply.to_string())          // rink's own one-line rendering
+        .variant(variant_name(&reply))     // → a more specific template
+        .details(details_from_reply(&reply)) // → named detail fields
+        .score(1.0)],
+    // A failed expression is a legitimate result: the error becomes the title,
+    // and there's nothing to copy or re-query.
+    Err(err) => vec![self.base(&err.to_string()).score(1.0)],
+}
+```
+
+Two details worth copying:
+
+- **Extract into named keys, not a format string.** `details_from_reply`
+  returns a map, and `DETAIL_KEYS` lists what it can produce. A theme picks the
+  subset it wants, so adding a field later is a provider change that no theme
+  has to opt into, and renaming one is a breaking change you can see in
+  `DETAIL_KEYS` instead of hiding inside a `format!`. Details the result
+  doesn't have are simply absent, and templates already skip them.
+- **Set the variant from the result kind, explicitly.** `variant_name` maps
+  each reply kind to a kebab-case name by hand rather than deriving one from the
+  enum, so rink's naming can't leak into theme paths and the set of themes you
+  support stays visible in one `match`.
+
+The provider takes no `.extra` config and its `InitContext.extra` is `None`, so
+there is nothing to document in `config.toml`; the keys are user-visible through
+the default theme instead (see [`THEMING.md`](THEMING.md)).
+
 ## Registering a provider
 
 Register it on the [`Engine`] in `src/main.rs`, after `Engine::new`:
@@ -336,3 +502,4 @@ is passed through `InitContext`. Built-ins are registered in
 [`entry()`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs
+[`THEMING.md`]: THEMING.md

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Calculator row template.
+
+  The calculator asks for structured results (rink's `QueryReply`), not just a
+  formatted string, so a row has more to show than its title. This is the
+  generic arrangement: title, optional subtitle, then whatever detail fields the
+  result carries. A number fills in the numeric details; a date is title plus
+  subtitle and nothing more; a duration or factorisation has no fields at all and
+  renders title-only.
+
+  Declared detail keys: quantity, dimensions.
+
+  `properties` and `def` need somewhere else to go — they belong to a
+  substance or a definition, whose prose and long value lists want their own
+  arrangement. See `providers/calculator/info/entry.ui`.
+
+  `boost` / `delete` are declared hidden as belt-and-braces. The renderer does
+  set their visibility itself — visible only for an entry that has a history key —
+  so this property is redundant rather than load-bearing.
+-->
+<interface>
+  <object class="GtkBox" id="row">
+    <property name="orientation">horizontal</property>
+    <property name="spacing">8</property>
+    <property name="valign">center</property>
+    <child>
+      <object class="GtkBox" id="clickable">
+        <property name="orientation">horizontal</property>
+        <property name="spacing">12</property>
+        <property name="hexpand">true</property>
+        <property name="valign">center</property>
+        <child>
+          <object class="GtkImage" id="icon">
+            <property name="pixel-size">24</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="title-area">
+            <property name="orientation">vertical</property>
+            <property name="spacing">2</property>
+            <property name="hexpand">true</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkLabel" id="title">
+                <property name="ellipsize">end</property>
+                <property name="halign">start</property>
+                <property name="xalign">0</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="subtitle">
+                <property name="visible">false</property>
+                <property name="halign">start</property>
+                <property name="xalign">0</property>
+                <property name="ellipsize">end</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkBox" id="details-area">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">12</property>
+                <child>
+                  <object class="GtkLabel" id="detail-quantity">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="detail-dimensions">
+                    <property name="visible">false</property>
+                    <property name="halign">start</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <property name="max-width-chars">24</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="scores">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">6</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkLabel" id="score-base">
+                <property name="label">0.00</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="boost">
+        <property name="label">+</property>
+        <property name="focusable">false</property>
+        <property name="valign">center</property>
+        <property name="visible">false</property>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="delete">
+        <property name="label">−</property>
+        <property name="focusable">false</property>
+        <property name="valign">center</property>
+        <property name="visible">false</property>
+      </object>
+    </child>
+  </object>
+</interface>

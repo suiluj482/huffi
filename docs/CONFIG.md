@@ -39,6 +39,9 @@ height    = 400
 page_size = 10
 # Entry icon size in pixels.
 icon_size = 24
+# Theme name. Themes live in $XDG_CONFIG_HOME/huffi/themes/<name>/ and
+# overlay the embedded default theme (data/themes/default/) file by file.
+# theme = "default"
 
 [engine.scoring]
 # Weight of a manual boost relative to a normal launch.
@@ -131,10 +134,12 @@ The file is installed to `~/.config/huffi/config.toml`.
 
 ## Other configuration
 
-- **Styling** — `$XDG_CONFIG_HOME/huffi/style.css` is loaded with user
-  priority on top of the default stylesheet (`data/style.css`); the accent
-  color for the scroll rail is read from its `huffi_mauve_color`
-  `@define-color`.
+- **Themes** — a theme is a directory of one stylesheet and GTK Builder row
+  templates, layered over the embedded default file by file, and selected with
+  `[ui] theme = "<name>"` (default: `default`). Themes live in
+  `$XDG_CONFIG_HOME/huffi/themes/<name>/`; the reference for their contents,
+  the row-template resolution order, the widget ids a template may declare, and
+  the classes rows carry is **[`THEMING.md`](THEMING.md)**.
 - The `--data` and `--socket` flags still override the corresponding
   `[paths]` entries per invocation; the config file only supplies the
   defaults the flags would otherwise use.

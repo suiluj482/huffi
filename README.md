@@ -194,6 +194,15 @@ weight_comment = 0.9      # comments match a bit harder
   paths and UI size plus `[engine.*]` tables for scoring constants, provider
   settings, and external binaries; flags always override it. See
   [docs/CONFIG.md](docs/CONFIG.md).
+- **Theming** — themes are directories of CSS and GTK Builder row templates
+  (CSS + XML), layered over the embedded default file by file and selected with
+  `[ui] theme`. A row picks a template from up to four positions, so a theme can
+  restyle one provider's rows, one layout variant, or one variant *shared* by
+  every provider that reports it. Every row carries `provider-<id>`,
+  `variant-<variant>` and `title`/`score`/`detail` classes, and providers can
+  attach named key/value details that a template opts into one at a time — so a
+  theme shows exactly the fields it asks for. See
+  [docs/THEMING.md](docs/THEMING.md).
 - **Nix flake** — reproducible builds for `x86_64-linux` and
   `aarch64-linux`, dev shell with all Wayland/GTK dependencies, and a Home
   Manager module that installs `huffi` and keeps it warm on login.
@@ -213,8 +222,8 @@ src/
   lib.rs        # pub mod engine   (GTK-free, unit-testable)
   main.rs       # bin: clap args, control socket, GTK init, engine bootstrap
   engine/       # providers + scoring + history (the model)
-  ui/           # GTK4 window, control socket, background tasks, CSS theme
-data/style.css  # default stylesheet
+  ui/           # GTK4 window, control socket, background tasks, theme loader
+data/themes/default/  # default theme: stylesheet + per-provider row templates
 tests/          # in-process integration tests against the engine
 ```
 

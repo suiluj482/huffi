@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::os::unix::net::UnixListener;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,13 +20,36 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
 use huffi::engine::provider::ProviderMeta;
-use huffi::engine::provider::{EntryMeta, Icon};
+use huffi::engine::provider::{EntryMeta, Icon, is_detail_key};
 use huffi::engine::scoring::Scored;
 
 use crate::ui::control::{self, ControlRequest};
 use crate::ui::{tasks, theme};
 
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(300);
+
+/// Every widget id [`Launcher::build_row`] binds a field onto.
+///
+/// A template may declare any of these plus whatever structural containers it
+/// likes, but a shipped template that misspells one of these silently loses the
+/// binding — a `subtile` label renders empty and nothing complains. Keeping the
+/// list here, next to the bindings that consume it, lets the theme tests check
+/// the shipped templates against it.
+#[cfg(test)]
+pub(crate) const KNOWN_WIDGET_IDS: &[&str] = &[
+    "row",
+    "clickable",
+    "icon",
+    "title-area",
+    "title",
+    "subtitle",
+    "comment",
+    "scores",
+    "score-base",
+    "score-history",
+    "boost",
+    "delete",
+];
 
 #[derive(Debug, Clone, Copy)]
 enum Step {
@@ -52,11 +76,15 @@ enum ControlMsg {
 #[derive(Debug, Clone)]
 struct Row {
     entry_id: String,
+    provider_id: Option<String>,
     history_key: Option<String>,
     base_score: f64,
     history_score: Option<f64>,
     title: String,
     subtitle: Option<String>,
+    comment: Option<String>,
+    details: BTreeMap<String, String>,
+    variant: Option<String>,
     icon: Option<Icon>,
     set_query: Option<String>,
 }
@@ -66,11 +94,15 @@ impl From<Scored<EntryMeta>> for Row {
         let entry = scored.entry;
         Self {
             entry_id: entry.id,
+            provider_id: entry.provider_id,
             history_key: scored.history_key,
             base_score: scored.base_score,
             history_score: scored.history_score,
             title: entry.title,
             subtitle: entry.subtitle,
+            comment: entry.comment,
+            details: entry.details,
+            variant: entry.variant,
             icon: entry.icon,
             set_query: entry.set_query,
         }
@@ -84,6 +116,7 @@ struct BuiltRow {
     row: GBox,
     title: Label,
     sub: Option<Label>,
+    comment: Option<Label>,
     scores: Vec<Label>,
 }
 
@@ -113,6 +146,7 @@ pub struct Launcher {
     state: RefCell<State>,
     page_size: usize,
     icon_size: i32,
+    theme: theme::Theme,
 }
 
 impl Launcher {
@@ -122,8 +156,9 @@ impl Launcher {
         main_loop: glib::MainLoop,
         ui: UiConfig,
     ) -> Rc<Self> {
+        let theme = theme::Theme::new(ui.theme.as_str());
         if let Some(display) = gdk::Display::default() {
-            theme::load_css(&display);
+            theme::load_css(&display, &theme);
         }
 
         let window = Window::new();
@@ -229,6 +264,7 @@ impl Launcher {
             }),
             page_size: ui.page_size,
             icon_size: ui.icon_size,
+            theme,
         });
 
         this.attach_handlers(listener, main_loop);
@@ -808,13 +844,16 @@ impl Launcher {
         let rows = self.state.borrow();
         for (i, row) in rows.rows.iter().enumerate() {
             let selected = page_base + i == selected;
-            toggle_class(&row.row, selected, "row-selected", "row");
-            toggle_class(&row.title, selected, "title-selected", "title");
+            toggle_selected(&row.row, selected, "row-selected");
+            toggle_selected(&row.title, selected, "title-selected");
             if let Some(sub) = &row.sub {
-                toggle_class(sub, selected, "subtitle-selected", "subtitle");
+                toggle_selected(sub, selected, "subtitle-selected");
+            }
+            if let Some(comment) = &row.comment {
+                toggle_selected(comment, selected, "comment-selected");
             }
             for score in &row.scores {
-                toggle_class(score, selected, "score-selected", "score");
+                toggle_selected(score, selected, "score-selected");
             }
         }
         drop(rows);
@@ -828,79 +867,124 @@ impl Launcher {
         global_index: usize,
         local_index: usize,
     ) -> BuiltRow {
-        let row = GBox::new(Orientation::Horizontal, 8);
+        // Instantiate the theme's row template (variant- and
+        // provider-specific when the theme ships one) and bind the entry's
+        // fields onto the widgets it declares. Unknown ids are fine; optional
+        // widgets are skipped.
+        let xml = self
+            .theme
+            .entry_template(hit.provider_id.as_deref(), hit.variant.as_deref());
+        let builder = gtk4::Builder::from_string(&xml);
+
+        let row = builder
+            .object::<GBox>("row")
+            .unwrap_or_else(|| GBox::new(Orientation::Horizontal, 0));
         row.set_valign(Align::Center);
-        row.add_css_class(if is_selected { "row-selected" } else { "row" });
-
-        let clickable = GBox::new(Orientation::Horizontal, 12);
-        clickable.set_hexpand(true);
-        clickable.set_valign(Align::Center);
-
-        match hit
-            .icon
-            .as_ref()
-            .and_then(|icon| load_icon(icon, self.icon_size))
-        {
-            Some(icon) => clickable.append(&icon),
-            None => clickable.append(&spacer(self.icon_size)),
+        state_class(&row, is_selected, "row", "row-selected");
+        if let Some(id) = &hit.provider_id {
+            row.add_css_class(&format!("provider-{id}"));
+            if let Some(variant) = &hit.variant {
+                row.add_css_class(&format!("provider-{id}-{variant}"));
+            }
+        }
+        // `variant-<name>` is provider-independent, so a shared
+        // `variants/<name>/entry.ui` layout can be styled for every provider
+        // that reports that variant.
+        if let Some(variant) = &hit.variant {
+            row.add_css_class(&format!("variant-{variant}"));
         }
 
-        let title_area = GBox::new(Orientation::Horizontal, 12);
-        title_area.set_hexpand(true);
-
-        let title = Label::new(Some(&hit.title));
-        title.add_css_class(if is_selected {
-            "title-selected"
-        } else {
-            "title"
-        });
+        // A template that omits `title` shows no title. The detached label is
+        // still returned so `apply_selection` has something to toggle, but it
+        // is deliberately not appended anywhere: it would otherwise land in
+        // `row` instead of `title-area`, outside the `clickable` target.
+        let title = builder
+            .object::<Label>("title")
+            .unwrap_or_else(|| Label::new(Some("")));
+        // The template supplies the label, not its text: every shipped template
+        // declares `title` with no `label` property, so the text has to come
+        // from here or the row renders blank.
+        title.set_text(&hit.title);
+        state_class(&title, is_selected, "title", "title-selected");
         title.set_ellipsize(pango::EllipsizeMode::End);
         title.set_halign(Align::Start);
         title.set_xalign(0.0);
-        title_area.append(&title);
 
+        if let Some(icon) = builder.object::<Image>("icon") {
+            self.bind_icon(&icon, hit);
+        }
+
+        if let Some(area) = builder.object::<GBox>("title-area") {
+            area.set_hexpand(true);
+        }
+
+        // The subtitle is optional: only rendered when the entry has one AND
+        // the template declares a `subtitle` widget.
         let sub = if let Some(sub) = &hit.subtitle {
             title.set_hexpand(false);
-            let sub_label = Label::new(Some(&format!("({sub})")));
-            sub_label.add_css_class(if is_selected {
-                "subtitle-selected"
-            } else {
-                "subtitle"
-            });
-            sub_label.set_halign(Align::Start);
-            title_area.append(&sub_label);
-            Some(sub_label)
+            builder.object::<Label>("subtitle").inspect(|sub_label| {
+                sub_label.set_text(sub);
+                state_class(sub_label, is_selected, "subtitle", "subtitle-selected");
+                sub_label.set_halign(Align::Start);
+                sub_label.set_visible(true);
+            })
         } else {
             title.set_hexpand(true);
             None
         };
-        clickable.append(&title_area);
 
-        let scores = GBox::new(Orientation::Horizontal, 6);
-        scores.set_valign(Align::Center);
-        let base_score = Label::new(Some(&format!("{:.2}", hit.base_score)));
-        base_score.add_css_class(if is_selected {
-            "score-selected"
-        } else {
-            "score"
+        // The comment is optional in the same way the subtitle is: shown only
+        // when the entry carries one *and* the template declares a `comment`
+        // widget. It holds prose rather than a value, so it belongs below the
+        // title and reads as muted context.
+        let comment = hit.comment.as_ref().and_then(|text| {
+            builder.object::<Label>("comment").inspect(|label| {
+                label.set_text(text);
+                state_class(label, is_selected, "comment", "comment-selected");
+                label.set_halign(Align::Start);
+                label.set_visible(true);
+            })
         });
-        scores.append(&base_score);
-        let mut score_labels = vec![base_score];
-        if let Some(h) = hit.history_score {
-            let history_score = Label::new(Some(&format!("{h:.2}")));
-            history_score.add_css_class(if is_selected {
-                "score-selected"
-            } else {
-                "score"
-            });
-            scores.append(&history_score);
-            score_labels.push(history_score);
+
+        let mut scores = Vec::new();
+        if let Some(base) = builder.object::<Label>("score-base") {
+            base.set_text(&format!("{:.2}", hit.base_score));
+            state_class(&base, is_selected, "score", "score-selected");
+            scores.push(base);
         }
-        clickable.append(&scores);
-
-        clickable.set_cursor_from_name(Some("pointer"));
-
+        if let Some(h) = hit.history_score
+            && let Some(history) = builder.object::<Label>("score-history")
         {
+            history.set_text(&format!("{h:.2}"));
+            state_class(&history, is_selected, "score", "score-selected");
+            history.set_visible(true);
+            scores.push(history);
+        }
+
+        // Named display fields bind onto `detail-<key>` widgets. The entry
+        // drives this loop, so a template that doesn't declare a widget for
+        // some key simply doesn't show that field, and a widget whose key the
+        // entry doesn't carry stays hidden. Selection state is handled purely
+        // in CSS (`.row-selected .detail`), so there's nothing to track here.
+        //
+        // A key that can't be a GTK object id is skipped rather than looked up
+        // as-is: `EntryBuilder::detail` debug-asserts on it, so this only
+        // happens in a release build whose provider is already broken, and
+        // dropping the field is better than looking up an id we can't trust.
+        for (key, value) in &hit.details {
+            if !is_detail_key(key) {
+                continue;
+            }
+            let id = format!("detail-{key}");
+            if let Some(label) = builder.object::<Label>(&id) {
+                label.set_text(value);
+                label.add_css_class("detail");
+                label.set_visible(true);
+            }
+        }
+
+        if let Some(clickable) = builder.object::<GBox>("clickable") {
+            clickable.set_cursor_from_name(Some("pointer"));
             let weak = Rc::downgrade(self);
             let click = GestureClick::new();
             click.connect_pressed(move |_, _n_press, _x, _y| {
@@ -911,40 +995,60 @@ impl Launcher {
             clickable.add_controller(click);
         }
 
-        row.append(&clickable);
-
+        let boost = builder.object::<Button>("boost");
+        let delete = builder.object::<Button>("delete");
         if hit.history_key.is_some() {
-            let boost_btn = Button::with_label("+");
-            boost_btn.add_css_class("flat-btn");
-            boost_btn.set_focusable(false);
-            boost_btn.set_valign(Align::Center);
-            let weak = Rc::downgrade(self);
-            boost_btn.connect_clicked(move |_| {
-                if let Some(this) = weak.upgrade() {
-                    this.modify_history(local_index, ModifyKind::Boost);
-                }
-            });
-
-            let delete_btn = Button::with_label("\u{2212}");
-            delete_btn.add_css_class("flat-btn");
-            delete_btn.set_focusable(false);
-            delete_btn.set_valign(Align::Center);
-            let weak = Rc::downgrade(self);
-            delete_btn.connect_clicked(move |_| {
-                if let Some(this) = weak.upgrade() {
-                    this.modify_history(local_index, ModifyKind::Delete);
-                }
-            });
-
-            row.append(&boost_btn);
-            row.append(&delete_btn);
+            if let Some(boost) = &boost {
+                boost.add_css_class("flat-btn");
+                boost.set_visible(true);
+                let weak = Rc::downgrade(self);
+                boost.connect_clicked(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.modify_history(local_index, ModifyKind::Boost);
+                    }
+                });
+            }
+            if let Some(delete) = &delete {
+                delete.add_css_class("flat-btn");
+                delete.set_visible(true);
+                let weak = Rc::downgrade(self);
+                delete.connect_clicked(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.modify_history(local_index, ModifyKind::Delete);
+                    }
+                });
+            }
+        } else {
+            if let Some(boost) = &boost {
+                boost.set_visible(false);
+            }
+            if let Some(delete) = &delete {
+                delete.set_visible(false);
+            }
         }
 
         BuiltRow {
             row,
             title,
             sub,
-            scores: score_labels,
+            comment,
+            scores,
+        }
+    }
+
+    /// Point a template `icon` widget at the entry's icon, or leave it blank
+    /// (reserving `icon_size` pixels) when there is none or it fails to load.
+    fn bind_icon(&self, image: &Image, hit: &Row) {
+        image.set_pixel_size(self.icon_size);
+        match &hit.icon {
+            Some(Icon::Name(name)) => image.set_icon_name(Some(name)),
+            Some(Icon::Path(path)) if path.exists() => {
+                let file = gtk4::gio::File::for_path(path);
+                if let Ok(texture) = gdk::Texture::from_file(&file) {
+                    image.set_paintable(Some(&texture));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -999,49 +1103,36 @@ impl Launcher {
     }
 }
 
-fn toggle_class(
+/// Give a widget the classes for its role and, when the row is selected, for
+/// its state.
+///
+/// The two **coexist** rather than replace one another: `title` styles every
+/// title and `title-selected` layers the selected state on top. That keeps a
+/// rule from having to be restated per state — `.title { font-size: 17px }`
+/// covers both — and it means a state rule can say only what actually differs,
+/// instead of repeating the role's declarations to beat it.
+fn state_class(
     widget: &impl IsA<gtk4::Widget>,
-    selected: bool,
+    is_selected: bool,
+    role_class: &str,
     selected_class: &str,
-    base_class: &str,
 ) {
-    if selected {
+    widget.add_css_class(role_class);
+    if is_selected {
         widget.add_css_class(selected_class);
-        widget.remove_css_class(base_class);
-    } else {
-        widget.add_css_class(base_class);
-        widget.remove_css_class(selected_class);
     }
 }
 
-fn spacer(size: i32) -> GBox {
-    let box_ = GBox::new(Orientation::Horizontal, 0);
-    box_.set_width_request(size);
-    box_.set_height_request(size);
-    box_
-}
-
-fn load_icon(icon: &Icon, size: i32) -> Option<Image> {
-    match icon {
-        Icon::Name(name) => {
-            let image = Image::from_icon_name(name);
-            image.set_pixel_size(size);
-            Some(image)
-        }
-        Icon::Path(path) => {
-            if !path.exists() {
-                return None;
-            }
-            let file = gtk4::gio::File::for_path(path);
-            match gdk::Texture::from_file(&file) {
-                Ok(texture) => {
-                    let image = Image::from_paintable(Some(&texture));
-                    image.set_pixel_size(size);
-                    Some(image)
-                }
-                Err(_) => None,
-            }
-        }
+/// Move a widget in and out of the selected state, leaving its role class on.
+///
+/// The counterpart to [`state_class`] for rows that already exist: selection
+/// moves far more often than rows are rebuilt, so this touches one class and
+/// leaves the row's markup and styling otherwise intact.
+fn toggle_selected(widget: &impl IsA<gtk4::Widget>, is_selected: bool, selected_class: &str) {
+    if is_selected {
+        widget.add_css_class(selected_class);
+    } else {
+        widget.remove_css_class(selected_class);
     }
 }
 

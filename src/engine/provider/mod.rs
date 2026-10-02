@@ -18,18 +18,21 @@ pub mod collection;
 pub mod config;
 pub mod util;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::PreprocessedQuery;
-pub use util::{Action, EntryBuilder, ProviderMetaBuilder, entry, parse_extra_config};
+pub use util::{
+    Action, EntryBuilder, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
+};
 
 /// A source for an entry's icon. Providers describe *what* to show without
 /// resolving it to a concrete image; the UI is responsible for turning this
 /// into a renderable widget (e.g. via the active GTK icon theme).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Icon {
     /// A freedesktop icon theme name (e.g. `"firefox"`,
     /// `"accessories-calculator"`). Resolved against the active icon theme.
@@ -62,7 +65,7 @@ impl From<&std::path::Path> for Icon {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryMeta {
     /// Id unique within the provider; selection looks results up by it.
     pub id: String,
@@ -73,12 +76,30 @@ pub struct EntryMeta {
     pub title: String,
     /// Secondary label shown below the title.
     pub subtitle: Option<String>,
-    /// Free-form description; fuzzy-matched but not rendered.
+    /// Long-form prose: a description, a caveat, a definition. Only shown by a
+    /// theme that declares a `comment` widget, and not searched unless the
+    /// provider adds it to its match fields.
     pub comment: Option<String>,
     /// Icon shown next to the title: a themed name or an explicit file path.
     pub icon: Option<Icon>,
-    /// Provider-specific payload, passed through untouched.
-    pub extra: Option<serde_json::Value>,
+    /// Named display fields, bound by the row renderer onto `detail-<key>`
+    /// widgets in the active theme's row template. Keys must match
+    /// `[a-z0-9-]+` (see [`is_detail_key`]), since they become part of a GTK
+    /// object id; a detail with no matching widget in the template is simply
+    /// not shown, and a widget with no matching detail stays hidden. Providers
+    /// choose the key vocabulary, so this is the channel for structured results
+    /// a title and subtitle can't carry — see [`CalculatorProvider`], which uses
+    /// it for quantities, dimensionality, and measured properties.
+    pub details: BTreeMap<String, String>,
+    /// Layout variant for this entry, e.g. `"info"`. Selects a row template by
+    /// walking the theme's positions for this variant: `providers/<id>/<variant>`,
+    /// then `providers/<id>`, then `variants/<variant>`, then the theme-wide
+    /// `entry.ui`. See [`EntryBuilder::variant`].
+    ///
+    /// Rows also get a provider-independent `variant-<variant>` CSS class as well
+    /// as `provider-<id>-<variant>`, so a theme can style one layout across every
+    /// provider that reports it.
+    pub variant: Option<String>,
     /// Query the UI applies when the entry is tab-selected, e.g. a
     /// calculator result as `=42`.
     pub set_query: Option<String>,

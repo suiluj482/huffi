@@ -1,5 +1,46 @@
+//! Theme resolution and loading.
+//!
+//! A theme is a directory with the same shape as the embedded default
+//! [`DEFAULT_THEME_DIR`]:
+//!
+//! ```text
+//! <theme>/
+//!   style.css            # the one stylesheet
+//!   entry.ui             # default GTK Builder row template
+//!   variants/<name>/
+//!     entry.ui           # optional, row layout for one layout variant,
+//!                        #   for every provider that reports it
+//!   providers/<id>/
+//!     entry.ui           # optional, custom row layout for that provider
+//!     <variant>/
+//!       entry.ui         # optional, row layout for one layout variant of
+//!                        #   this provider
+//! ```
+//!
+//! The user's theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
+//! selected with `[ui] theme = "<name>"`. Files in the user theme overlay the
+//! embedded default file by file; the single `style.css` layers at APPLICATION
+//! priority for the embedded default and USER priority for the user's override.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+
 use gtk4::prelude::StyleContextExt;
 use gtk4::{self, gdk};
+
+use crate::config;
+
+/// The default theme, compiled into the binary from `data/themes/default/`.
+// This path is relative to `$CARGO_MANIFEST_DIR`, so the package ships a
+// self-contained binary with no runtime data directory.
+const DEFAULT_THEME_DIR: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/data/themes/default");
+
+/// Cache key for a resolved row template: the entry's provider id and its
+/// layout variant, either of which may be unset.
+type TemplateKey = (Option<String>, Option<String>);
 
 /// Resolve the accent color from the stylesheet (`@define-color
 /// huffi_mauve_color`), falling back to the default value if the theme
@@ -19,27 +60,619 @@ pub fn mauve(context: &gtk4::StyleContext) -> (f64, f64, f64) {
     )
 }
 
-const DEFAULT_CSS: &str = include_str!("../../data/style.css");
+/// A resolved theme: the embedded default plus an optional user overlay.
+pub struct Theme {
+    /// `config_dir/huffi/themes/<name>/` when that directory exists.
+    user_root: Option<PathBuf>,
+    /// Cache of resolved entry templates, keyed by `(provider id, variant)` —
+    /// `None` for either means "not set". Shared as `Rc<str>` so building a row
+    /// costs an `Rc` bump rather than a fresh copy of the whole XML document.
+    /// Interior mutability so [`Theme::entry_template`] can be called through
+    /// `&self` from row building.
+    templates: RefCell<HashMap<TemplateKey, Rc<str>>>,
+}
 
-pub fn load_css(display: &gdk::Display) {
-    let provider = gtk4::CssProvider::new();
-    provider.load_from_data(DEFAULT_CSS);
-    gtk4::style_context_add_provider_for_display(
-        display,
-        &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+/// Where a named theme's overlay lives: `<config_dir>/huffi/themes/<name>/`.
+fn theme_root(config_dir: &std::path::Path, name: &str) -> PathBuf {
+    config_dir.join("huffi").join("themes").join(name)
+}
 
-    if let Some(config_dir) = crate::config::config_dir() {
-        let user_css = config_dir.join("huffi").join("style.css");
-        if user_css.exists() {
-            let user_provider = gtk4::CssProvider::new();
-            user_provider.load_from_path(&user_css);
-            gtk4::style_context_add_provider_for_display(
-                display,
-                &user_provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_USER,
+/// Resolve the overlay root for a theme name, and report whether a *named*
+/// theme was asked for but not found.
+///
+/// `default` is embedded and so never has a directory to find; that is a
+/// normal outcome, not a misconfiguration, so it is not reported.
+fn user_theme_root(config_dir: Option<&std::path::Path>, name: &str) -> (Option<PathBuf>, bool) {
+    let Some(config_dir) = config_dir else {
+        // Nowhere to look for a user theme at all, which is not a
+        // misconfiguration and must stay quiet.
+        return (None, false);
+    };
+    let root = theme_root(config_dir, name);
+    if root.is_dir() {
+        (Some(root), false)
+    } else {
+        (None, name != "default")
+    }
+}
+
+impl Theme {
+    /// Resolve the selected theme. `default` is always available (embedded);
+    /// any other name falls back to the embedded default when the user has no
+    /// such theme directory.
+    pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        let config_dir = config::config_dir();
+        let (user_root, missing) = user_theme_root(config_dir.as_deref(), &name);
+        // A misspelled theme name is otherwise indistinguishable from a
+        // stylesheet that isn't applying: the overlay simply goes away and the
+        // stock default theme renders. Worth a line on stderr.
+        //
+        // `missing` implies a config dir, since `user_theme_root` reports a
+        // missing named theme only when it had somewhere to look.
+        if let Some(dir) = config_dir.filter(|_| missing) {
+            eprintln!(
+                "huffi: theme {name:?} not found at {} — using the embedded default theme",
+                theme_root(&dir, &name).display()
             );
         }
+        Self {
+            user_root,
+            templates: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Construct with an explicit theme root (tests only). `None` disables the
+    /// user overlay entirely.
+    #[cfg(test)]
+    fn with_root(user_root: Option<PathBuf>) -> Self {
+        Self {
+            user_root,
+            templates: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Resolve a file inside the theme: the user overlay wins when present,
+    /// otherwise the embedded default. `None` when neither has it.
+    fn resource(&self, rel: &str) -> Option<String> {
+        if let Some(root) = &self.user_root {
+            let path = root.join(rel);
+            if path.is_file() {
+                return std::fs::read_to_string(&path).ok();
+            }
+        }
+        DEFAULT_THEME_DIR
+            .get_file(rel)
+            .and_then(|file| file.contents_utf8())
+            .map(str::to_owned)
+    }
+
+    /// Read `rel` from the user overlay only (no embedded fallback).
+    fn user_resource(&self, rel: &str) -> Option<String> {
+        let path = self.user_root.as_ref()?.join(rel);
+        path.is_file()
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
+    }
+
+    /// The entry-row GTK Builder template for an entry, resolved by layout
+    /// variant:
+    ///
+    /// ```text
+    /// providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
+    ///     →  variants/<variant>/entry.ui  →  entry.ui
+    /// ```
+    ///
+    /// The two variant positions differ only in scope. `providers/<id>/<variant>`
+    /// is one provider's opinion about one variant, while `variants/<variant>` is
+    /// the theme's opinion about it for *every* provider — so a theme can ship
+    /// one `variants/list/entry.ui` and have every provider that reports a `list`
+    /// variant pick it up, with no per-provider file. A shared template is
+    /// therefore only useful if it sticks to generic widget ids (`title`,
+    /// `subtitle`, `detail-<key>`) rather than a particular provider's keys.
+    ///
+    /// The shared position comes *after* the provider's own template, so a theme
+    /// that customises one provider doesn't silently lose a variant layout that
+    /// the shared file would otherwise have supplied for it.
+    ///
+    /// A user file in any position wins over the embedded default at the same
+    /// position, and a missing position falls through to the next one (see
+    /// [`Theme::resource`]). Variants only ever add a more specific layout; they
+    /// never remove the fallbacks.
+    ///
+    /// The returned `Rc<str>` is shared, not reallocated, so the per-row cost is
+    /// one reference bump. The XML itself still has to be parsed per row:
+    /// `GtkBuilder` instantiates a single object graph, so there is no way to
+    /// re-run the same definitions for a second row.
+    pub fn entry_template(&self, provider_id: Option<&str>, variant: Option<&str>) -> Rc<str> {
+        let key = (provider_id.map(str::to_owned), variant.map(str::to_owned));
+        if let Some(cached) = self.templates.borrow().get(&key) {
+            return Rc::clone(cached);
+        }
+        let scoped = provider_id.map(|id| format!("providers/{id}"));
+        let template = variant
+            .zip(scoped.as_deref())
+            .and_then(|(v, dir)| self.resource(&format!("{dir}/{v}/entry.ui")))
+            .or_else(|| {
+                scoped
+                    .as_deref()
+                    .and_then(|dir| self.resource(&format!("{dir}/entry.ui")))
+            })
+            .or_else(|| variant.and_then(|v| self.resource(&format!("variants/{v}/entry.ui"))))
+            .or_else(|| self.resource("entry.ui"))
+            .unwrap_or_default();
+        let template: Rc<str> = Rc::from(template);
+        self.templates
+            .borrow_mut()
+            .insert(key, Rc::clone(&template));
+        template
+    }
+}
+
+/// Register the global `style.css` stylesheet, default layer at APPLICATION
+/// priority and user overlay at USER priority.
+///
+/// A theme has exactly one stylesheet. `providers/<id>/style.css` is not a
+/// thing: GTK registers a sheet for the whole display and cannot attach one to
+/// a subtree, so per-provider sheets would all be live for all rows and would
+/// resolve ties by provider registration order rather than by anything a theme
+/// author chose. Rows carry `provider-<id>`, and that class is the whole
+/// scoping mechanism — see `docs/THEMING.md`.
+pub fn load_css(display: &gdk::Display, theme: &Theme) {
+    add_css_layer(display, theme, "style.css");
+}
+
+/// Add one stylesheet: the embedded default at APPLICATION priority, with the
+/// user overlay (if any) layered on top at USER priority.
+fn add_css_layer(display: &gdk::Display, theme: &Theme, rel: &str) {
+    if let Some(css) = DEFAULT_THEME_DIR
+        .get_file(rel)
+        .and_then(|file| file.contents_utf8())
+    {
+        add_css(display, css, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    if let Some(css) = theme.user_resource(rel) {
+        add_css(display, &css, gtk4::STYLE_PROVIDER_PRIORITY_USER);
+    }
+}
+
+fn add_css(display: &gdk::Display, css: &str, priority: u32) {
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_data(css);
+    gtk4::style_context_add_provider_for_display(display, &provider, priority);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A temp theme directory that removes itself when the test's binding drops,
+    /// so a failing or passing run leaves nothing behind in `$TMPDIR`. `tag` must be
+    /// unique per test: the path is keyed by process id, and the test binary runs
+    /// tests on parallel threads.
+    struct TempTheme(PathBuf);
+
+    impl TempTheme {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("huffi-theme-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        /// The directory as a `PathBuf`, for handing to `Theme::with_root`.
+        fn owned(&self) -> PathBuf {
+            self.0.clone()
+        }
+    }
+
+    impl Drop for TempTheme {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Structural ids the shipped templates add for themselves, on top of the
+    /// ids the renderer binds. A theme may add as many as it likes; the shipped
+    /// ones are listed so that introducing another is a reviewed edit rather
+    /// than an unreviewed attribute.
+    const AUTHOR_IDS: &[&str] = &["details-area", "title-line"];
+
+    /// Every `.ui` template in the embedded theme, as (path, contents).
+    ///
+    /// [`include_dir::Dir::files`] only lists a directory's immediate children,
+    /// so `providers/` and below need walking by hand.
+    fn shipped_templates() -> Vec<(String, String)> {
+        fn collect(dir: &include_dir::Dir<'static>, out: &mut Vec<(String, String)>) {
+            for file in dir.files() {
+                // `path()` is already relative to the root of the embedded
+                // tree, so subdirectories need no prefix of their own.
+                let path = file.path().display().to_string();
+                if path.ends_with(".ui") {
+                    let body = file.contents_utf8().expect("shipped template is UTF-8");
+                    out.push((path, strip_xml_comments(body)));
+                }
+            }
+            for sub in dir.dirs() {
+                collect(sub, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&DEFAULT_THEME_DIR, &mut out);
+        assert!(!out.is_empty(), "no templates found in the embedded theme");
+        out
+    }
+
+    /// Drop `<!-- … -->` so prose in a template's comment isn't mistaken for
+    /// markup. Good enough for the plain, comment-free XML GTK Builder takes.
+    fn strip_xml_comments(xml: &str) -> String {
+        let mut out = String::with_capacity(xml.len());
+        let mut rest = xml;
+        while let Some(start) = rest.find("<!--") {
+            out.push_str(&rest[..start]);
+            match rest[start..].find("-->") {
+                Some(end) => rest = &rest[start + end + 3..],
+                // Unterminated comment: keep what follows it rather than
+                // silently dropping the rest of the file.
+                None => {
+                    out.push_str(&rest[start..]);
+                    return out;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Every `id="…"` value in a template, in document order.
+    fn widget_ids(xml: &str) -> Vec<&str> {
+        xml.match_indices("id=\"")
+            .map(|(at, matched)| {
+                let rest = &xml[at + matched.len()..];
+                let end = rest.find('"').expect("unterminated id attribute");
+                &rest[..end]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_a_missing_named_theme_is_reported() {
+        let config_dir = TempTheme::new("named");
+        // `user_theme_root` takes the config dir and appends `huffi/themes`,
+        // so build a real theme directory underneath it.
+        let theme_dir = theme_root(config_dir.path(), "mine");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+
+        // `default` is embedded, so it never has a directory and is not a
+        // misconfiguration worth reporting.
+        assert_eq!(
+            user_theme_root(Some(config_dir.path()), "default"),
+            (None, false)
+        );
+        // An overlay that exists is not missing.
+        assert_eq!(
+            user_theme_root(Some(config_dir.path()), "mine"),
+            (Some(theme_dir), false)
+        );
+        // A named theme with no directory disables the overlay and is reported,
+        // which is what `Theme::new` turns into the stderr warning.
+        assert_eq!(
+            user_theme_root(Some(config_dir.path()), "typo"),
+            (None, true)
+        );
+        // No config dir at all cannot be a typo, and must stay quiet.
+        assert_eq!(user_theme_root(None, "mine"), (None, false));
+    }
+
+    #[test]
+    fn embedded_default_resolves_when_user_file_absent() {
+        let dir = TempTheme::new("missing");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let css = theme.resource("style.css").expect("embedded style.css");
+        assert!(css.contains("@define-color"));
+        let template = theme.entry_template(None, None);
+        assert!(template.contains("id=\"row\""));
+    }
+
+    #[test]
+    fn user_file_wins_over_embedded() {
+        let dir = TempTheme::new("override");
+        std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
+        assert_eq!(
+            theme.resource("style.css").as_deref(),
+            Some("/* user css */")
+        );
+    }
+
+    #[test]
+    fn missing_user_resource_falls_back_to_embedded() {
+        let dir = TempTheme::new("fallback");
+        std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
+        let template = theme.entry_template(Some("desktop"), None);
+        assert!(
+            template.contains("id=\"row\""),
+            "a provider without its own entry.ui must use the default template"
+        );
+    }
+
+    /// The templates shipped in the default theme are the only ones the project
+    /// controls, so they're the ones worth holding to an exact id vocabulary.
+    ///
+    /// An id the renderer doesn't know is inert: a misspelled `title` or
+    /// `detail-qantity` leaves a widget that never gets filled, and a row that
+    /// renders half-empty with nothing in the log. Structural containers the
+    /// templates add for themselves are allowed, but only the ones listed in
+    /// [`AUTHOR_IDS`] — so introducing a new one is a deliberate edit here
+    /// rather than a stray attribute nobody reviews.
+    ///
+    /// This is a text check, not a real parse: instantiating a template means a
+    /// `GtkBuilder` off the main thread, which gtk4 forbids. XML
+    /// well-formedness is still only checked by GTK at runtime.
+    #[test]
+    fn shipped_templates_only_use_known_widget_ids() {
+        use crate::ui::app::KNOWN_WIDGET_IDS;
+        use huffi::engine::provider::is_detail_key;
+
+        for (path, xml) in shipped_templates() {
+            for id in widget_ids(&xml) {
+                if KNOWN_WIDGET_IDS.contains(&id)
+                    || AUTHOR_IDS.contains(&id)
+                    || id.strip_prefix("detail-").is_some_and(is_detail_key)
+                {
+                    continue;
+                }
+                panic!("{path} declares id {id:?}, which nothing binds");
+            }
+        }
+    }
+
+    /// `row` is load-bearing: without it the renderer falls back to a bare box,
+    /// so a template that lost it degrades every row it serves in silence.
+    /// `clickable` is the row's click target, so without it rows stop
+    /// responding to clicks.
+    #[test]
+    fn shipped_templates_declare_the_ids_they_rely_on() {
+        for (path, xml) in shipped_templates() {
+            let ids = widget_ids(&xml);
+            for required in ["row", "clickable"] {
+                assert!(
+                    ids.contains(&required),
+                    "{path} declares no `{required}` object"
+                );
+            }
+        }
+    }
+
+    /// The calculator's detail keys and the shipped calculator templates must
+    /// agree in both directions: a `detail-<key>` widget the calculator never
+    /// emits is dead markup, and a key it does emit that no template declares is
+    /// a field nobody can see. Both are silent, so both are worth catching.
+    #[test]
+    fn shipped_calculator_templates_and_detail_keys_agree() {
+        use huffi::engine::provider::builtin::calculator::DETAIL_KEYS;
+        use huffi::engine::provider::is_detail_key;
+
+        let mut declared: Vec<String> = Vec::new();
+        for (path, xml) in shipped_templates() {
+            if !path.contains("providers/calculator") {
+                continue;
+            }
+            for id in widget_ids(&xml) {
+                if let Some(key) = id.strip_prefix("detail-") {
+                    // A key that can't be a widget id is silently dropped by the
+                    // renderer, so one drifting out of the character set would
+                    // make the field unreachable rather than fail loudly.
+                    assert!(
+                        is_detail_key(key),
+                        "{path} declares detail-{key}, which is not a usable widget id"
+                    );
+                    assert!(
+                        DETAIL_KEYS.contains(&key),
+                        "{path} declares detail-{key}, which the calculator never emits"
+                    );
+                    declared.push(key.to_owned());
+                }
+            }
+        }
+        assert!(!declared.is_empty(), "no calculator detail widgets found");
+        for key in DETAIL_KEYS {
+            assert!(
+                declared.iter().any(|d| d == key),
+                "calculator emits detail-{key} but no shipped template declares it"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_template_wins_when_present() {
+        let dir = TempTheme::new("provider");
+        let provider_dir = dir.path().join("providers").join("calculator");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        std::fs::write(
+            provider_dir.join("entry.ui"),
+            "<interface><object class=\"GtkBox\" id=\"row\"/></interface>",
+        )
+        .unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
+
+        let calc = theme.entry_template(Some("calculator"), None);
+        assert!(calc.contains("GtkBox\" id=\"row\""), "{calc}");
+        let generic = theme.entry_template(Some("desktop"), None);
+        assert!(
+            generic.contains("title"),
+            "fallback template for other providers"
+        );
+    }
+
+    /// Write a user theme containing a `providers/<id>/<variant>/entry.ui`
+    /// alongside the provider-level and theme-wide templates, so the
+    /// resolution chain can be asserted end to end.
+    fn variant_theme(tag: &str) -> TempTheme {
+        let dir = TempTheme::new(tag);
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calculator/entry.ui", "provider"),
+            ("providers/calculator/date/entry.ui", "variant"),
+        ] {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn variant_template_wins_over_provider_template() {
+        let dir = variant_theme("variant-wins");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let date = theme.entry_template(Some("calculator"), Some("date"));
+        assert!(date.contains("variant"), "{date}");
+    }
+
+    /// A theme with a `variants/<name>/entry.ui` that no provider claims. The
+    /// "prov" provider has no template of its own, so it should fall through
+    /// the provider level to the shared variant.
+    fn shared_variant_theme(tag: &str) -> TempTheme {
+        let dir = TempTheme::new(tag);
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calc/entry.ui", "provider"),
+            ("providers/calc/priv/entry.ui", "priv-variant"),
+            ("variants/shared/entry.ui", "shared-variant"),
+        ] {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn shared_variant_applies_to_a_provider_with_no_template_of_its_own() {
+        let dir = shared_variant_theme("shared-applies");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let row = theme.entry_template(Some("prov"), Some("shared"));
+        assert!(row.contains("shared-variant"), "{row}");
+    }
+
+    #[test]
+    fn shared_variant_applies_when_there_is_no_provider_at_all() {
+        let dir = shared_variant_theme("shared-no-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let row = theme.entry_template(None, Some("shared"));
+        assert!(row.contains("shared-variant"), "{row}");
+    }
+
+    #[test]
+    fn provider_variant_wins_over_shared_variant() {
+        let dir = shared_variant_theme("shared-vs-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let row = theme.entry_template(Some("calc"), Some("priv"));
+        assert!(row.contains("priv-variant"), "{row}");
+    }
+
+    /// The point of putting the shared position *after* the provider template:
+    /// a theme that customises one provider keeps winning for it, rather than
+    /// having its layout replaced by the shared variant file.
+    #[test]
+    fn provider_template_wins_over_shared_variant_for_the_same_variant_name() {
+        let dir = TempTheme::new("shared-after-provider");
+        for (rel, body) in [
+            ("entry.ui", "global"),
+            ("providers/calc/entry.ui", "provider"),
+            ("variants/shared/entry.ui", "shared-variant"),
+        ] {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("<interface>{body}</interface>")).unwrap();
+        }
+        let theme = Theme::with_root(Some(dir.owned()));
+        let row = theme.entry_template(Some("calc"), Some("shared"));
+        assert!(row.contains("provider"), "{row}");
+    }
+
+    #[test]
+    fn unknown_variant_falls_back_to_provider_template() {
+        let dir = variant_theme("variant-unknown");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let number = theme.entry_template(Some("calculator"), Some("number"));
+        assert!(number.contains("provider"), "{number}");
+    }
+
+    #[test]
+    fn unknown_provider_and_variant_fall_back_to_global_template() {
+        let dir = variant_theme("variant-no-provider");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let other = theme.entry_template(Some("desktop"), Some("date"));
+        assert!(other.contains("global"), "{other}");
+    }
+
+    #[test]
+    fn variant_without_provider_id_uses_global_template() {
+        let dir = variant_theme("variant-unscoped");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let unowned = theme.entry_template(None, Some("date"));
+        assert!(unowned.contains("global"), "{unowned}");
+    }
+
+    #[test]
+    fn each_variant_is_cached_separately() {
+        let dir = variant_theme("variant-cache");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let date = theme.entry_template(Some("calculator"), Some("date"));
+        let number = theme.entry_template(Some("calculator"), Some("number"));
+        assert!(!Rc::ptr_eq(&date, &number));
+        assert!(Rc::ptr_eq(
+            &date,
+            &theme.entry_template(Some("calculator"), Some("date"))
+        ));
+        assert!(Rc::ptr_eq(
+            &number,
+            &theme.entry_template(Some("calculator"), Some("number"))
+        ));
+    }
+
+    #[test]
+    fn user_resource_only_reads_user_layer() {
+        let dir = TempTheme::new("user-only");
+        std::fs::write(dir.path().join("style.css"), "/* u */").unwrap();
+        let theme = Theme::with_root(Some(dir.owned()));
+        assert_eq!(theme.user_resource("style.css").as_deref(), Some("/* u */"));
+
+        let none = Theme::with_root(None);
+        assert_eq!(none.user_resource("style.css"), None);
+    }
+
+    #[test]
+    fn entry_template_is_cached() {
+        let dir = TempTheme::new("cache");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let a = theme.entry_template(Some("desktop"), None);
+        // Pointer equality, not just equal contents: the second call must hand
+        // back the very same allocation rather than re-resolving the theme.
+        let b = theme.entry_template(Some("desktop"), None);
+        assert!(Rc::ptr_eq(&a, &b), "template was reallocated, not cached");
+    }
+
+    #[test]
+    fn default_template_is_cached_separately_from_provider_templates() {
+        let dir = TempTheme::new("cache-keys");
+        let theme = Theme::with_root(Some(dir.owned()));
+        let default = theme.entry_template(None, None);
+        let desktop = theme.entry_template(Some("desktop"), None);
+        assert!(!Rc::ptr_eq(&default, &desktop));
+        // Both are cached, and each keeps its own identity across calls.
+        assert!(Rc::ptr_eq(&default, &theme.entry_template(None, None)));
+        assert!(Rc::ptr_eq(
+            &desktop,
+            &theme.entry_template(Some("desktop"), None)
+        ));
     }
 }

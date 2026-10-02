@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -7,7 +8,7 @@ use crate::engine::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Run `args` as a program. With `terminal`, the args are appended to
     /// the configured terminal wrapper before spawning.
@@ -57,6 +58,24 @@ impl Action {
     }
 }
 
+/// Whether `key` is usable as a named-detail key: a non-empty run of
+/// `[a-z0-9-]`, since the row renderer turns it into a `detail-<key>` GTK
+/// object id and looks the widget up under exactly that name.
+///
+/// Enforced by `debug_assert!` in [`EntryBuilder::detail`] rather than a
+/// panic. `Provider::query` returns a plain `Vec<Entry>`, so a provider has no
+/// way to report a bad key; a hard assert would mean one bad key in a
+/// third-party provider crashes the launcher on every keystroke. This way
+/// development builds and the test suite fail loudly at the point of the
+/// mistake, while a release build degrades safely — the renderer skips keys
+/// failing this check, so the field is simply not shown.
+pub fn is_detail_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
     EntryBuilder {
         id: id.into(),
@@ -65,7 +84,8 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
         subtitle: None,
         comment: None,
         icon: None,
-        extra: None,
+        details: BTreeMap::new(),
+        variant: None,
         action: None,
         rank: None,
         history_key: None,
@@ -80,7 +100,8 @@ pub struct EntryBuilder {
     subtitle: Option<String>,
     comment: Option<String>,
     icon: Option<Icon>,
-    extra: Option<serde_json::Value>,
+    details: BTreeMap<String, String>,
+    variant: Option<String>,
     action: Option<Action>,
     rank: Option<Rank>,
     history_key: Option<String>,
@@ -93,11 +114,18 @@ impl EntryBuilder {
         self
     }
 
+    /// Set the secondary line under the title.
     pub fn subtitle(mut self, s: impl Into<String>) -> Self {
         self.subtitle = Some(s.into());
         self
     }
 
+    /// Set the long-form description of this entry: prose, a caveat, a
+    /// definition.
+    ///
+    /// The default `entry.ui` does not declare a `comment` widget, so this is
+    /// not shown unless a theme asks for it. Emit what you know; whether it
+    /// reaches the screen is the theme's call.
     pub fn comment(mut self, s: impl Into<String>) -> Self {
         self.comment = Some(s.into());
         self
@@ -122,8 +150,42 @@ impl EntryBuilder {
         self
     }
 
-    pub fn extra(mut self, v: serde_json::Value) -> Self {
-        self.extra = Some(v);
+    /// Add a named display field, bound by the row renderer onto a
+    /// `detail-<key>` widget in the active theme's row template. Keys must
+    /// match `[a-z0-9-]+` (see [`is_detail_key`]). A later detail with the same
+    /// key replaces this one.
+    ///
+    /// See [`EntryMeta::details`].
+    pub fn detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let key = key.into();
+        debug_assert!(
+            is_detail_key(&key),
+            "detail key {key:?} must match [a-z0-9-]+ to become a detail-<key> widget id"
+        );
+        self.details.insert(key, value.into());
+        self
+    }
+
+    /// Add several named display fields at once. Later keys win.
+    pub fn details(mut self, fields: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.details.extend(fields);
+        for key in self.details.keys() {
+            debug_assert!(
+                is_detail_key(key),
+                "detail key {key:?} must match [a-z0-9-]+ to become a detail-<key> widget id"
+            );
+        }
+        self
+    }
+
+    /// Select a row layout for this entry, e.g. `"info"`. A variant names a
+    /// *layout* rather than a result kind, so prefer a name another provider
+    /// could plausibly want too — that is what lets a theme ship one
+    /// `variants/<name>/entry.ui` for every provider reporting it.
+    ///
+    /// See [`EntryMeta::variant`].
+    pub fn variant(mut self, name: impl Into<String>) -> Self {
+        self.variant = Some(name.into());
         self
     }
 
@@ -191,7 +253,8 @@ impl EntryBuilder {
                 subtitle: self.subtitle,
                 comment: self.comment,
                 icon: self.icon,
-                extra: self.extra,
+                details: self.details,
+                variant: self.variant,
                 set_query: self.set_query,
                 action: self.action.unwrap_or(Action::NoOp),
             },
@@ -325,6 +388,34 @@ mod tests {
     use super::*;
     use serde::Deserialize;
 
+    #[test]
+    fn detail_keys_must_be_lowercase_word_chars() {
+        for good in ["quantity", "exact", "doc", "abs-time", "x1", "9lives", "-"] {
+            assert!(is_detail_key(good), "{good:?} should be a valid detail key");
+        }
+        for bad in [
+            "", "Quantity", "abs_time", "abs time", "abs.time", "abs/time", "ümlaut",
+        ] {
+            assert!(!is_detail_key(bad), "{bad:?} should not be a detail key");
+        }
+    }
+
+    #[test]
+    fn details_reach_the_entry_under_their_keys() {
+        let meta = entry("id", "title")
+            .detail("quantity", "length")
+            .details([
+                ("exact".to_owned(), "1/3".to_owned()),
+                ("dimensions".to_owned(), "L T^-1".to_owned()),
+            ])
+            .build();
+        let details = &meta.entry.details;
+        assert_eq!(details["quantity"], "length");
+        assert_eq!(details["exact"], "1/3");
+        assert_eq!(details["dimensions"], "L T^-1");
+        assert!(details.keys().all(|k| is_detail_key(k)));
+    }
+
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(default)]
     struct DummyConfig {
@@ -356,7 +447,9 @@ mod tests {
     fn parse_extra_config_non_critical_error_when_invalid() {
         let extra = Some(serde_json::json!({ "weight": "not a number" }));
         match parse_extra_config::<DummyConfig>(&extra) {
-            Err(ProviderResult::Config { critical: false, .. }) => {}
+            Err(ProviderResult::Config {
+                critical: false, ..
+            }) => {}
             other => panic!("expected non-critical Config error, got {other:?}"),
         }
     }
