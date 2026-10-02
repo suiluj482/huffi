@@ -8,7 +8,7 @@ use crate::engine::scoring::QueryGroup;
 use super::config::{ProviderConfig, ProviderOverride};
 use super::{
     CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext,
-    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
+    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -56,6 +56,7 @@ impl ProviderCollection {
         )))?;
         collection.add_provider(Box::new(CalculatorProvider::new()))?;
         collection.add_provider(Box::new(NixRunProvider::new()))?;
+        collection.add_provider(Box::new(UnicodeProvider::new()))?;
         Ok(collection)
     }
 }

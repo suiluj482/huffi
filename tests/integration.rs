@@ -148,6 +148,11 @@ fn providers_lists_entries() {
     assert!(providers.iter().any(|e| e.id == "calculator" && e.name == "calculator"));
     assert!(providers.iter().any(|e| e.id == "meta" && e.name == "meta"));
     assert!(providers.iter().any(|e| e.id == "test" && e.name == "test"));
+    assert!(
+        providers
+            .iter()
+            .any(|e| e.id == "unicode" && e.name == "unicode")
+    );
 }
 
 #[test]
@@ -171,4 +176,85 @@ fn boost_moves_app_to_top() {
         .clone()
         .unwrap_or(after[0].entry.id.clone());
     assert_eq!(top_key, target);
+}
+
+/// The prefix is what puts the Unicode provider in play, and what keeps it
+/// out of the way otherwise: `:` on its own must not swallow a query.
+#[test]
+fn unicode_prefix_is_gated_on_the_colon() {
+    let mut engine = TestEngine::new();
+
+    let (prefix, results, _total) = engine.query(":snowman");
+    assert_eq!(prefix.as_deref(), Some(":"));
+    // The provider hands over every row and the engine ranks them: the row
+    // whose CLDR name is exactly what was typed comes first.
+    let top = results.first().expect("a row for ':snowman'");
+    assert_eq!(top.entry.title, "☃️");
+    assert_eq!(top.entry.subtitle.as_deref(), Some("snowman"));
+    assert!(top.combined > 0.0, "a named row has to survive scoring");
+
+    // Nothing after the prefix is a placeholder, not an empty list. Other
+    // providers still answer an empty query, so this counts the rows that came
+    // from the Unicode provider.
+    let (_prefix, results, _total) = engine.query(":");
+    let unicode: Vec<_> = results
+        .iter()
+        .filter(|r| r.entry.provider_id.as_deref() == Some("unicode"))
+        .collect();
+    assert_eq!(
+        unicode.len(),
+        1,
+        "expected just the placeholder: {unicode:?}"
+    );
+    assert_eq!(unicode[0].entry.id, "unicode-placeholder");
+    assert_eq!(unicode[0].entry.title, "Search unicode characters");
+
+    // Without the prefix the provider stays out of it entirely.
+    let (prefix, _results, _total) = engine.query("snowman");
+    assert_ne!(prefix.as_deref(), Some(":"));
+}
+
+/// A code point names a character outright, which the engine cannot fuzzy
+/// match, so the row has to reach the list by score instead of vanishing.
+#[test]
+fn unicode_code_point_query_reaches_the_results() {
+    let mut engine = TestEngine::new();
+    let (prefix, results, _total) = engine.query(":u+1f600");
+    assert_eq!(prefix.as_deref(), Some(":"));
+    let top = results.first().expect("a row for ':u+1f600'");
+    assert_eq!(top.entry.title, "😀");
+    assert!(top.combined > 0.0);
+}
+
+/// Selecting copies the character, and the copy is a launch like any other, so
+/// the character drifts up in later queries.
+#[test]
+fn unicode_select_copies_and_then_ranks_first() {
+    use huffi::engine::provider::Action;
+
+    let mut engine = TestEngine::new();
+
+    let (_prefix, before, _) = engine.query(":bee");
+    assert!(!before.is_empty(), "expected a row for ':bee'");
+    let target = before
+        .iter()
+        .find(|r| r.entry.title == "🐝")
+        .expect("the honeybee emoji")
+        .clone();
+
+    // The test engine runs dry, so the action is asserted rather than carried
+    // out: what matters is that selecting the row copies the character and
+    // not its name or its code point.
+    match &target.entry.action {
+        Action::Clipboard { value } => assert_eq!(value, "🐝"),
+        other => panic!("expected Clipboard action, got {other:?}"),
+    }
+    assert_eq!(target.history_key.as_deref(), Some("unicode-1f41d"));
+
+    for _ in 0..5 {
+        engine.engine.select(":bee", &target.entry.id);
+    }
+
+    let (_prefix, after, _) = engine.query(":bee");
+    assert_eq!(after[0].entry.id, target.entry.id);
 }

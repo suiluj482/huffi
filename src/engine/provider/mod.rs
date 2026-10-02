@@ -12,6 +12,7 @@
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | engine state — uptime, control socket path, pid, version |
 //! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
+//! | [`UnicodeProvider`] | `:` prefix | `unicode_names2`, `emojis` — characters by name, shortcode, or code point |
 
 pub mod builtin;
 pub mod collection;
@@ -329,6 +330,7 @@ pub use collection::ProviderCollection;
 
 pub use builtin::{
     CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, TestProvider,
+    UnicodeProvider,
 };
 pub use util::split_command;
 
