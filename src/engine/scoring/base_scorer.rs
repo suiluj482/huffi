@@ -56,9 +56,12 @@ impl BaseScorer {
                         base_score: score as f64,
                     }),
                     Rank::MatchFields(fields) => {
-                        if let Some(r) =
-                            score_fields(&mut self.fuzzy_matcher, needle, &fields, &mut haystack_buf)
-                            && r > 0.0
+                        if let Some(r) = score_fields(
+                            &mut self.fuzzy_matcher,
+                            needle,
+                            &fields,
+                            &mut haystack_buf,
+                        ) && r > 0.0
                         {
                             raw.push((
                                 Scoreable {
@@ -200,8 +203,10 @@ mod tests {
         let mut haystack_buf: Vec<char> = Vec::new();
         let fields_a = fields(&[("Firefox", 1.0), ("Unrelated", 1.0)]);
         let fields_b = fields(&[("Firefox", 1.0), ("Fireshot", 1.0)]);
-        let score_a = score_fields(&mut fuzzy_matcher, needle, &fields_a, &mut haystack_buf).unwrap();
-        let score_b = score_fields(&mut fuzzy_matcher, needle, &fields_b, &mut haystack_buf).unwrap();
+        let score_a =
+            score_fields(&mut fuzzy_matcher, needle, &fields_a, &mut haystack_buf).unwrap();
+        let score_b =
+            score_fields(&mut fuzzy_matcher, needle, &fields_b, &mut haystack_buf).unwrap();
         assert!(score_b > score_a);
     }
 

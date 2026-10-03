@@ -48,6 +48,14 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: nix develop --command cargo clippy --all-targets --all-features -- -D warnings
 
+  rustfmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - run: nix develop --command cargo fmt --all -- --check
+
   cargo-deny:
     name: Deny
     runs-on: ubuntu-latest
