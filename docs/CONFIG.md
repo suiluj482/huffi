@@ -92,6 +92,21 @@ weight_desc         = 0.0
 # Default: 7 days.
 cache_max_age_secs  = 604800
 
+[engine.provider.builtin.unicode]
+# Trigger prefix: `:smile` copies 😄
+# prefixes = [":"]
+# Only call the provider when a query matches one of its prefixes.
+# prefix_only = true
+# Set `enabled = false` to skip the provider entirely
+
+[engine.provider.builtin.unicode.extra]
+# Fuzzy-match field weights for the Unicode provider: one field for the name
+# (the CLDR name of an emoji, the Unicode name of any other character), one
+# per shortcode, and one for the code point's hex digits.
+weight_name         = 1.0
+weight_shortcode    = 1.3
+weight_codepoint    = 0.6
+
 [engine.external]
 # For `Terminal=true` desktop entries: the argv items to prepend to the
 # entry's command — the terminal binary plus whatever flags it expects before

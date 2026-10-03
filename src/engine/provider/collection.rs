@@ -8,7 +8,7 @@ use crate::engine::scoring::QueryGroup;
 use super::config::{ProviderConfig, ProviderOverride};
 use super::{
     CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext,
-    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
+    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -56,6 +56,7 @@ impl ProviderCollection {
         )))?;
         collection.add_provider(Box::new(CalculatorProvider::new()))?;
         collection.add_provider(Box::new(NixRunProvider::new()))?;
+        collection.add_provider(Box::new(UnicodeProvider::new()))?;
         Ok(collection)
     }
 }
@@ -434,11 +435,9 @@ mod tests {
                 .iter()
                 .any(|p| p.id == "desktop" && p.name == "desktop" && p.prefixes.is_empty())
         );
-        assert!(
-            providers.iter().any(|p| {
-                p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
-            })
-        );
+        assert!(providers.iter().any(|p| {
+            p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
+        }));
     }
 
     #[test]
@@ -511,10 +510,8 @@ mod tests {
 
     #[test]
     fn meta_overrides_applied_from_config() {
-        let dir = std::env::temp_dir().join(format!(
-            "huffi-providers-override-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("huffi-providers-override-{}", std::process::id()));
         let mut overrides = HashMap::new();
         overrides.insert(
             "calculator".to_string(),
@@ -537,8 +534,7 @@ mod tests {
 
     #[test]
     fn provider_extra_config_is_passed_to_init() {
-        let received: Arc<Mutex<Option<serde_json::Value>>> =
-            Arc::new(Mutex::new(None));
+        let received: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
 
         struct ExtraCapturingProvider {
             received: Arc<Mutex<Option<serde_json::Value>>>,
@@ -556,7 +552,8 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join(format!("huffi-providers-extra-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("huffi-providers-extra-{}", std::process::id()));
         let override_cfg = ProviderConfig {
             builtin: HashMap::from([(
                 "extra-capture".to_string(),
@@ -598,8 +595,10 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join(format!("huffi-providers-{}-critical", std::process::id()));
-        let mut c = ProviderCollection::new_with_config(dir, true, &ProviderConfig::default()).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("huffi-providers-{}-critical", std::process::id()));
+        let mut c =
+            ProviderCollection::new_with_config(dir, true, &ProviderConfig::default()).unwrap();
         c.add_provider(Box::new(FailingInit)).unwrap();
         let providers = c.providers();
         assert!(!providers.iter().any(|p| p.name == "failing" && p.enabled));
@@ -664,10 +663,8 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join(format!(
-            "huffi-providers-disabled-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("huffi-providers-disabled-{}", std::process::id()));
         let override_cfg = ProviderConfig {
             builtin: HashMap::from([(
                 "config-disabled".to_string(),
@@ -720,7 +717,11 @@ mod tests {
                     ctx.prefix.map(String::from),
                     ctx.query.to_string(),
                 ));
-                vec![entry("prefixed", "prefixed").history_key("prefixed").score(1.0)]
+                vec![
+                    entry("prefixed", "prefixed")
+                        .history_key("prefixed")
+                        .score(1.0),
+                ]
             }
         }
 

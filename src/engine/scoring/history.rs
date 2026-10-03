@@ -425,10 +425,7 @@ mod tests {
 
         let scored = history.history_scoring(
             "fi",
-            vec![
-                base("Gimp", 0.7, Some("Gimp")),
-                base("Other", 0.6, None),
-            ],
+            vec![base("Gimp", 0.7, Some("Gimp")), base("Other", 0.6, None)],
         );
 
         let gimp = scored.iter().find(|s| s.entry == "Gimp").unwrap();

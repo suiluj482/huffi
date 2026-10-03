@@ -158,14 +158,18 @@ fn nix_available() -> bool {
 fn load_or_build(data_dir: &Path, config: NixConfig) -> Arc<[Entry]> {
     let path = cache_path(data_dir);
 
-    if fresh(&path, config.cache_max_age_secs) && let Some(packages) = load_cache(&path) {
+    if fresh(&path, config.cache_max_age_secs)
+        && let Some(packages) = load_cache(&path)
+    {
         return build_entries(&packages, config);
     }
 
     let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // Another thread may have regenerated the cache while we waited for the lock.
-    if fresh(&path, config.cache_max_age_secs) && let Some(packages) = load_cache(&path) {
+    if fresh(&path, config.cache_max_age_secs)
+        && let Some(packages) = load_cache(&path)
+    {
         return build_entries(&packages, config);
     }
 
@@ -553,8 +557,8 @@ mod tests {
     #[test]
     #[ignore]
     fn profile_nix_keystroke_cost() {
-        use crate::engine::scoring::base_scorer::BaseScorer;
         use crate::engine::scoring::QueryGroup;
+        use crate::engine::scoring::base_scorer::BaseScorer;
         use std::time::Instant;
 
         let home = std::env::var("HOME").expect("HOME set");

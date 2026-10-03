@@ -20,7 +20,7 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
 use huffi::engine::provider::ProviderMeta;
-use huffi::engine::provider::{EntryMeta, Icon, is_detail_key};
+use huffi::engine::provider::{EntryMeta, Icon, QuerySuggestion, is_detail_key};
 use huffi::engine::scoring::Scored;
 
 use crate::ui::control::{self, ControlRequest};
@@ -86,7 +86,7 @@ struct Row {
     details: BTreeMap<String, String>,
     variant: Option<String>,
     icon: Option<Icon>,
-    set_query: Option<String>,
+    set_query: Option<QuerySuggestion>,
 }
 
 impl From<Scored<EntryMeta>> for Row {
@@ -611,7 +611,13 @@ impl Launcher {
         let local = selected % self.page_size;
         let suggestion = {
             let st = self.state.borrow();
-            st.entries.get(local).and_then(|h| h.set_query.clone())
+            st.entries.get(local).and_then(|row| {
+                // Resolved here rather than per row per keystroke, because only
+                // this one row is ever applied.
+                row.set_query
+                    .as_ref()
+                    .map(|s| s.resolve(st.active_prefix.as_deref()))
+            })
         };
         if let Some(suggestion) = suggestion {
             self.set_query(suggestion);

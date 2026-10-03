@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use crate::engine::config::ExternalConfig;
 use crate::engine::scoring::{MatchField, Rank};
 
-use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult};
+use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult, QuerySuggestion};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -105,7 +105,7 @@ pub struct EntryBuilder {
     action: Option<Action>,
     rank: Option<Rank>,
     history_key: Option<String>,
-    set_query: Option<String>,
+    set_query: Option<QuerySuggestion>,
 }
 
 impl EntryBuilder {
@@ -219,9 +219,23 @@ impl EntryBuilder {
         self
     }
 
-    /// Set the query suggestion the UI applies when this entry is tab-selected.
+    /// Set the query suggestion the UI applies when this entry is
+    /// tab-selected. The text replaces the whole query.
     pub fn set_query(mut self, query: impl Into<String>) -> Self {
-        self.set_query = Some(query.into());
+        self.set_query = Some(QuerySuggestion::new(query));
+        self
+    }
+
+    /// Set the query suggestion the UI applies when this entry is
+    /// tab-selected, as the text *under* the active prefix rather than as a
+    /// whole query.
+    ///
+    /// This is what a provider refining the query that produced it wants: it
+    /// offers the text and leaves the prefix to the engine, so a `prefixes`
+    /// override in the config file cannot leave the suggestion pointing at a
+    /// prefix that no longer triggers anything.
+    pub fn set_query_keeping_prefix(mut self, query: impl Into<String>) -> Self {
+        self.set_query = Some(QuerySuggestion::keeping_prefix(query));
         self
     }
 
@@ -452,5 +466,33 @@ mod tests {
             }) => {}
             other => panic!("expected non-critical Config error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn set_query_carries_the_whole_query() {
+        let entry = entry("id", "title").set_query("=42").score(1.0);
+        let suggestion = entry.entry.set_query.expect("a suggestion");
+        assert!(!suggestion.keep_prefix);
+        assert_eq!(suggestion.query, "=42");
+    }
+
+    /// A provider refining the query that produced it offers the text alone, so
+    /// a `prefixes` override cannot strand the suggestion on a dead prefix.
+    #[test]
+    fn set_query_keeping_prefix_carries_the_text_only() {
+        let entry = entry("id", "title")
+            .set_query_keeping_prefix("42")
+            .score(1.0);
+        let suggestion = entry.entry.set_query.expect("a suggestion");
+        assert!(suggestion.keep_prefix);
+        assert_eq!(suggestion.query, "42");
+        assert_eq!(suggestion.resolve(Some("#")), "#42");
+    }
+
+    /// The flag belongs to the suggestion, so it cannot be set without one.
+    #[test]
+    fn an_entry_without_a_suggestion_has_nothing_to_resolve() {
+        let entry = entry("id", "title").score(1.0);
+        assert!(entry.entry.set_query.is_none());
     }
 }

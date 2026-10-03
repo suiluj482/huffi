@@ -12,6 +12,7 @@
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | engine state — uptime, control socket path, pid, version |
 //! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
+//! | [`UnicodeProvider`] | `:` prefix | `unicode_names2`, `emojis` — characters by name, shortcode, or code point |
 
 pub mod builtin;
 pub mod collection;
@@ -65,6 +66,54 @@ impl From<&std::path::Path> for Icon {
     }
 }
 
+/// The query the UI applies when an entry is tab-selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuerySuggestion {
+    /// The text to put in the input. With [`keep_prefix`](Self::keep_prefix)
+    /// this is the text *under* the prefix rather than a whole query.
+    pub query: String,
+    /// Whether the active prefix stays in front of
+    /// [`query`](Self::query) when it is applied.
+    ///
+    /// This is what a provider means when it refines the query that produced
+    /// it: it offers the text and leaves the prefix to the engine, the only
+    /// party that knows which prefix is active. A provider whose prefixes can
+    /// be overridden in the config file must not build the prefix into the
+    /// suggestion itself — the override would leave it pointing at a prefix
+    /// that no longer triggers anything.
+    pub keep_prefix: bool,
+}
+
+impl QuerySuggestion {
+    /// A whole query, replacing whatever is in the input.
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            keep_prefix: false,
+        }
+    }
+
+    /// The text under the active prefix, which stays in front of it.
+    pub fn keeping_prefix(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            keep_prefix: true,
+        }
+    }
+
+    /// The query to put in the input, given the prefix currently active.
+    ///
+    /// A [`KeepPrefix`](Self::keep_prefix) suggestion with no prefix in play is
+    /// just its text: that happens only for a provider that was not triggered by
+    /// a prefix, so it has no prefix to keep.
+    pub fn resolve(&self, prefix: Option<&str>) -> String {
+        match (self.keep_prefix, prefix) {
+            (true, Some(prefix)) => format!("{prefix}{}", self.query),
+            _ => self.query.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryMeta {
     /// Id unique within the provider; selection looks results up by it.
@@ -101,8 +150,8 @@ pub struct EntryMeta {
     /// provider that reports it.
     pub variant: Option<String>,
     /// Query the UI applies when the entry is tab-selected, e.g. a
-    /// calculator result as `=42`.
-    pub set_query: Option<String>,
+    /// calculator result as `42`.
+    pub set_query: Option<QuerySuggestion>,
     /// What happens when the entry is selected.
     pub action: Action,
 }
@@ -329,6 +378,7 @@ pub use collection::ProviderCollection;
 
 pub use builtin::{
     CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, TestProvider,
+    UnicodeProvider,
 };
 pub use util::split_command;
 
@@ -403,5 +453,32 @@ mod tests {
         let a = provider.query(ctx);
         let b = provider.query(ctx);
         assert_eq!(a.len(), b.len());
+    }
+
+    #[test]
+    fn a_whole_query_suggestion_ignores_the_prefix() {
+        let suggestion = QuerySuggestion::new("firefox");
+        assert!(!suggestion.keep_prefix);
+        assert_eq!(suggestion.resolve(Some(":")), "firefox");
+        assert_eq!(suggestion.resolve(None), "firefox");
+    }
+
+    /// The prefix is whatever the user configured and typed, so the provider
+    /// offers only the text and this is where the two are joined.
+    #[test]
+    fn a_keeping_prefix_suggestion_takes_the_active_prefix() {
+        let suggestion = QuerySuggestion::keeping_prefix("u+2603");
+        assert!(suggestion.keep_prefix);
+        assert_eq!(suggestion.resolve(Some(":")), ":u+2603");
+        assert_eq!(suggestion.resolve(Some("~")), "~u+2603");
+        assert_eq!(suggestion.resolve(Some("::")), "::u+2603");
+    }
+
+    /// Only a provider that was not prefix-triggered gets here, and it has no
+    /// prefix to keep.
+    #[test]
+    fn a_keeping_prefix_suggestion_without_a_prefix_is_the_text() {
+        let suggestion = QuerySuggestion::keeping_prefix("u+2603");
+        assert_eq!(suggestion.resolve(None), "u+2603");
     }
 }

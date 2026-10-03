@@ -184,7 +184,8 @@ entry("my-entry-id", "Display Name")
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
-| `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected |
+| `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
+| `.set_query_keeping_prefix(text)` | `String` | Query suggestion applied under the active prefix, which stays in front of it |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
 | `.match_fields(fields)` | `Vec<MatchField>` | Fuzzy-match these weighted text fields |
 | `.match_field(text)` | `String` | Shortcut for a single fuzzy-match field at weight 1.0 |
@@ -267,16 +268,31 @@ without `set_query` does nothing.
 
 The suggestion doesn't have to be a completion of what the user typed — it
 can be a completely different query. This is useful for chaining entries
-that produce a value. The [`CalculatorProvider`] sets its suggestion to the
-prefix plus the computed result, so pressing `Tab` on the `= 2 + 2` result
-switches the input to `= 4` and lets you keep calculating without retyping
-the `=` prefix.
+that produce a value.
+
+If the suggestion refines the query that produced the entry, it belongs
+*under the prefix the user typed* rather than replacing the whole query. Use
+`.set_query_keeping_prefix(text)` for that: the UI puts the active prefix back
+in front of it. Do not build the prefix into the text yourself — `prefixes` is
+configurable per provider, so a provider that hardcodes its own prefix leaves
+every suggestion pointing at a prefix the user may have replaced, and `Tab`
+then jumps to a search that no longer reaches you.
 
 ```rust
 entry("my-calculator", "4")
-    .set_query("= 4")
+    .set_query_keeping_prefix("4")
     .score(1.0)
 ```
+
+This is what the [`CalculatorProvider`] does, so pressing `Tab` on the `= 2 + 2`
+result switches the input to `= 4` and lets you keep calculating without
+retyping the `=` prefix — and keeps working for a user who configured
+`prefixes = ["#"]`. The [`UnicodeProvider`] uses it in both directions: a row
+found by name suggests its code point (`u+2603`), and a row found by code point
+suggests its name (`snowman`).
+
+A suggestion keeps the prefix that is *active*, not the provider's first one,
+so a provider declaring several prefixes still lands on the one the user typed.
 
 ### Action: what happens on selection
 
@@ -442,8 +458,8 @@ impl Provider for CustomDirProvider {
 
 See [`CalculatorProvider`] in the source — it triggers on `=`, evaluates
 expressions with [`rink-core`], and returns a single entry with the computed
-result as its title and a `.set_query("= …")` query suggestion so `Tab`
-chains calculations.
+result as its title and a `.set_query_keeping_prefix(…)` query suggestion so
+`Tab` chains calculations.
 
 It's also the worked example for structured results. Rather than asking rink
 for one formatted string, it takes the typed `QueryReply` and derives two
@@ -499,6 +515,7 @@ is passed through `InitContext`. Built-ins are registered in
 [`ProviderCollection::new_with_config()`]: ../src/engine/provider/collection.rs
 [`init()`]: #init
 [`CalculatorProvider`]: ../src/engine/provider/builtin/calculator.rs
+[`UnicodeProvider`]: ../src/engine/provider/builtin/unicode.rs
 [`entry()`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs

@@ -10,9 +10,11 @@ pub mod desktop;
 pub mod meta;
 pub mod nix;
 pub mod test_provider;
+pub mod unicode;
 
 pub use calculator::CalculatorProvider;
 pub use desktop::DesktopEntryProvider;
 pub use meta::MetaProvider;
 pub use nix::NixRunProvider;
 pub use test_provider::TestProvider;
+pub use unicode::UnicodeProvider;
