@@ -184,10 +184,14 @@ impl CalculatorProvider {
     /// The title is also the clipboard value and the query that re-evaluates it,
     /// because all three are the same canonical form of one fact. Every result
     /// needs all three, so they are set once here rather than in each arm.
+    ///
+    /// The re-evaluating query keeps the prefix the user typed instead of
+    /// carrying its own, so a `prefixes` override in the config file is
+    /// followed rather than stranded on a `=` that no longer triggers anything.
     fn row(&self, title: &str) -> crate::engine::provider::EntryBuilder {
         self.base(title)
             .clipboard(title)
-            .set_query(format!("={title}"))
+            .set_query_keeping_prefix(title)
     }
 }
 

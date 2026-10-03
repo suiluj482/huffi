@@ -226,6 +226,47 @@ fn unicode_code_point_query_reaches_the_results() {
     assert!(top.combined > 0.0);
 }
 
+/// The provider must not bake its own prefix into a suggestion: a `prefixes`
+/// override would otherwise leave every `Tab` pointing at a prefix that no
+/// longer triggers anything. This is the regression test for that.
+#[test]
+fn unicode_suggestions_follow_a_prefix_override() {
+    use huffi::engine::config::EngineConfig;
+    use huffi::engine::provider::config::ProviderOverride;
+
+    let dir = PathBuf::from("/tmp/huffi-unicode-prefix-override");
+    let mut config = EngineConfig::default();
+    config.provider.builtin.insert(
+        "unicode".to_string(),
+        ProviderOverride {
+            prefixes: Some(vec!["~".into()]),
+            ..Default::default()
+        },
+    );
+    let mut engine = Engine::new_with_config(&dir, true, &config).expect("engine failed to open");
+
+    // A name row suggests its code point, and the override's prefix is the one
+    // that ends up in front of it.
+    let reply = engine.query("~snowman");
+    assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
+    let top = reply.scored.first().expect("a row for '~snowman'");
+    let suggestion = top.entry.set_query.as_ref().expect("a suggestion");
+    assert!(suggestion.keep_prefix, "the prefix must not be baked in");
+    assert_eq!(suggestion.query, "u+2603", "the text alone, no prefix");
+    assert_eq!(suggestion.resolve(reply.pre.prefix.as_deref()), "~u+2603");
+
+    // And the other way: a code point row suggests the name, behind the same
+    // prefix. Both rows have to exist for the round trip to be reachable.
+    let reply = engine.query("~u+2603");
+    assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
+    let top = reply.scored.first().expect("a row for '~u+2603'");
+    let suggestion = top.entry.set_query.as_ref().expect("a suggestion");
+    assert_eq!(suggestion.query, "snowman");
+    assert_eq!(suggestion.resolve(reply.pre.prefix.as_deref()), "~snowman");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Selecting copies the character, and the copy is a launch like any other, so
 /// the character drifts up in later queries.
 #[test]

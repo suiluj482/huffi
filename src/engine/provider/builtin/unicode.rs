@@ -228,10 +228,12 @@ impl Characters {
 
         // `Tab` walks the other way from a code point row, which offers the
         // name: this row offers the number, so `:snowman` and `:u+2603` are one
-        // keystroke apart. Spelled `u+` because the bare form only reads as a
-        // code point from `100` up, which would leave `§` and `A` unreachable.
-        // For a sequence this is its first code point, and every sequence built
-        // on it answers that number, so `Tab` on 🇩🇪 lists the flags.
+        // keystroke apart. The prefix is left to the engine, so a `prefixes`
+        // override is followed. Spelled `u+` because the bare form only reads
+        // as a code point from `100` up, which would leave `§` and `A`
+        // unreachable. For a sequence this is its first code point, and every
+        // sequence built on it answers that number, so `Tab` on 🇩🇪 lists the
+        // flags.
         let code_point = format!("u+{:x}", ch as u32);
 
         self.rows.push(
@@ -239,7 +241,7 @@ impl Characters {
                 .subtitle(name)
                 .clipboard(display)
                 .history_key(id)
-                .set_query(format!("{PREFIX}{code_point}"))
+                .set_query_keeping_prefix(code_point)
                 .match_fields(fields),
         );
     }
@@ -276,7 +278,7 @@ impl Characters {
                         .subtitle(name)
                         .clipboard(number.clone())
                         .history_key(id.clone())
-                        .set_query(format!("{PREFIX}{}", name.to_lowercase()))
+                        .set_query_keeping_prefix(name.to_lowercase())
                         .score(1.0)
                 })
                 .collect(),
@@ -308,7 +310,7 @@ fn unindexed_character_hit(code: u32) -> Vec<Entry> {
             .subtitle(name.clone())
             .clipboard(number)
             .history_key(id)
-            .set_query(format!("{PREFIX}{}", name.to_lowercase()))
+            .set_query_keeping_prefix(name.to_lowercase())
             .score(1.0),
     ]
 }
@@ -398,6 +400,19 @@ mod tests {
         }
     }
 
+    /// The text a row offers to `Tab`, carrying no prefix of its own: the
+    /// engine puts the active one back when the suggestion is applied, which is
+    /// what makes a `prefixes` override work.
+    fn suggestion(row: &Entry) -> &str {
+        let suggestion = row.entry.set_query.as_ref().expect("a suggestion");
+        assert!(
+            suggestion.keep_prefix,
+            "{:?} must not carry its own prefix",
+            suggestion.query
+        );
+        &suggestion.query
+    }
+
     #[test]
     fn prefix_is_colon_and_gated_on_it() {
         let meta = provider().meta();
@@ -458,7 +473,7 @@ mod tests {
     fn a_code_point_hit_is_scored_and_suggests_the_name() {
         let rows = query(&mut provider(), "2603");
         assert!(matches!(rows[0].rank, Rank::Score(_)));
-        assert_eq!(rows[0].entry.set_query.as_deref(), Some(":snowman"));
+        assert_eq!(suggestion(&rows[0]), "snowman");
     }
 
     #[test]
@@ -491,8 +506,8 @@ mod tests {
     fn a_low_code_point_is_reachable_through_the_suggestion() {
         let row = row_for(characters(), '§');
         assert_eq!(
-            row.entry.set_query.as_deref(),
-            Some(":u+a7"),
+            suggestion(row),
+            "u+a7",
             "the suggestion must parse back as a code point"
         );
         assert_eq!(titles(&query(&mut provider(), "u+a7")), vec!["§"]);
@@ -514,7 +529,7 @@ mod tests {
         };
         assert_eq!(value, "2603");
         assert_eq!(rows[0].entry.title, "☃️", "the character is still shown");
-        assert_eq!(rows[0].entry.set_query.as_deref(), Some(":snowman"));
+        assert_eq!(suggestion(&rows[0]), "snowman");
     }
 
     /// The mirror image: a row found by name pastes the character and offers
@@ -526,7 +541,7 @@ mod tests {
             panic!("expected a clipboard action, got {:?}", row.entry.action);
         };
         assert_eq!(value, "→");
-        assert_eq!(row.entry.set_query.as_deref(), Some(":u+2192"));
+        assert_eq!(suggestion(row), "u+2192");
     }
 
     /// Every row's suggestion is a query the provider answers, at any code
@@ -537,11 +552,9 @@ mod tests {
         // on it answers — so `Tab` on 🇩🇪 lists the flags rather than one flag.
         let flag = "🇩🇪".chars().next().expect("a code point");
         for ch in ['☃', '→', '§', '😀', '🐝', flag] {
-            let suggestion = row_for(characters(), ch).entry.set_query.clone();
-            let query = suggestion.expect("a suggestion");
-            let query = query.strip_prefix(PREFIX).expect("prefixed");
+            let query = suggestion(row_for(characters(), ch)).to_string();
             assert!(
-                parse_code_point(query).is_some(),
+                parse_code_point(&query).is_some(),
                 "{query:?} does not read as a code point"
             );
         }
