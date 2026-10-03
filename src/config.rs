@@ -205,10 +205,7 @@ terminal = ["foot"]
             .expect("desktop override");
         assert_eq!(desktop_ov.name.as_deref(), Some("Apps"));
         assert_eq!(desktop_ov.enabled, Some(false));
-        assert_eq!(
-            desktop_ov.prefixes.as_deref(),
-            Some(&["!".to_string()][..])
-        );
+        assert_eq!(desktop_ov.prefixes.as_deref(), Some(&["!".to_string()][..]));
         let extra = desktop_ov.extra.as_ref().expect("extra config");
         assert_eq!(extra["weight_comment"], 0.9);
 

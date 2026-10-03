@@ -144,8 +144,16 @@ fn providers_lists_entries() {
     let engine = TestEngine::new();
     let providers = engine.engine.providers();
     assert!(!providers.is_empty());
-    assert!(providers.iter().any(|e| e.id == "desktop" && e.name == "desktop"));
-    assert!(providers.iter().any(|e| e.id == "calculator" && e.name == "calculator"));
+    assert!(
+        providers
+            .iter()
+            .any(|e| e.id == "desktop" && e.name == "desktop")
+    );
+    assert!(
+        providers
+            .iter()
+            .any(|e| e.id == "calculator" && e.name == "calculator")
+    );
     assert!(providers.iter().any(|e| e.id == "meta" && e.name == "meta"));
     assert!(providers.iter().any(|e| e.id == "test" && e.name == "test"));
     assert!(

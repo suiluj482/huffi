@@ -6,7 +6,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::engine::provider::{
-    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, parse_extra_config,
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+    parse_extra_config,
 };
 use crate::engine::scoring::MatchField;
 
@@ -525,7 +526,10 @@ mod tests {
     fn selecting_a_code_point_row_copies_the_number() {
         let rows = query(&mut provider(), "2603");
         let Action::Clipboard { value } = &rows[0].entry.action else {
-            panic!("expected a clipboard action, got {:?}", rows[0].entry.action);
+            panic!(
+                "expected a clipboard action, got {:?}",
+                rows[0].entry.action
+            );
         };
         assert_eq!(value, "2603");
         assert_eq!(rows[0].entry.title, "☃️", "the character is still shown");
@@ -602,7 +606,9 @@ mod tests {
     #[test]
     fn a_sequence_emoji_is_pasted_whole() {
         let rows = query(&mut provider(), "flag_de");
-        let flag = rows.iter().find(|row| row.entry.id == "unicode-1f1e9-1f1ea");
+        let flag = rows
+            .iter()
+            .find(|row| row.entry.id == "unicode-1f1e9-1f1ea");
         let Action::Clipboard { value } = &flag.expect("the German flag").entry.action else {
             panic!("expected a clipboard action");
         };
@@ -637,8 +643,18 @@ mod tests {
     #[test]
     fn the_index_skips_the_cjk_and_hangul_names() {
         let rows = &characters().rows;
-        assert!(!rows.iter().any(|row| row.entry.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00")));
-        assert!(!rows.iter().any(|row| row.entry.subtitle.as_deref().unwrap_or_default().starts_with("HANGUL")));
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.entry.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00"))
+        );
+        assert!(!rows.iter().any(|row| {
+            row.entry
+                .subtitle
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("HANGUL")
+        }));
     }
 
     #[test]
@@ -655,11 +671,7 @@ mod tests {
     fn no_character_is_indexed_twice() {
         let mut seen = HashSet::new();
         for row in &characters().rows {
-            assert!(
-                seen.insert(row.entry.id.clone()),
-                "twice: {}",
-                row.entry.id
-            );
+            assert!(seen.insert(row.entry.id.clone()), "twice: {}", row.entry.id);
         }
     }
 
@@ -692,18 +704,20 @@ mod tests {
             data_dir: &std::env::temp_dir(),
             extra: Some(serde_json::json!({ "weight_name": "not a number" })),
         });
-        assert!(!matches!(result, ProviderResult::Config { critical: true, .. }));
+        assert!(!matches!(
+            result,
+            ProviderResult::Config { critical: true, .. }
+        ));
         assert_eq!(provider.config, UnicodeConfig::default());
     }
 
     #[test]
     fn extra_config_is_applied_on_init() {
         let mut provider = UnicodeProvider::new();
-        provider
-            .init(InitContext {
-                data_dir: &std::env::temp_dir(),
-                extra: Some(serde_json::json!({ "weight_shortcode": 4.0 })),
-            });
+        provider.init(InitContext {
+            data_dir: &std::env::temp_dir(),
+            extra: Some(serde_json::json!({ "weight_shortcode": 4.0 })),
+        });
         assert_eq!(provider.config.weight_shortcode, 4.0);
     }
 
@@ -769,7 +783,10 @@ mod tests {
             config: UnicodeConfig::default(),
             characters: Some(characters),
         };
-        for text in ["", "s", "sm", "smo", "snow", "snowman", "smile", "be", "heart", "2603", "u+1f600", "+1", "zzzz"] {
+        for text in [
+            "", "s", "sm", "smo", "snow", "snowman", "smile", "be", "heart", "2603", "u+1f600",
+            "+1", "zzzz",
+        ] {
             let t = Instant::now();
             let rows = query(&mut provider, text);
             eprintln!(

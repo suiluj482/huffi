@@ -487,11 +487,9 @@ mod tests {
                 .iter()
                 .any(|p| p.id == "desktop" && p.name == "desktop" && p.prefixes.is_empty())
         );
-        assert!(
-            providers.iter().any(|p| {
-                p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
-            })
-        );
+        assert!(providers.iter().any(|p| {
+            p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
+        }));
     }
 
     /// Profiling harness (run: `cargo test --release profile_engine -- --ignored
@@ -535,10 +533,7 @@ mod tests {
             assert_eq!(scored.len(), n);
             eprintln!(
                 "[prof] query '{q}': total {:?} = group {:?} + score {:?} ({} results)",
-                total,
-                group_dur,
-                score_dur,
-                n
+                total, group_dur, score_dur, n
             );
         }
     }
