@@ -40,10 +40,10 @@ page_size = 10
 # Entry icon size in pixels.
 icon_size = 24
 # Theme name. Four ship in the binary: "default" (neutral greys),
-# "catppuccin-mocha-mauve", "nord" and "tokyo-night-storm" — the last three are
-# unofficial takes on those palettes, colours only. A theme of your own lives in
-# $XDG_CONFIG_HOME/huffi/themes/<name>/ and layers over whichever builtin theme
-# you name, file by file.
+# "catppuccin-mocha-mauve", "nord" and "tokyo-night-storm" — those three take their
+# colours from the palettes of the same name; the layout is huffi's. A theme of your
+# own lives in $XDG_CONFIG_HOME/huffi/themes/<name>/ and layers over whichever builtin
+# theme you name, file by file.
 # theme = "default"
 
 [engine.scoring]

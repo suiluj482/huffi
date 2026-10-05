@@ -27,14 +27,12 @@ Four themes ship today:
 | `nord`                  | [Nord](https://www.nordtheme.com/) — arctic blue accent |
 | `tokyo-night-storm`     | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) Storm variant, with the blue accent |
 
-The three coloured themes are huffi's own, unofficial takes. Only the
-`@define-color` values come from the palettes named above, hand-picked for this
-panel rather than mechanically derived from them; the layout rules underneath are
-huffi's, not the upstream project's. None of this is affiliated with or endorsed by
-Catppuccin, Nord or Tokyo Night, so the names refer to the palette rather than to an
-official port. For the real thing — another accent from the same flavour, or a
-palette variant these don't cover — copy `data/themes/nord/style.css` and edit it,
-which is all a theme is.
+The three coloured themes are huffi's own, **based on** the palettes named above.
+Only the colours come from those palettes. The layout — the sizes, the spacing, what
+gets a highlight and what gets left alone — is huffi's, arranged for a panel this
+small, so nothing here is a faithful port and none of it follows the palette it came
+from. If a row reads badly or a contrast looks off, that's the arrangement rather
+than the palette, and the fix belongs in `style.css` next to the rules below.
 
 Builtin themes are **embedded, not installed**, so start your own theme by
 creating a directory and writing only the files you want to change:
