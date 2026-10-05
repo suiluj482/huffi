@@ -39,8 +39,10 @@ height    = 400
 page_size = 10
 # Entry icon size in pixels.
 icon_size = 24
-# Theme name. Themes live in $XDG_CONFIG_HOME/huffi/themes/<name>/ and
-# overlay the embedded default theme (data/themes/default/) file by file.
+# Theme name. Two ship in the binary: "default" (neutral greys) and
+# "catppuccin-mocha-mauve". A theme of your own lives in
+# $XDG_CONFIG_HOME/huffi/themes/<name>/ and layers over whichever builtin theme
+# you name, file by file.
 # theme = "default"
 
 [engine.scoring]
@@ -150,8 +152,9 @@ The file is installed to `~/.config/huffi/config.toml`.
 ## Other configuration
 
 - **Themes** — a theme is a directory of one stylesheet and GTK Builder row
-  templates, layered over the embedded default file by file, and selected with
-  `[ui] theme = "<name>"` (default: `default`). Themes live in
+  templates, layered over `default` file by file, and selected with
+  `[ui] theme = "<name>"` (default: `default`). Two ship in the binary:
+  `default` and `catppuccin-mocha-mauve`. Your own live in
   `$XDG_CONFIG_HOME/huffi/themes/<name>/`; the reference for their contents,
   the row-template resolution order, the widget ids a template may declare, and
   the classes rows carry is **[`THEMING.md`](THEMING.md)**.

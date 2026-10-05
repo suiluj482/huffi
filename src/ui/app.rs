@@ -1076,7 +1076,7 @@ impl Launcher {
         };
 
         rounded_rect(cr, 0.0, bar_y, width as f64, bar_height, 3.0);
-        let (r, g, b) = theme::mauve(&self.rail.style_context());
+        let (r, g, b) = theme::accent(&self.rail.style_context());
         cr.set_source_rgb(r, g, b);
         let _ = cr.fill();
     }

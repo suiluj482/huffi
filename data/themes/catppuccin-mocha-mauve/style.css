@@ -1,20 +1,19 @@
-/* The default theme: neutral greys with one desaturated slate accent.
+/* Catppuccin Mocha, mauve accent — https://catppuccin.com/palette
  *
- * This is the theme huffi renders when `[ui] theme` is unset, so it tries to
- * stay out of the way — no colour that isn't doing a job, and an accent dull
- * enough to read as a highlight rather than a statement. Coloured alternatives
- * ship alongside it (`catppuccin-mocha-mauve` and friends); they replace this
- * stylesheet wholesale rather than layering over it, see docs/THEMING.md.
+ * The name says what it is: `mocha` is the Catppuccin flavour and `mauve` the
+ * accent, so a sibling theme can use the same flavour with a different accent
+ * without either one renaming the other. The palette is theirs; only the layout
+ * below is huffi's, and it is shared with the base theme rather than duplicated.
  *
- * The accent is not decoration: it is the caret, the selection highlight, the
- * focus border and the scroll rail, so it has to stay legible against
- * `surface1` (4.6:1) and `base` (6.8:1) rather than merely look pretty. */
-@define-color huffi_base_color #1e1e1e;
-@define-color huffi_surface0_color #2a2a2a;
-@define-color huffi_surface1_color #3a3a3a;
-@define-color huffi_text_color #e4e4e4;
-@define-color huffi_subtext0_color #a0a0a0;
-@define-color huffi_accent_color #8aa9c8;
+ * A theme has exactly one stylesheet, and this replaces the base theme's
+ * outright rather than layering over it — see docs/THEMING.md. So the rule set
+ * below is complete on its own. */
+@define-color huffi_base_color #1e1e2e;
+@define-color huffi_surface0_color #313244;
+@define-color huffi_surface1_color #45475a;
+@define-color huffi_text_color #cdd6f4;
+@define-color huffi_subtext0_color #a6adc8;
+@define-color huffi_accent_color #cba6f7;
 
 window {
     background: transparent;
