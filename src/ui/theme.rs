@@ -109,22 +109,16 @@ type TemplateKey = (Option<String>, Option<String>);
 /// selected theme doesn't define it.
 ///
 /// The accent is read here rather than styled because the scroll rail is drawn,
-/// not a widget, so no CSS rule can reach it.
-///
-/// `huffi_mauve_color` is still accepted as a legacy spelling. The base theme
-/// used to *be* the Catppuccin mauve palette, so a theme written against that
-/// release names its accent after it; renaming the variable without reading the
-/// old name would silently drop such a theme's rail colour, which is the one
-/// part of a theme with no CSS rule to notice it missing.
+/// not a widget, so no CSS rule can reach it. A theme that doesn't define the
+/// colour gets the base theme's, which is the one value here that has to be
+/// duplicated from `data/themes/default/style.css`.
 pub fn accent(context: &gtk4::StyleContext) -> (f64, f64, f64) {
-    for name in ["huffi_accent_color", "huffi_mauve_color"] {
-        if let Some(color) = context.lookup_color(name) {
-            return (
-                color.red() as f64,
-                color.green() as f64,
-                color.blue() as f64,
-            );
-        }
+    if let Some(color) = context.lookup_color("huffi_accent_color") {
+        return (
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+        );
     }
     (
         0x8a as f64 / 255.0,
@@ -478,10 +472,14 @@ mod tests {
             names.contains(&BASE_THEME),
             "the base theme {BASE_THEME:?} is not in data/themes/"
         );
-        assert!(
-            names.contains(&"catppuccin-mocha-mauve"),
-            "the Catppuccin theme moved out of `default` but isn't builtin; got {names:?}"
-        );
+        // The alternatives are named in docs/THEMING.md, so a rename that
+        // doesn't reach the docs is as broken as one that doesn't reach here.
+        for alternative in ["catppuccin-mocha-mauve", "nord", "tokyo-night-storm"] {
+            assert!(
+                names.contains(&alternative),
+                "{alternative:?} is documented as a builtin theme but isn't one; got {names:?}"
+            );
+        }
     }
 
     /// A builtin theme's stylesheet *replaces* the base theme's rather than
@@ -522,18 +520,14 @@ mod tests {
         assert!(css.contains("#cba6f7"), "Catppuccin mauve accent is gone");
     }
 
-    /// The accent is read out of the style context by Rust rather than by CSS, so
-    /// a rename that missed one stylesheet would ship a theme whose rail colour
-    /// silently fell back. Both spellings have to be gone from the builtins.
+    /// The accent is read out of the style context by Rust rather than by CSS,
+    /// so a stylesheet that doesn't define it renders with the fallback colour
+    /// instead of its own — on the one part of the UI no CSS rule can reach.
     #[test]
-    fn no_builtin_stylesheet_uses_the_legacy_accent_name() {
+    fn every_builtin_stylesheet_defines_the_accent() {
         for dir in BUILTIN_THEMES.dirs() {
             let name = theme_name(dir);
             let css = builtin_file(name, "style.css").expect("stylesheet");
-            assert!(
-                !css.contains("huffi_mauve_color"),
-                "{name} still defines the legacy huffi_mauve_color"
-            );
             assert!(
                 css.contains("huffi_accent_color"),
                 "{name} never defines huffi_accent_color"

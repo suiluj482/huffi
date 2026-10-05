@@ -18,12 +18,14 @@ Themes ship in the binary, compiled in from `data/themes/<name>/`, and are also
 read from `~/.config/huffi/themes/<name>/`. Both are selected the same way, with
 `[ui] theme = "<name>"` in `~/.config/huffi/config.toml`.
 
-Two themes ship today:
+Four themes ship today:
 
-| Name                 | Palette                                          |
-|----------------------|--------------------------------------------------|
-| `default`            | neutral greys with a slate accent — used when `theme` is unset |
+| Name                    | Palette                                          |
+|-------------------------|--------------------------------------------------|
+| `default`               | neutral greys with a slate accent — used when `theme` is unset |
 | `catppuccin-mocha-mauve` | [Catppuccin](https://catppuccin.com/palette) Mocha with the mauve accent |
+| `nord`                  | [Nord](https://www.nordtheme.com/) — arctic blue accent |
+| `tokyo-night-storm`     | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) Storm variant, with the blue accent |
 
 Builtin themes are **embedded, not installed**, so start your own theme by
 creating a directory and writing only the files you want to change:
@@ -59,7 +61,7 @@ one that overrides `entry.ui` and leaves the stylesheet alone.
 
 `default` is the base layer rather than merely a theme you can select: every
 position that isn't supplied by a more specific layer resolves there, which is
-what lets `catppuccin-mocha-mauve` ship a single file. It is also what a name
+what lets each alternative ship a single file. It is also what a name
 matching nothing at all renders as — huffi warns on stderr and says which builtin
 themes exist, since a typo is otherwise indistinguishable from a stylesheet that
 isn't applying.
@@ -69,7 +71,7 @@ Two details, because they don't generalize the same way:
 - **Between builtin layers, a stylesheet replaces rather than layers.** Only one
   `style.css` is registered per theme, so a builtin theme that ships one is
   responsible for all of it. Copy `data/themes/default/style.css` and edit, as
-  `catppuccin-mocha-mauve` does.
+  `nord` does.
 - **Your stylesheet does layer**, at GTK's `USER` priority over the builtin one
   at `APPLICATION`. That's the layering you can do partially, and it's what makes
   a two-rule stylesheet a complete recolour of one part of the UI.

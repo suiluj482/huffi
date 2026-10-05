@@ -196,11 +196,11 @@ weight_comment = 0.9      # comments match a bit harder
   [docs/CONFIG.md](docs/CONFIG.md).
 - **Theming** — themes are directories of CSS and GTK Builder row templates
   (CSS + XML), layered over `default` file by file and selected with
-  `[ui] theme`. Two ship in the binary — a neutral `default` and
-  `catppuccin-mocha-mauve` — and your own live in
-  `$XDG_CONFIG_HOME/huffi/themes/<name>/`. A row picks a template from up to four
-  positions, so a theme can restyle one provider's rows, one layout variant, or
-  one variant *shared* by every provider that reports it. Every row carries
+  `[ui] theme`. Four ship in the binary — a neutral `default` plus
+  `catppuccin-mocha-mauve`, `nord` and `tokyo-night-storm` — and your own live
+  in `$XDG_CONFIG_HOME/huffi/themes/<name>/`. A row picks a template from up to
+  four positions, so a theme can restyle one provider's rows, one layout variant,
+  or one variant *shared* by every provider that reports it. Every row carries
   `provider-<id>`, `variant-<variant>` and `title`/`score`/`detail` classes, and
   providers can attach named key/value details that a template opts into one at a
   time — so a theme shows exactly the fields it asks for. See

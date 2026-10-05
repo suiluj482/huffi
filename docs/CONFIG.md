@@ -39,10 +39,10 @@ height    = 400
 page_size = 10
 # Entry icon size in pixels.
 icon_size = 24
-# Theme name. Two ship in the binary: "default" (neutral greys) and
-# "catppuccin-mocha-mauve". A theme of your own lives in
-# $XDG_CONFIG_HOME/huffi/themes/<name>/ and layers over whichever builtin theme
-# you name, file by file.
+# Theme name. Four ship in the binary: "default" (neutral greys),
+# "catppuccin-mocha-mauve", "nord" and "tokyo-night-storm". A theme of your own
+# lives in $XDG_CONFIG_HOME/huffi/themes/<name>/ and layers over whichever builtin
+# theme you name, file by file.
 # theme = "default"
 
 [engine.scoring]
@@ -153,11 +153,11 @@ The file is installed to `~/.config/huffi/config.toml`.
 
 - **Themes** — a theme is a directory of one stylesheet and GTK Builder row
   templates, layered over `default` file by file, and selected with
-  `[ui] theme = "<name>"` (default: `default`). Two ship in the binary:
-  `default` and `catppuccin-mocha-mauve`. Your own live in
-  `$XDG_CONFIG_HOME/huffi/themes/<name>/`; the reference for their contents,
-  the row-template resolution order, the widget ids a template may declare, and
-  the classes rows carry is **[`THEMING.md`](THEMING.md)**.
+  `[ui] theme = "<name>"` (default: `default`). Four ship in the binary:
+  `default`, `catppuccin-mocha-mauve`, `nord` and `tokyo-night-storm`. Your own
+  live in `$XDG_CONFIG_HOME/huffi/themes/<name>/`; the reference for their
+  contents, the row-template resolution order, the widget ids a template may
+  declare, and the classes rows carry is **[`THEMING.md`](THEMING.md)**.
 - The `--data` and `--socket` flags still override the corresponding
   `[paths]` entries per invocation; the config file only supplies the
   defaults the flags would otherwise use.
