@@ -197,7 +197,8 @@ weight_comment = 0.9      # comments match a bit harder
 - **Theming** — themes are directories of CSS and GTK Builder row templates
   (CSS + XML), layered over `default` file by file and selected with
   `[ui] theme`. Four ship in the binary — a neutral `default` plus
-  `catppuccin-mocha-mauve`, `nord` and `tokyo-night-storm` — and your own live
+  `catppuccin-mocha-mauve`, `nord` and `tokyo-night-storm`, which are unofficial
+  takes on those palettes, colours only — and your own live
   in `$XDG_CONFIG_HOME/huffi/themes/<name>/`. A row picks a template from up to
   four positions, so a theme can restyle one provider's rows, one layout variant,
   or one variant *shared* by every provider that reports it. Every row carries
