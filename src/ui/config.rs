@@ -19,8 +19,9 @@ pub struct UiConfig {
     pub page_size: usize,
     /// Entry icon size in pixels.
     pub icon_size: i32,
-    /// Theme name, resolved from `$XDG_CONFIG_HOME/huffi/themes/<name>/` on
-    /// top of the embedded default theme.
+    /// Theme name, selected from the builtin themes compiled into the binary
+    /// and any theme in `$XDG_CONFIG_HOME/huffi/themes/<name>/`, which layers
+    /// over the named builtin theme.
     pub theme: String,
 }
 

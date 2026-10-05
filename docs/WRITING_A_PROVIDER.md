@@ -333,12 +333,12 @@ decides:
 
 ```css
 .provider-my-provider .title  { color: #1e1e2e; }
-.row-selected .title-selected { color: @huffi_mauve_color; }
+.row-selected .title-selected { color: @huffi_accent_color; }
 ```
 
-A provider can also ship its own row layout in the **default theme**,
-alongside the code that produces its entries, so the default look is customized
-out of the box:
+A provider can also ship its own row layout in the **base theme**,
+alongside the code that produces its entries, so every theme inherits a
+layout custom for it out of the box:
 
 ```text
 data/themes/default/providers/<your provider id>/
@@ -493,7 +493,7 @@ Two details worth copying:
 
 The provider takes no `.extra` config and its `InitContext.extra` is `None`, so
 there is nothing to document in `config.toml`; the keys are user-visible through
-the default theme instead (see [`THEMING.md`](THEMING.md)).
+the base theme instead (see [`THEMING.md`](THEMING.md)).
 
 ## Registering a provider
 

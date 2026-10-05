@@ -1,0 +1,35 @@
+/* nord */
+@define-color huffi_base_color #2e3440;
+@define-color huffi_surface0_color #3b4252;
+@define-color huffi_surface1_color #434c5e;
+@define-color huffi_text_color #e5e9f0;
+@define-color huffi_subtext0_color #d8dee9;
+@define-color huffi_accent_color #88c0d0;
+
+window{background:transparent;}
+.panel{background-color:@huffi_base_color;padding:8px;}
+.huffi-entry{background-color:@huffi_surface0_color;border:1.5px solid @huffi_surface1_color;border-radius:0px;padding:12px;color:@huffi_text_color;caret-color:@huffi_accent_color;}
+.huffi-entry:focus-within{border-color:@huffi_accent_color;}
+.huffi-entry>text{background-color:transparent;color:@huffi_text_color;caret-color:@huffi_accent_color;}
+.huffi-entry>text>placeholder{color:@huffi_subtext0_color;}
+.huffi-entry>text>selection{background-color:@huffi_accent_color;color:@huffi_base_color;}
+.row{background-color:@huffi_surface0_color;padding:6px;border-bottom:1px solid @huffi_base_color;}
+.row-selected{background-color:@huffi_surface1_color;}
+.title{font-size:15px;color:@huffi_text_color;}
+.title-selected{color:@huffi_accent_color;}
+.subtitle{font-size:12px;font-style:italic;color:@huffi_subtext0_color;}
+.subtitle-selected{color:@huffi_accent_color;}
+.comment{font-size:12px;color:@huffi_subtext0_color;}
+.comment-selected{color:@huffi_accent_color;}
+.score{font-size:12px;color:@huffi_subtext0_color;}
+.score-selected{color:@huffi_accent_color;}
+.detail{font-size:11px;color:@huffi_subtext0_color;}
+.row-selected .detail{font-size:11px;color:@huffi_accent_color;}
+.provider-calculator .title{font-size:17px;}
+.provider-calculator .subtitle{font-size:13px;}
+.provider-calculator .comment{font-size:13px;}
+.provider-calculator .detail{font-size:12px;}
+.badge{color:@huffi_accent_color;background-color:@huffi_surface1_color;border:1px solid @huffi_accent_color;border-radius:6px;padding:4px 8px;}
+.footer{font-size:11px;color:@huffi_subtext0_color;}
+.flat-btn{min-width:0;min-height:0;padding:0 4px;background-color:transparent;border:none;box-shadow:none;font-size:12px;color:@huffi_subtext0_color;}
+.flat-btn:hover{color:@huffi_accent_color;}

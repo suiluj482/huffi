@@ -12,33 +12,84 @@ Start with the stylesheet. Recolouring huffi, resizing text, or restyling the
 search box needs no XML at all — only the row layouts below need templates, and
 only if you want to change *which* widgets a row has.
 
-The default theme is **embedded in the binary**, not installed to disk, so start a
-theme by creating a directory and writing only the files you want to change:
+## Where themes come from
+
+Themes ship in the binary, compiled in from `data/themes/<name>/`, and are also
+read from `~/.config/huffi/themes/<name>/`. Both are selected the same way, with
+`[ui] theme = "<name>"` in `~/.config/huffi/config.toml`.
+
+Four themes ship today:
+
+| Name                    | Palette                                          |
+|-------------------------|--------------------------------------------------|
+| `default`               | neutral greys with a slate accent — used when `theme` is unset |
+| `catppuccin-mocha-mauve` | [Catppuccin](https://catppuccin.com/palette) Mocha with the mauve accent |
+| `nord`                  | [Nord](https://www.nordtheme.com/) — arctic blue accent |
+| `tokyo-night-storm`     | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) Storm variant, with the blue accent |
+
+The three coloured themes are huffi's own, **based on** the palettes named above.
+Only the colours come from those palettes. The layout — the sizes, the spacing, what
+gets a highlight and what gets left alone — is huffi's, arranged for a panel this
+small, so nothing here is a faithful port and none of it follows the palette it came
+from. If a row reads badly or a contrast looks off, that's the arrangement rather
+than the palette, and the fix belongs in `style.css` next to the rules below.
+
+Builtin themes are **embedded, not installed**, so start your own theme by
+creating a directory and writing only the files you want to change:
 
 ```sh
 mkdir -p ~/.config/huffi/themes/mine
 ```
 
-then select it in `~/.config/huffi/config.toml`:
+then select it:
 
 ```toml
+# ~/.config/huffi/config.toml
 [ui]
 theme = "mine"
 ```
 
-The bundled `default` theme stays active when `theme` is unset or set to
-`"default"`. If you name a theme that has no directory, huffi warns on stderr
-and falls back to the embedded default.
-
 If you have a checkout of huffi, `data/themes/default/` is the reference for
-what a theme may contain and the cheapest way to start — copy it and delete what
-you do not need. Because of the overlay rules below, keeping every file is safe
-too, just not necessary.
+what a theme may contain and the cheapest way to start — copy a stylesheet out of
+it and delete what you do not need.
+
+## The layers
+
+A theme is layered over the others file by file, lowest first:
+
+```text
+default (builtin)  →  selected builtin theme  →  your theme
+```
+
+Each layer wins **per file**: a file present in yours replaces the matching file
+below it, and a position you leave out falls back to the layer beneath. So a
+theme directory containing nothing but a two-line `style.css` is valid, and so is
+one that overrides `entry.ui` and leaves the stylesheet alone.
+
+`default` is the base layer rather than merely a theme you can select: every
+position that isn't supplied by a more specific layer resolves there, which is
+what lets each alternative ship a single file. It is also what a name
+matching nothing at all renders as — huffi warns on stderr and says which builtin
+themes exist, since a typo is otherwise indistinguishable from a stylesheet that
+isn't applying.
+
+Two details, because they don't generalize the same way:
+
+- **Between builtin layers, a stylesheet replaces rather than layers.** Only one
+  `style.css` is registered per theme, so a builtin theme that ships one is
+  responsible for all of it. Copy `data/themes/default/style.css` and edit, as
+  `nord` does.
+- **Your stylesheet does layer**, at GTK's `USER` priority over the builtin one
+  at `APPLICATION`. That's the layering you can do partially, and it's what makes
+  a two-rule stylesheet a complete recolour of one part of the UI.
+
+A user theme whose name matches a builtin one overrides that builtin theme's
+files, and still inherits from `default` for the positions it says nothing about.
 
 ## Theme directories
 
 ```text
-data/themes/default/
+data/themes/<name>/
   style.css                 # the one stylesheet, for every row
   entry.ui                  # default GTK Builder row template
   variants/<name>/
@@ -51,35 +102,26 @@ data/themes/default/
                              #   this provider
 ```
 
-A theme in `~/.config/huffi/themes/<name>/` has exactly the same shape, and each
-position is layered over the embedded default **file by file**: a file present in
-yours replaces the matching embedded file, and a position you leave out falls
-back to the embedded one. So a theme directory containing nothing but a
-two-line `style.css` is valid, and so is one that overrides `entry.ui` and
-leaves the stylesheet alone.
-
 The tree has one stylesheet position and four template positions, and the two
 compose differently, because CSS and GTK Builder files are not the same kind of
 thing:
 
-- **The stylesheet layers.** The embedded `style.css` is registered at GTK's
-  `APPLICATION` priority and yours at `USER`, so your rules sit on top without
-  having to restate the defaults you keep.
+- **The stylesheet layers**, as described above.
 - **Row templates are selected, not merged.** Exactly one `entry.ui` wins per
   row, by the resolution chain below. There is no such thing as overriding one
-  label inside the default row template — you take the whole template and write
-  it out.
+  label inside another theme's row template — you take the whole template and
+  write it out.
 
 The two halves are covered separately: [Stylesheets](#stylesheets) first, then
 [Row templates](#row-templates).
 
 ## Stylesheets
 
-### How your stylesheet combines with the default
+### How your stylesheet combines with the builtin one
 
-The embedded `style.css` is always registered too, at a lower priority than
-yours. That means a two-rule stylesheet is a complete recolour of one part of
-the UI, and everything else keeps its default appearance:
+The builtin `style.css` is always registered too, at a lower priority than yours.
+That means a two-rule stylesheet is a complete recolour of one part of the UI,
+and everything else keeps its default appearance:
 
 ```css
 /* ~/.config/huffi/themes/mine/style.css */
@@ -124,7 +166,7 @@ to state only what differs:
 
 ```css
 .title             { font-size: 15px; color: @huffi_text_color; }
-.title-selected    { color: @huffi_mauve_color; }
+.title-selected    { color: @huffi_accent_color; }
 ```
 
 It also means a state can be reached from the row instead of the widget, which is
@@ -139,7 +181,7 @@ mechanism:
 .provider-calculator .title { color: @accent_color; }
 .provider-desktop .row { border-bottom: none; }
 .variant-info .detail { font-style: italic; }
-.row-selected .detail { color: @huffi_mauve_color; }
+.row-selected .detail { color: @huffi_accent_color; }
 ```
 
 Because class tokens are matched whole, `.provider-calculator-info` selects
@@ -155,7 +197,7 @@ Of the two variant classes, `variant-<variant>` is the one that scales:
 ### Sizing one provider differently
 
 Pairing a base class with a provider class is enough to restyle a single
-provider, and the default stylesheet uses it to give calculator rows a larger
+provider, and the base stylesheet uses it to give calculator rows a larger
 type size — a result is read rather than scanned, and is often the only row on
 screen:
 
@@ -199,16 +241,16 @@ results:
 | `badge`       | the suggestion badges                              |
 | `flat-btn`    | the borderless "+" / "−" buttons, with `:hover`   |
 
-The default theme also `@define-color`s `huffi_base_color`, `huffi_surface0_color`,
+The base theme also `@define-color`s `huffi_base_color`, `huffi_surface0_color`,
 `huffi_surface1_color`, `huffi_text_color`, `huffi_subtext0_color` and
-`huffi_mauve_color` as named colours, so a theme can build on the default palette
+`huffi_accent_color` as named colours, so a theme can build on the default palette
 by name instead of copying hex values out of it. Reference them as
 `@huffi_subtext0_color`.
 
-One of them reaches further than CSS: `huffi_mauve_color` is read out of the
+One of them reaches further than CSS: `huffi_accent_color` is read out of the
 style context to tint the scroll rail, which is drawn rather than styled.
 Redefine it and the rail follows; delete it and the rail falls back to the
-default mauve.
+default accent.
 
 ## Row templates
 
@@ -228,13 +270,13 @@ providers/<id>/<variant>/entry.ui  →  providers/<id>/entry.ui
 ```
 
 Each of those four positions is resolved **independently**: huffi asks your theme
-for the file, and if your theme does not have it, asks the embedded default. So
-the chain above is really "first position that exists in either layer wins",
+for the file, and if your theme does not have it, asks the next layer down. So
+the chain above is really "first position that exists in any layer wins",
 falling through one file at a time.
 
 That has one consequence worth knowing. If you override
 `providers/calculator/entry.ui` but leave `providers/calculator/info/entry.ui`
-alone, substance and unit rows render with the **default theme's** info template,
+alone, substance and unit rows render with the **base theme's** info template,
 not yours. To give one provider a single layout across all of its variants,
 shadow those variant templates with copies of your own file.
 
@@ -342,7 +384,7 @@ changes:
 
 ```css
 .detail { font-size: 11px; color: @huffi_subtext0_color; }
-.row-selected .detail { color: @huffi_mauve_color; }
+.row-selected .detail { color: @huffi_accent_color; }
 ```
 
 Long values are the template author's problem, not the renderer's: give the

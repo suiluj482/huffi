@@ -1,7 +1,6 @@
 //! Theme resolution and loading.
 //!
-//! A theme is a directory with the same shape as the embedded default
-//! [`DEFAULT_THEME_DIR`]:
+//! A theme is a directory with the same shape as any other theme:
 //!
 //! ```text
 //! <theme>/
@@ -17,10 +16,25 @@
 //!                        #   this provider
 //! ```
 //!
-//! The user's theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
-//! selected with `[ui] theme = "<name>"`. Files in the user theme overlay the
-//! embedded default file by file; the single `style.css` layers at APPLICATION
-//! priority for the embedded default and USER priority for the user's override.
+//! Themes come from two places, and a selected name is looked for in both.
+//! **Builtin** themes ship in the binary, compiled from `data/themes/<name>/`
+//! by [`BUILTIN_THEMES`]; every directory there is a theme, so adding one needs
+//! no registration. `default` is a builtin theme and doubles as the *base*
+//! theme: the layer every other theme falls back to for a file it doesn't have.
+//! A **user** theme lives at `$XDG_CONFIG_HOME/huffi/themes/<name>/` and is
+//! selected with `[ui] theme = "<name>"`.
+//!
+//! Resolution is per file, lowest layer first:
+//!
+//! ```text
+//! base builtin theme  →  selected builtin theme  →  user theme
+//! ```
+//!
+//! So the layers compose rather than compete: a builtin theme that ships only
+//! `style.css` still gets every row template from the base theme, and a user
+//! theme that ships only `style.css` still gets a stylesheet and a layout. A
+//! name matching neither a builtin nor a user directory warns and renders the
+//! base theme.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -32,21 +46,74 @@ use gtk4::{self, gdk};
 
 use crate::config;
 
-/// The default theme, compiled into the binary from `data/themes/default/`.
+/// Every theme shipped in the binary, keyed by directory name under
+/// `data/themes/`.
 // This path is relative to `$CARGO_MANIFEST_DIR`, so the package ships a
-// self-contained binary with no runtime data directory.
-const DEFAULT_THEME_DIR: include_dir::Dir<'static> =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/data/themes/default");
+// self-contained binary with no runtime data directory. Embedding the parent
+// rather than one theme is what makes the set open-ended: a new directory is a
+// theme, with nothing to register here and nothing to update in Rust.
+static BUILTIN_THEMES: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/data/themes");
+
+/// The builtin theme every other theme falls back to, and what an unknown theme
+/// name renders as.
+///
+/// Everything the loader guarantees exists — a stylesheet, a root `entry.ui` —
+/// comes from here, so a builtin theme can be as small as one file.
+const BASE_THEME: &str = "default";
+
+/// The built-in themes, for error messages and tests. Order is the embedded
+/// directory's, so it is not meaningful.
+pub fn builtin_themes() -> impl Iterator<Item = &'static str> {
+    BUILTIN_THEMES.dirs().map(theme_name)
+}
+
+/// The builtin theme named `name`, as the name `[ui] theme` selects it by.
+/// `None` if there is no such builtin theme.
+///
+/// The name is borrowed from the embedded tree rather than copied out of the
+/// caller's string, so resolving a theme allocates nothing.
+fn builtin_theme(name: &str) -> Option<&'static str> {
+    BUILTIN_THEMES.get_dir(name).map(theme_name)
+}
+
+/// The name `[ui] theme` selects a builtin theme by, which is just its
+/// directory under `data/themes/`. `include_dir` exposes a directory only as its
+/// path relative to the embedded root, and for a theme the two are the same.
+fn theme_name(dir: &'static include_dir::Dir<'static>) -> &'static str {
+    dir.path()
+        .to_str()
+        .expect("builtin theme name is not UTF-8")
+}
+
+/// A file in the builtin theme `name`, as text. `None` if that theme doesn't
+/// have it, or it isn't UTF-8.
+///
+/// Looked up on the embedded root rather than on the theme's own subdirectory,
+/// because `include_dir` resolves a lookup path against the root even when it
+/// is called on a subdirectory — `default`.`get_file("style.css")` misses, and
+/// `data/themes`.`get_file("default/style.css")` hits.
+fn builtin_file(name: &str, rel: &str) -> Option<String> {
+    BUILTIN_THEMES
+        .get_file(format!("{name}/{rel}"))
+        .and_then(|file| file.contents_utf8())
+        .map(str::to_owned)
+}
 
 /// Cache key for a resolved row template: the entry's provider id and its
 /// layout variant, either of which may be unset.
 type TemplateKey = (Option<String>, Option<String>);
 
-/// Resolve the accent color from the stylesheet (`@define-color
-/// huffi_mauve_color`), falling back to the default value if the theme
-/// doesn't define it.
-pub fn mauve(context: &gtk4::StyleContext) -> (f64, f64, f64) {
-    if let Some(color) = context.lookup_color("huffi_mauve_color") {
+/// Resolve the accent colour from the stylesheet (`@define-color
+/// huffi_accent_color`), falling back to the base theme's own accent if the
+/// selected theme doesn't define it.
+///
+/// The accent is read here rather than styled because the scroll rail is drawn,
+/// not a widget, so no CSS rule can reach it. A theme that doesn't define the
+/// colour gets the base theme's, which is the one value here that has to be
+/// duplicated from `data/themes/default/style.css`.
+pub fn accent(context: &gtk4::StyleContext) -> (f64, f64, f64) {
+    if let Some(color) = context.lookup_color("huffi_accent_color") {
         return (
             color.red() as f64,
             color.green() as f64,
@@ -54,14 +121,19 @@ pub fn mauve(context: &gtk4::StyleContext) -> (f64, f64, f64) {
         );
     }
     (
-        0xcb as f64 / 255.0,
-        0xa6 as f64 / 255.0,
-        0xf7 as f64 / 255.0,
+        0x8a as f64 / 255.0,
+        0xa9 as f64 / 255.0,
+        0xc8 as f64 / 255.0,
     )
 }
 
-/// A resolved theme: the embedded default plus an optional user overlay.
+/// A resolved theme: one builtin theme — the base one, or the selected one —
+/// plus an optional user overlay above it.
 pub struct Theme {
+    /// Name of the selected builtin theme, when `data/themes/<name>/` exists.
+    /// `None` for a user-only theme, which still resolves against the base
+    /// theme underneath it.
+    builtin: Option<&'static str>,
     /// `config_dir/huffi/themes/<name>/` when that directory exists.
     user_root: Option<PathBuf>,
     /// Cache of resolved entry templates, keyed by `(provider id, variant)` —
@@ -72,16 +144,13 @@ pub struct Theme {
     templates: RefCell<HashMap<TemplateKey, Rc<str>>>,
 }
 
-/// Where a named theme's overlay lives: `<config_dir>/huffi/themes/<name>/`.
+/// Where a named theme's user overlay lives: `<config_dir>/huffi/themes/<name>/`.
 fn theme_root(config_dir: &std::path::Path, name: &str) -> PathBuf {
     config_dir.join("huffi").join("themes").join(name)
 }
 
-/// Resolve the overlay root for a theme name, and report whether a *named*
-/// theme was asked for but not found.
-///
-/// `default` is embedded and so never has a directory to find; that is a
-/// normal outcome, not a misconfiguration, so it is not reported.
+/// Resolve the overlay root for a theme name, and report whether the name
+/// matched neither a builtin theme nor a user directory.
 fn user_theme_root(config_dir: Option<&std::path::Path>, name: &str) -> (Option<PathBuf>, bool) {
     let Some(config_dir) = config_dir else {
         // Nowhere to look for a user theme at all, which is not a
@@ -90,64 +159,83 @@ fn user_theme_root(config_dir: Option<&std::path::Path>, name: &str) -> (Option<
     };
     let root = theme_root(config_dir, name);
     if root.is_dir() {
-        (Some(root), false)
-    } else {
-        (None, name != "default")
+        return (Some(root), false);
     }
+    // A builtin theme needs no directory to be found in, so a name that matches
+    // one is a normal outcome rather than a misconfiguration.
+    (None, builtin_theme(name).is_none())
 }
 
 impl Theme {
-    /// Resolve the selected theme. `default` is always available (embedded);
-    /// any other name falls back to the embedded default when the user has no
-    /// such theme directory.
+    /// Resolve the selected theme. Every builtin theme is always available;
+    /// any other name resolves against the user overlay on top of the base
+    /// theme, and warns when there is no such directory.
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
+        // The name is borrowed from the embedded tree rather than copied out of
+        // `name`, so the theme string lives as long as the binary does and
+        // selecting a theme allocates nothing.
+        let builtin = builtin_theme(&name);
         let config_dir = config::config_dir();
         let (user_root, missing) = user_theme_root(config_dir.as_deref(), &name);
         // A misspelled theme name is otherwise indistinguishable from a
         // stylesheet that isn't applying: the overlay simply goes away and the
-        // stock default theme renders. Worth a line on stderr.
+        // stock base theme renders. Worth a line on stderr — and worth naming the
+        // builtin themes there, since a typo in one of those is the likelier
+        // mistake and the list is otherwise only in the source tree.
         //
         // `missing` implies a config dir, since `user_theme_root` reports a
         // missing named theme only when it had somewhere to look.
         if let Some(dir) = config_dir.filter(|_| missing) {
             eprintln!(
-                "huffi: theme {name:?} not found at {} — using the embedded default theme",
-                theme_root(&dir, &name).display()
+                "huffi: unknown theme {name:?} — no {} directory. Falling back to the \
+                 embedded {BASE_THEME:?} theme; the builtin themes are {}.",
+                theme_root(&dir, &name).display(),
+                builtin_themes().collect::<Vec<_>>().join(", "),
             );
         }
         Self {
+            builtin,
             user_root,
             templates: RefCell::new(HashMap::new()),
         }
     }
 
-    /// Construct with an explicit theme root (tests only). `None` disables the
-    /// user overlay entirely.
+    /// Construct with an explicit user overlay root and no builtin theme of its
+    /// own (tests only). `None` disables the overlay entirely.
     #[cfg(test)]
     fn with_root(user_root: Option<PathBuf>) -> Self {
+        Self::with_layers(None, user_root)
+    }
+
+    /// Construct with an explicit builtin theme and user overlay root (tests
+    /// only).
+    #[cfg(test)]
+    fn with_layers(builtin: Option<&'static str>, user_root: Option<PathBuf>) -> Self {
         Self {
+            builtin,
             user_root,
             templates: RefCell::new(HashMap::new()),
         }
     }
 
     /// Resolve a file inside the theme: the user overlay wins when present,
-    /// otherwise the embedded default. `None` when neither has it.
+    /// then the selected builtin theme, then the base theme. `None` when none
+    /// of them has it.
     fn resource(&self, rel: &str) -> Option<String> {
-        if let Some(root) = &self.user_root {
-            let path = root.join(rel);
-            if path.is_file() {
-                return std::fs::read_to_string(&path).ok();
-            }
-        }
-        DEFAULT_THEME_DIR
-            .get_file(rel)
-            .and_then(|file| file.contents_utf8())
-            .map(str::to_owned)
+        self.user_resource(rel)
+            .or_else(|| self.builtin_resource(rel))
     }
 
-    /// Read `rel` from the user overlay only (no embedded fallback).
+    /// Read `rel` from the builtin layers only: the selected builtin theme's own
+    /// copy, falling back to the base theme's.
+    fn builtin_resource(&self, rel: &str) -> Option<String> {
+        self.builtin
+            .and_then(|name| builtin_file(name, rel))
+            .or_else(|| builtin_file(BASE_THEME, rel))
+    }
+
+    /// Read `rel` from the user overlay only (no builtin fallback).
     fn user_resource(&self, rel: &str) -> Option<String> {
         let path = self.user_root.as_ref()?.join(rel);
         path.is_file()
@@ -175,7 +263,7 @@ impl Theme {
     /// that customises one provider doesn't silently lose a variant layout that
     /// the shared file would otherwise have supplied for it.
     ///
-    /// A user file in any position wins over the embedded default at the same
+    /// A file in any position wins over the base theme's file at the same
     /// position, and a missing position falls through to the next one (see
     /// [`Theme::resource`]). Variants only ever add a more specific layout; they
     /// never remove the fallbacks.
@@ -209,8 +297,16 @@ impl Theme {
     }
 }
 
-/// Register the global `style.css` stylesheet, default layer at APPLICATION
-/// priority and user overlay at USER priority.
+/// Register the global `style.css` stylesheet: the selected builtin theme's —
+/// the base theme's when it has none of its own — at GTK's `APPLICATION`
+/// priority, then the user's stylesheet over it at `USER`.
+///
+/// Within the builtin layers this is a *replacement* rather than a cascade, so a
+/// builtin theme's stylesheet has to be complete on its own. There is no
+/// priority between two `APPLICATION` providers that can be relied on, and
+/// inventing one would mean a third layer for a rule a theme author can simply
+/// write down. The user layer still layers, because that is a layering a user
+/// is expected to do partially.
 ///
 /// A theme has exactly one stylesheet. `providers/<id>/style.css` is not a
 /// thing: GTK registers a sheet for the whole display and cannot attach one to
@@ -219,19 +315,10 @@ impl Theme {
 /// author chose. Rows carry `provider-<id>`, and that class is the whole
 /// scoping mechanism — see `docs/THEMING.md`.
 pub fn load_css(display: &gdk::Display, theme: &Theme) {
-    add_css_layer(display, theme, "style.css");
-}
-
-/// Add one stylesheet: the embedded default at APPLICATION priority, with the
-/// user overlay (if any) layered on top at USER priority.
-fn add_css_layer(display: &gdk::Display, theme: &Theme, rel: &str) {
-    if let Some(css) = DEFAULT_THEME_DIR
-        .get_file(rel)
-        .and_then(|file| file.contents_utf8())
-    {
-        add_css(display, css, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    if let Some(css) = theme.builtin_resource("style.css") {
+        add_css(display, &css, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    if let Some(css) = theme.user_resource(rel) {
+    if let Some(css) = theme.user_resource("style.css") {
         add_css(display, &css, gtk4::STYLE_PROVIDER_PRIORITY_USER);
     }
 }
@@ -283,17 +370,17 @@ mod tests {
     /// than an unreviewed attribute.
     const AUTHOR_IDS: &[&str] = &["details-area", "title-line"];
 
-    /// Every `.ui` template in the embedded theme, as (path, contents).
+    /// Every `.ui` template in every builtin theme, as (path, contents).
     ///
     /// [`include_dir::Dir::files`] only lists a directory's immediate children,
-    /// so `providers/` and below need walking by hand.
+    /// so `providers/` and below need walking by hand. Paths are already
+    /// relative to the embedded root, so they carry their own theme name and a
+    /// bad template says which theme it came from.
     fn shipped_templates() -> Vec<(String, String)> {
         fn collect(dir: &include_dir::Dir<'static>, out: &mut Vec<(String, String)>) {
             for file in dir.files() {
-                // `path()` is already relative to the root of the embedded
-                // tree, so subdirectories need no prefix of their own.
                 let path = file.path().display().to_string();
-                if path.ends_with(".ui") {
+                if file.path().extension().is_some_and(|ext| ext == "ui") {
                     let body = file.contents_utf8().expect("shipped template is UTF-8");
                     out.push((path, strip_xml_comments(body)));
                 }
@@ -303,8 +390,8 @@ mod tests {
             }
         }
         let mut out = Vec::new();
-        collect(&DEFAULT_THEME_DIR, &mut out);
-        assert!(!out.is_empty(), "no templates found in the embedded theme");
+        collect(&BUILTIN_THEMES, &mut out);
+        assert!(!out.is_empty(), "no templates found in the builtin themes");
         out
     }
 
@@ -348,19 +435,24 @@ mod tests {
         let theme_dir = theme_root(config_dir.path(), "mine");
         std::fs::create_dir_all(&theme_dir).unwrap();
 
-        // `default` is embedded, so it never has a directory and is not a
-        // misconfiguration worth reporting.
-        assert_eq!(
-            user_theme_root(Some(config_dir.path()), "default"),
-            (None, false)
-        );
+        // A builtin theme needs no directory, so it never has one and is not a
+        // misconfiguration worth reporting. That holds for the base theme and
+        // for the alternatives beside it alike.
+        for builtin in builtin_themes() {
+            assert_eq!(
+                user_theme_root(Some(config_dir.path()), builtin),
+                (None, false),
+                "{builtin:?} is builtin but was reported as missing"
+            );
+        }
         // An overlay that exists is not missing.
         assert_eq!(
             user_theme_root(Some(config_dir.path()), "mine"),
             (Some(theme_dir), false)
         );
-        // A named theme with no directory disables the overlay and is reported,
-        // which is what `Theme::new` turns into the stderr warning.
+        // A named theme with no builtin and no directory disables the overlay
+        // and is reported, which is what `Theme::new` turns into the stderr
+        // warning.
         assert_eq!(
             user_theme_root(Some(config_dir.path()), "typo"),
             (None, true)
@@ -369,18 +461,157 @@ mod tests {
         assert_eq!(user_theme_root(None, "mine"), (None, false));
     }
 
+    /// The base theme has to exist for the loader's guarantees to mean anything,
+    /// and the alternatives have to be reachable by name — both are silent
+    /// failures otherwise, since an unknown builtin name just renders the base
+    /// theme.
     #[test]
-    fn embedded_default_resolves_when_user_file_absent() {
+    fn the_base_theme_and_the_shipped_alternatives_are_builtin() {
+        let names: Vec<&str> = builtin_themes().collect();
+        assert!(
+            names.contains(&BASE_THEME),
+            "the base theme {BASE_THEME:?} is not in data/themes/"
+        );
+        // The alternatives are named in docs/THEMING.md, so a rename that
+        // doesn't reach the docs is as broken as one that doesn't reach here.
+        for alternative in ["catppuccin-mocha-mauve", "nord", "tokyo-night-storm"] {
+            assert!(
+                names.contains(&alternative),
+                "{alternative:?} is documented as a builtin theme but isn't one; got {names:?}"
+            );
+        }
+    }
+
+    /// A builtin theme's stylesheet *replaces* the base theme's rather than
+    /// layering over it, so a builtin theme that ships none would render with no
+    /// colours at all rather than an obviously broken one.
+    #[test]
+    fn every_builtin_theme_ships_a_stylesheet() {
+        for name in builtin_themes() {
+            assert!(
+                builtin_file(name, "style.css").is_some(),
+                "{name} has no style.css, and a builtin stylesheet does not inherit"
+            );
+        }
+    }
+
+    /// The whole point of moving the Catppuccin palette out: `default` is now
+    /// neutral, and Catppuccin is one alternative among others rather than the
+    /// look everyone gets.
+    #[test]
+    fn the_base_theme_is_neutral_and_the_alternative_is_catppuccin() {
+        let base = Theme::with_layers(Some(BASE_THEME), None);
+        let base_css = base.resource("style.css").expect("base style.css");
+        assert!(
+            base_css.contains("#8aa9c8"),
+            "base accent is not the slate one"
+        );
+        for rgb in ["#1e1e2e", "#313244", "#cdd6f4", "#cba6f7"] {
+            assert!(
+                !base_css.contains(rgb),
+                "base theme still carries the Catppuccin value {rgb}"
+            );
+        }
+
+        let catppuccin = Theme::with_layers(Some("catppuccin-mocha-mauve"), None);
+        let css = catppuccin
+            .resource("style.css")
+            .expect("catppuccin style.css");
+        assert!(css.contains("#cba6f7"), "Catppuccin mauve accent is gone");
+    }
+
+    /// The accent is read out of the style context by Rust rather than by CSS,
+    /// so a stylesheet that doesn't define it renders with the fallback colour
+    /// instead of its own — on the one part of the UI no CSS rule can reach.
+    #[test]
+    fn every_builtin_stylesheet_defines_the_accent() {
+        for dir in BUILTIN_THEMES.dirs() {
+            let name = theme_name(dir);
+            let css = builtin_file(name, "style.css").expect("stylesheet");
+            assert!(
+                css.contains("huffi_accent_color"),
+                "{name} never defines huffi_accent_color"
+            );
+        }
+    }
+
+    /// A builtin theme that ships only a stylesheet still has to get every row
+    /// template from the base theme underneath it. If this regresses the theme
+    /// renders with real colours and no rows, which is a confusing way to fail.
+    #[test]
+    fn a_builtin_theme_inherits_row_templates_from_the_base_theme() {
+        let theme = Theme::with_layers(Some("catppuccin-mocha-mauve"), None);
+        assert!(
+            theme.entry_template(None, None).contains("id=\"row\""),
+            "no root template"
+        );
+        // The one layout the base theme ships that is not the stock row, so a
+        // fallthrough to `entry.ui` wouldn't pass for it.
+        let info = theme.entry_template(Some("calculator"), Some("info"));
+        assert!(
+            info.contains("id=\"comment\""),
+            "the info layout variant did not come from the base theme"
+        );
+    }
+
+    /// Layer order is base → selected builtin → user, and each layer has to be
+    /// able to win over the one below it.
+    #[test]
+    fn a_user_theme_overrides_the_selected_builtin_theme() {
+        let dir = TempTheme::new("override-builtin");
+        std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
+        let theme = Theme::with_layers(Some("catppuccin-mocha-mauve"), Some(dir.owned()));
+        assert_eq!(
+            theme.resource("style.css").as_deref(),
+            Some("/* user css */")
+        );
+        // The builtin layer underneath is still what supplies the templates.
+        assert!(theme.entry_template(None, None).contains("id=\"row\""));
+    }
+
+    /// A user theme whose name collides with a builtin one is an *override* of
+    /// it, not a replacement: it still gets the base theme's row templates for
+    /// the positions it says nothing about.
+    #[test]
+    fn a_user_theme_named_after_a_builtin_still_inherits_from_the_base() {
+        let dir = TempTheme::new("shadow-builtin");
+        std::fs::write(dir.path().join("style.css"), "/* only css */").unwrap();
+        let theme = Theme::with_layers(None, Some(dir.owned()));
+        assert_eq!(
+            theme.resource("style.css").as_deref(),
+            Some("/* only css */")
+        );
+        assert!(
+            theme
+                .entry_template(Some("calculator"), Some("info"))
+                .contains("id=\"comment\"")
+        );
+    }
+
+    /// An unknown name resolves to the base theme rather than to nothing: a
+    /// stylesheet that isn't applying is otherwise indistinguishable from a
+    /// misspelling, which is why `Theme::new` warns on stderr.
+    #[test]
+    fn an_unknown_theme_name_renders_the_base_theme() {
+        let theme = Theme::with_layers(Some("no-such-theme"), None);
+        assert_eq!(
+            theme.resource("style.css").as_deref(),
+            builtin_file(BASE_THEME, "style.css").as_deref()
+        );
+    }
+
+    #[test]
+    fn builtin_base_resolves_when_user_file_absent() {
         let dir = TempTheme::new("missing");
         let theme = Theme::with_root(Some(dir.owned()));
-        let css = theme.resource("style.css").expect("embedded style.css");
+        let css = theme.resource("style.css").expect("builtin style.css");
         assert!(css.contains("@define-color"));
         let template = theme.entry_template(None, None);
         assert!(template.contains("id=\"row\""));
     }
 
     #[test]
-    fn user_file_wins_over_embedded() {
+    fn user_file_wins_over_builtin() {
         let dir = TempTheme::new("override");
         std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
         let theme = Theme::with_root(Some(dir.owned()));
@@ -391,18 +622,18 @@ mod tests {
     }
 
     #[test]
-    fn missing_user_resource_falls_back_to_embedded() {
+    fn missing_user_resource_falls_back_to_the_base_theme() {
         let dir = TempTheme::new("fallback");
         std::fs::write(dir.path().join("style.css"), "/* user css */").unwrap();
         let theme = Theme::with_root(Some(dir.owned()));
         let template = theme.entry_template(Some("desktop"), None);
         assert!(
             template.contains("id=\"row\""),
-            "a provider without its own entry.ui must use the default template"
+            "a provider without its own entry.ui must use the base template"
         );
     }
 
-    /// The templates shipped in the default theme are the only ones the project
+    /// The templates shipped in the builtin themes are the only ones the project
     /// controls, so they're the ones worth holding to an exact id vocabulary.
     ///
     /// An id the renderer doesn't know is inert: a misspelled `title` or
