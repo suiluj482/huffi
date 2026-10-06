@@ -33,6 +33,7 @@ impl BaseScorer {
         let mut base_scored = Vec::new();
         let mut raw = Vec::new();
         let mut haystack_buf: Vec<char> = Vec::new();
+        let mut needle_buf = Vec::new();
         for g in groups {
             if g.query.is_empty() {
                 base_scored.extend(g.entries.into_iter().map(|s| BaseScored {
@@ -44,7 +45,6 @@ impl BaseScorer {
                 continue;
             }
 
-            let mut needle_buf = Vec::new();
             let needle = nucleo::Utf32Str::new(&g.query, &mut needle_buf);
 
             for s in g.entries {
@@ -77,27 +77,27 @@ impl BaseScorer {
             }
         }
 
-        base_scored.extend(normalize(raw));
+        normalize_in_place(&mut raw);
+        base_scored.extend(raw.into_iter().map(|(s, r)| BaseScored {
+            entry: s.entry,
+            rank: s.rank,
+            history_key: s.history_key,
+            base_score: r,
+        }));
         base_scored
     }
 }
 
-/// Normalize raw fuzzy scores against the batch maximum.
+/// Normalize raw fuzzy scores against the batch maximum, in place.
 ///
 /// Only [`Rank::MatchFields`] entries reach this step; their base score is
 /// the raw score divided by the maximum across the whole batch, so results
 /// from different providers remain comparable.
-pub fn normalize<T>(raw: Vec<(Scoreable<T>, f64)>) -> Vec<BaseScored<T>> {
+fn normalize_in_place<T>(raw: &mut [(Scoreable<T>, f64)]) {
     let max = raw.iter().map(|(_, r)| *r).fold(0.0f64, f64::max);
-
-    raw.into_iter()
-        .map(|(s, r)| BaseScored {
-            entry: s.entry,
-            rank: s.rank,
-            history_key: s.history_key,
-            base_score: if max > 0.0 { r / max } else { 0.0 },
-        })
-        .collect()
+    for (_, r) in raw.iter_mut() {
+        *r = if max > 0.0 { *r / max } else { 0.0 };
+    }
 }
 
 fn score(
@@ -267,15 +267,17 @@ mod tests {
                 }]),
             )
         };
-        let raw = vec![(mf(1.0), 300.0), (mf(2.0), 100.0)];
-        let scored = normalize(raw);
-        assert_eq!(scored[0].base_score, 1.0);
-        assert!((scored[1].base_score - 1.0 / 3.0).abs() < 1e-6);
+        let mut raw = vec![(mf(1.0), 300.0), (mf(2.0), 100.0)];
+        normalize_in_place(&mut raw);
+        assert_eq!(raw[0].1, 1.0);
+        assert!((raw[1].1 - 1.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn normalize_empty_returns_empty() {
-        assert!(normalize::<()>(vec![]).is_empty());
+        let mut raw: Vec<(Scoreable<()>, f64)> = vec![];
+        normalize_in_place(&mut raw);
+        assert!(raw.is_empty());
     }
 
     #[test]
