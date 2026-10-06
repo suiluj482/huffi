@@ -10,7 +10,7 @@ use crate::engine::provider::{
 use crate::engine::scoring::MatchField;
 
 /// Fuzzy-match field weights for this provider. When provided via
-/// `[engine.provider.builtin.desktop.extra]`, the fields are parsed from
+/// `engine.provider.builtin.desktop.extra`, the fields are parsed from
 /// the arbitrary extra config.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]

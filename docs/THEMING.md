@@ -19,11 +19,14 @@ theme by creating a directory and writing only the files you want to change:
 mkdir -p ~/.config/huffi/themes/mine
 ```
 
-then select it in `~/.config/huffi/config.toml`:
+then select it in `~/.config/huffi/config.ron`:
 
-```toml
-[ui]
-theme = "mine"
+```ron
+(
+  ui: (
+    theme: "solarized-dark",
+  ),
+)
 ```
 
 The bundled `default` theme stays active when `theme` is unset or set to

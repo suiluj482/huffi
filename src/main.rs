@@ -22,7 +22,7 @@ struct AppArgs {
     #[arg(long, global = true, value_name = "PATH", env = "HUFFI_SOCKET")]
     socket: Option<PathBuf>,
 
-    /// Path to a config file (default $XDG_CONFIG_HOME/huffi/config.toml)
+    /// Path to a config file (default $XDG_CONFIG_HOME/huffi/config.ron)
     #[arg(long, global = true, value_name = "PATH", env = "HUFFI_CONFIG")]
     config: Option<PathBuf>,
 }
@@ -388,7 +388,7 @@ mod tests {
     fn env_provides_socket_and_config() {
         for (key, val) in [
             ("HUFFI_SOCKET", "/env/huffi.sock"),
-            ("HUFFI_CONFIG", "/env/config.toml"),
+            ("HUFFI_CONFIG", "/env/config.ron"),
         ] {
             unsafe { std::env::set_var(key, val) };
         }
@@ -404,7 +404,7 @@ mod tests {
         );
         assert_eq!(
             cli.app.config.as_deref(),
-            Some(std::path::Path::new("/env/config.toml"))
+            Some(std::path::Path::new("/env/config.ron"))
         );
     }
 

@@ -44,11 +44,11 @@ imports = [ inputs.huffi.homeManagerModules.huffi ];
 
 programs.huffi = {
   enable = true;  # installs huffi and preloads it via systemd --user
-  settings = {    # optionally write ~/.config/huffi/config.toml
+  settings = {    # optionally write ~/.config/huffi/config.ron
     ui.width = 700;
     engine.scoring.boost_weight = 4.0;
   };
-  # …or configFile = ./huffi.toml; for a checked-in config instead.
+  # …or configFile = ./huffi.ron; for a checked-in config instead.
 };
 ```
 
@@ -135,23 +135,33 @@ an environment variable, which wins over the config file.
 
 ### Config file
 
-Options live in `$XDG_CONFIG_HOME/huffi/config.toml` (default
-`~/.config/huffi/config.toml`), overridable per invocation with flags.
+Options live in `$XDG_CONFIG_HOME/huffi/config.ron` (default
+`~/.config/huffi/config.ron`), overridable per invocation with flags.
 Precedence: **flags > config file > defaults**. See
 **[docs/CONFIG.md](docs/CONFIG.md)** for the full reference. Example:
 
-```toml
-# ~/.config/huffi/config.toml
-[ui]
-width     = 700
-page_size = 15
-
-[engine.scoring]
-boost_weight = 4.0        # less aggressive + / − boosts
-half_life_days = 7        # faster decay
-
-[engine.provider.desktop]
-weight_comment = 0.9      # comments match a bit harder
+```ron
+// ~/.config/huffi/config.ron
+(
+  ui: (
+    width: 700,
+    page_size: 15,
+  ),
+  engine: (
+    scoring: (
+      boost_weight: 4.0,          // less aggressive + / − boosts
+      half_life_days: 7,          // faster decay
+    ),
+    provider: (
+      builtin: {
+        "desktop": (
+          // comments match a bit harder
+          extra: { "weight_comment": 0.9 },
+        ),
+      },
+    ),
+  ),
+)
 ```
 
 ---
@@ -190,7 +200,7 @@ weight_comment = 0.9      # comments match a bit harder
   (`.json.tmp` + rename). Each provider keeps its state in
   `<data_dir>/providers/<provider id>/`. Two-week half-life exponential decay. No
   background jobs, no unbounded logs.
-- **Config file** — TOML at `$XDG_CONFIG_HOME/huffi/config.toml` controlling
+- **Config file** — RON at `$XDG_CONFIG_HOME/huffi/config.ron` controlling
   paths and UI size plus `[engine.*]` tables for scoring constants, provider
   settings, and external binaries; flags always override it. See
   [docs/CONFIG.md](docs/CONFIG.md).

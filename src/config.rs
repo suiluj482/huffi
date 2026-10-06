@@ -1,15 +1,15 @@
 //! Application-level configuration for huffi.
 //!
-//! The config file lives at `$XDG_CONFIG_HOME/huffi/config.toml` (default
-//! `~/.config/huffi/config.toml`), overridable with `huffi --config PATH`.
+//! The config file lives at `$XDG_CONFIG_HOME/huffi/config.ron` (default
+//! `~/.config/huffi/config.ron`), overridable with `huffi --config PATH`.
 //! Every option falls back to a default; command-line flags override the
-//! file. A missing file is fine, malformed TOML is a hard error so typos
+//! file. A missing file is fine, malformed RON is a hard error so typos
 //! don't silently use defaults.
 //!
-//! The structs here are the *resolved* configuration. Sections mirror the
+//! The structs here are the *resolved* configuration. Fields mirror the
 //! module structure: `paths` lives here, `ui` lives next to its consumer in
-//! [`crate::ui::config`], and the engine subtree (`[engine.scoring]`,
-//! `[engine.provider]`, `[engine.external]`) lives in
+//! [`crate::ui::config`], and the engine subtree (`engine.scoring`,
+//! `engine.provider`, `engine.external`) lives in
 //! [`huffi::engine::config`]. Each struct's `Default` impl is the single
 //! source of truth for fallback values; the container-level
 //! `#[serde(default)]` attribute fills every missing field (and every
@@ -77,18 +77,25 @@ pub fn config_dir() -> Option<PathBuf> {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 }
 
-/// The default config file: `$XDG_CONFIG_HOME/huffi/config.toml`.
+/// The default config file: `$XDG_CONFIG_HOME/huffi/config.ron`.
 pub fn default_config_path() -> PathBuf {
     config_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("huffi")
-        .join("config.toml")
+        .join("config.ron")
+}
+
+/// RON dialect huffi reads: implicit `Some(...)` so an optional key can be
+/// written as the bare value (`name: "Apps"`) instead of the fully explicit
+/// `name: Some("Apps")`.
+fn ron_options() -> ron::Options {
+    ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
 }
 
 impl Config {
     /// Load configuration from `explicit` if given, otherwise from the XDG
     /// default path when it exists. A missing file yields defaults; malformed
-    /// TOML is an error.
+    /// RON is an error.
     pub fn load(explicit: Option<&Path>) -> anyhow::Result<Self> {
         let path = match explicit {
             Some(p) => Some(p.to_path_buf()),
@@ -106,12 +113,15 @@ impl Config {
     }
 
     fn from_str(content: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(content)?;
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        let config: Self = ron_options().from_str(content)?;
         config
             .engine
             .scoring
             .validate()
-            .context("invalid [engine.scoring]")?;
+            .context("invalid engine.scoring")?;
         Ok(config)
     }
 }
@@ -141,13 +151,49 @@ mod tests {
 
     #[test]
     fn empty_config_is_defaults() {
-        let parsed = Config::from_str("").unwrap();
-        assert_eq!(parsed, Config::default());
+        assert_eq!(Config::from_str("").unwrap(), Config::default());
+        assert_eq!(Config::from_str("  \n\n").unwrap(), Config::default());
     }
 
     #[test]
-    fn partial_section_keeps_other_defaults() {
-        let parsed = Config::from_str("[paths]\nsocket = \"/tmp/custom.sock\"\n").unwrap();
+    fn load_reads_an_explicit_ron_file() {
+        let dir = std::env::temp_dir().join(format!("huffi-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("custom.ron");
+        std::fs::write(&path, "(ui: (width: 321))").unwrap();
+
+        let loaded = Config::load(Some(&path)).unwrap();
+        assert_eq!(loaded.ui.width, 321);
+        assert_eq!(loaded.ui.height, UiConfig::default().height);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_reports_a_malformed_file_with_its_path() {
+        let dir = std::env::temp_dir().join(format!("huffi-config-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.ron");
+        std::fs::write(&path, "(ui: (").unwrap();
+
+        let err = Config::load(Some(&path)).unwrap_err();
+        let rendered = format!("{err:#}");
+        assert!(rendered.contains("invalid config file"), "{rendered}");
+        assert!(rendered.contains("broken.ron"), "{rendered}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn default_config_path_is_config_ron_under_the_huffi_dir() {
+        let path = default_config_path();
+        assert_eq!(path.file_name().unwrap(), "config.ron");
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), "huffi");
+    }
+
+    #[test]
+    fn partial_block_keeps_other_defaults() {
+        let parsed = Config::from_str("(paths: (socket: \"/tmp/custom.sock\"))").unwrap();
         assert_eq!(parsed.paths.socket, PathBuf::from("/tmp/custom.sock"));
         assert_eq!(parsed.paths.data_dir, Config::default().paths.data_dir);
         assert_eq!(parsed.ui, Config::default().ui);
@@ -155,8 +201,8 @@ mod tests {
     }
 
     #[test]
-    fn partial_engine_section_keeps_sibling_defaults() {
-        let parsed = Config::from_str("[engine.scoring]\nboost_weight = 4.0\n").unwrap();
+    fn partial_engine_block_keeps_sibling_defaults() {
+        let parsed = Config::from_str("(engine: (scoring: (boost_weight: 4.0)))").unwrap();
         assert_eq!(parsed.engine.scoring.boost_weight, 4.0);
         assert_eq!(
             parsed.engine.scoring.half_life_days,
@@ -169,26 +215,33 @@ mod tests {
     #[test]
     fn overrides_apply() {
         let parsed = Config::from_str(
-            r#"
-[ui]
-width = 800
-page_size = 25
-
-[engine.scoring]
-boost_weight = 4.0
-half_life_days = 7
-
-[engine.provider.builtin.desktop]
-name = "Apps"
-enabled = false
-prefixes = ["!"]
-
-[engine.provider.builtin.desktop.extra]
-weight_comment = 0.9
-
-[engine.external]
-terminal = ["foot"]
-"#,
+            r#"(
+  ui: (
+    width: 800,
+    page_size: 25,
+  ),
+  engine: (
+    scoring: (
+      boost_weight: 4.0,
+      half_life_days: 7,
+    ),
+    provider: (
+      builtin: {
+        "desktop": (
+          name: "Apps",
+          enabled: false,
+          prefixes: ["!"],
+          extra: {
+            "weight_comment": 0.9,
+          },
+        ),
+      },
+    ),
+    external: (
+      terminal: ["foot"],
+    ),
+  ),
+)"#,
         )
         .unwrap();
         assert_eq!(parsed.ui.width, 800);
@@ -214,17 +267,46 @@ terminal = ["foot"]
     }
 
     #[test]
-    fn malformed_toml_is_error() {
-        assert!(Config::from_str("paths = [").is_err());
-        assert!(Config::from_str("[ui]\nwidth = \"not a number\"\n").is_err());
+    fn malformed_ron_is_error() {
+        assert!(Config::from_str("(ui: (").is_err());
+        assert!(Config::from_str("(ui: (width: \"not a number\"))").is_err());
+    }
+
+    /// Every ` ```ron ` block in the user-facing docs must parse as a real
+    /// config, so the documented examples can never drift from the schema.
+    #[test]
+    fn documented_examples_parse() {
+        for (name, doc) in [
+            ("README.md", include_str!("../README.md")),
+            ("docs/CONFIG.md", include_str!("../docs/CONFIG.md")),
+            ("docs/THEMING.md", include_str!("../docs/THEMING.md")),
+        ] {
+            for (index, block) in ron_blocks(doc).into_iter().enumerate() {
+                Config::from_str(block)
+                    .unwrap_or_else(|e| panic!("{name} ron block {index} does not parse: {e}"));
+            }
+        }
+    }
+
+    /// Pull out the body of every fenced ` ```ron ` block.
+    fn ron_blocks(doc: &str) -> Vec<&str> {
+        let mut blocks = Vec::new();
+        let mut rest = doc;
+        while let Some(start) = rest.find("```ron") {
+            rest = &rest[start + "```ron".len()..];
+            let (body, tail) = rest.split_once("```").expect("closing ron fence");
+            blocks.push(body);
+            rest = tail;
+        }
+        blocks
     }
 
     #[test]
     fn out_of_range_scoring_values_are_rejected() {
-        assert!(Config::from_str("[engine.scoring]\nhalf_life_days = 0\n").is_err());
-        assert!(Config::from_str("[engine.scoring]\nboost_weight = -1\n").is_err());
-        assert!(Config::from_str("[engine.scoring]\nboost_samples = 0\n").is_err());
-        assert!(Config::from_str("[engine.scoring]\nconfidence_k = -3.0\n").is_err());
+        assert!(Config::from_str("(engine: (scoring: (half_life_days: 0)))\n").is_err());
+        assert!(Config::from_str("(engine: (scoring: (boost_weight: -1)))\n").is_err());
+        assert!(Config::from_str("(engine: (scoring: (boost_samples: 0)))\n").is_err());
+        assert!(Config::from_str("(engine: (scoring: (confidence_k: -3.0)))\n").is_err());
     }
 
     #[test]

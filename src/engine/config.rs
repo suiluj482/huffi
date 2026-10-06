@@ -1,6 +1,6 @@
 //! Engine-level configuration: scoring, providers, and external binaries.
 //!
-//! Mirrors the `[engine]` tables of the config file. Each subsection lives
+//! Mirrors the `engine` block of the config file. Each sub-block lives
 //! next to the module that consumes it: `ScoringConfig` in
 //! `scoring/config.rs`, `ProviderConfig` in `provider/config.rs`, and
 //! `ExternalConfig` here (used by `Action::perform` in
@@ -14,13 +14,13 @@ use crate::engine::scoring::config::ScoringConfig;
 /// Everything the engine reads from the config file.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct EngineConfig {
-    /// Ranking-model tuning (`[engine.scoring]`).
+    /// Ranking-model tuning (`engine.scoring`).
     #[serde(default)]
     pub scoring: ScoringConfig,
-    /// Per-provider settings (`[engine.provider.*]`).
+    /// Per-provider settings (`engine.provider`).
     #[serde(default)]
     pub provider: ProviderConfig,
-    /// External binaries huffi shells out to (`[engine.external]`).
+    /// External binaries huffi shells out to (`engine.external`).
     #[serde(default)]
     pub external: ExternalConfig,
 }

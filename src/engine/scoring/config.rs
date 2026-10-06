@@ -1,14 +1,14 @@
 //! Tuning parameters for the ranking model, loaded from the
-//! `[engine.scoring]` table of the config file.
+//! `engine.scoring` block of the config file.
 
 use serde::Deserialize;
 
 /// Tuning parameters for the ranking model. See `docs/ALGORITHM.md` for the
 /// meaning of each value.
 ///
-/// Mirrors the `[engine.scoring]` table of the config file. [`Default`] is
+/// Mirrors the `engine.scoring` block of the config file. [`Default`] is
 /// the single source of truth; `#[serde(default)]` fills every missing field
-/// (in a partial section) and every missing section from it.
+/// (in a partial block) and every missing block from it.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ScoringConfig {

@@ -18,7 +18,7 @@ const PREFIX: &str = ":";
 const PLACEHOLDER_ID: &str = "unicode-placeholder";
 
 /// Per-provider tuning knobs. When provided via
-/// `[engine.provider.builtin.unicode.extra]`, the fields are parsed from the
+/// `engine.provider.builtin.unicode.extra`, the fields are parsed from the
 /// arbitrary extra config, mirroring [`super::DesktopConfig`].
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]

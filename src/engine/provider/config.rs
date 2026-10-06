@@ -1,8 +1,8 @@
-//! Per-provider configuration, loaded from the `[engine.provider]` tables of
+//! Per-provider configuration, loaded from the `engine.provider` block of
 //! the config file.
 //!
 //! Built-in providers are keyed by their [`ProviderMeta::id`] under
-//! `[engine.provider.builtin.<id>]`. Each section can override the provider's
+//! `engine.provider.builtin.<id>`. Each entry can override the provider's
 //! display name, prefixes, enabled flag, and `prefix_only` flag, and carry an
 //! arbitrary `extra` config block that is passed through to the provider at
 //! init time.
@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::ProviderMeta;
 
 /// Configuration for every provider. Built-in provider overrides live under
-/// `builtin`, keyed by provider id (e.g. `[engine.provider.builtin.desktop]`).
+/// `builtin`, keyed by provider id (e.g. `engine.provider.builtin.desktop`).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ProviderConfig {
     /// Per-provider overrides for built-in providers, keyed by

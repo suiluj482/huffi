@@ -1,4 +1,4 @@
-//! UI settings, parsed from the `[ui]` section of the config file.
+//! UI settings, parsed from the `ui` block of the config file.
 //!
 //! [`UiConfig`] is resolved by the application-level
 //! [`crate::config::Config`]; its `Default` impl is the single source of
@@ -41,8 +41,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn partial_section_keeps_other_defaults() {
-        let parsed: UiConfig = toml::from_str("width = 800\n").unwrap();
+    fn partial_block_keeps_other_defaults() {
+        let parsed: UiConfig = ron::from_str("(width: 800)").unwrap();
         assert_eq!(parsed.width, 800);
         assert_eq!(parsed.height, UiConfig::default().height);
         assert_eq!(

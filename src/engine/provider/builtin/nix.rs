@@ -12,7 +12,7 @@ use crate::engine::provider::{
 use crate::engine::scoring::MatchField;
 
 /// Per-provider tuning knobs. When provided via
-/// `[engine.provider.builtin.nix.extra]`, the fields are parsed from the
+/// `engine.provider.builtin.nix.extra`, the fields are parsed from the
 /// arbitrary extra config, mirroring [`super::DesktopConfig`].
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default)]

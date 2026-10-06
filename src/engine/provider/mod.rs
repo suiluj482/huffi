@@ -257,15 +257,15 @@ impl std::fmt::Display for ProviderResult {
 
 /// Context handed to [`Provider::init`] once at startup.
 ///
-/// Wrapped in a struct so future setup inputs (config sections, resolved
+/// Wrapped in a struct so future setup inputs (config fields, resolved
 /// paths, environment) can be added without breaking existing implementors.
 #[derive(Debug, Clone)]
 pub struct InitContext<'a> {
     /// The provider's own data folder (`<data dir>/providers/<provider id>/`,
     /// created unless running in dry-run mode).
     pub data_dir: &'a Path,
-    /// Arbitrary per-provider config from `[engine.provider.builtin.<id>.extra]`.
-    /// `None` when the user did not set an `extra` section for this provider.
+    /// Arbitrary per-provider config from `engine.provider.builtin.<id>.extra`.
+    /// `None` when the user did not set an `extra` block for this provider.
     pub extra: Option<serde_json::Value>,
 }
 

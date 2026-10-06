@@ -492,7 +492,7 @@ Two details worth copying:
   support stays visible in one `match`.
 
 The provider takes no `.extra` config and its `InitContext.extra` is `None`, so
-there is nothing to document in `config.toml`; the keys are user-visible through
+there is nothing to document in `config.ron`; the keys are user-visible through
 the default theme instead (see [`THEMING.md`](THEMING.md)).
 
 ## Registering a provider
