@@ -87,11 +87,18 @@ struct Row {
     variant: Option<String>,
     icon: Option<Icon>,
     set_query: Option<QuerySuggestion>,
+    /// The suggestion the row's [`Action::SetQuery`] applies on Enter —
+    /// resolved with the active prefix when the row is submitted, keeping
+    /// the launcher open. Independent of `set_query`, which Tab applies.
+    ///
+    /// [`Action::SetQuery`]: crate::engine::provider::Action::SetQuery
+    action_set_query: Option<QuerySuggestion>,
 }
 
 impl From<Scored<EntryMeta>> for Row {
     fn from(scored: Scored<EntryMeta>) -> Self {
         let entry = scored.entry;
+        let action_set_query = entry.action.query_suggestion().cloned();
         Self {
             entry_id: entry.id,
             provider_id: entry.provider_id,
@@ -105,6 +112,7 @@ impl From<Scored<EntryMeta>> for Row {
             variant: entry.variant,
             icon: entry.icon,
             set_query: entry.set_query,
+            action_set_query,
         }
     }
 }
@@ -653,13 +661,26 @@ impl Launcher {
             let engine = Arc::clone(&self.engine);
             let query = self.state.borrow().query.clone();
             let entry_id = hit.entry_id.clone();
-            tasks::run_blocking(
-                move || {
-                    engine.lock().unwrap().select(&query, &entry_id);
-                },
-                |_| {},
-            );
-            self.dismiss();
+            let work = move || {
+                engine.lock().unwrap().select(&query, &entry_id);
+            };
+            match hit.action_set_query.clone() {
+                // Enter applied a query suggestion: like Tab, the launcher
+                // stays open and the suggestion goes in after the selection
+                // has been recorded.
+                Some(suggestion) => {
+                    let weak = Rc::downgrade(self);
+                    tasks::run_blocking(work, move |_| {
+                        let Some(this) = weak.upgrade() else { return };
+                        let prefix = this.state.borrow().active_prefix.clone();
+                        this.set_query(suggestion.resolve(prefix.as_deref()));
+                    });
+                }
+                None => {
+                    tasks::run_blocking(work, |_| {});
+                    self.dismiss();
+                }
+            }
         }
     }
 

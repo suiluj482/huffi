@@ -47,6 +47,12 @@ pub enum Action {
     /// Copy `value` to the clipboard on selection. The clipboard binary is
     /// resolved from config when the action is performed.
     Clipboard { value: String },
+    /// Replace the query with `suggestion` on selection and keep the
+    /// launcher open — the Enter-triggered equivalent of tab-applying a
+    /// suggestion. Nothing is spawned; the UI applies the suggestion, so
+    /// `select` still records the launch and runs `Provider::handle` like
+    /// any other selection.
+    SetQuery { suggestion: QuerySuggestion },
     /// Do nothing; the default for entries that never set an action.
     NoOp,
 }
@@ -65,9 +71,18 @@ impl Action {
             Action::Clipboard { value } => {
                 vec![external.clipboard.clone(), value.clone()]
             }
-            Action::NoOp => return None,
+            Action::SetQuery { .. } | Action::NoOp => return None,
         };
         (!args.is_empty()).then_some(args)
+    }
+
+    /// The suggestion a [`SetQuery`](Self::SetQuery) action applies, or
+    /// `None` for every other action.
+    pub fn query_suggestion(&self) -> Option<&QuerySuggestion> {
+        match self {
+            Action::SetQuery { suggestion } => Some(suggestion),
+            _ => None,
+        }
     }
 
     /// The entry's own working directory, if it has one.
@@ -349,6 +364,30 @@ impl EntryBuilder {
     /// prefix that no longer triggers anything.
     pub fn set_query_keeping_prefix(mut self, query: impl Into<String>) -> Self {
         self.set_query = Some(QuerySuggestion::keeping_prefix(query));
+        self
+    }
+
+    /// Set the [`Action::SetQuery`] applied when this entry is
+    /// *selected* (Enter): the query is replaced with `query` and the
+    /// launcher stays open. Nothing is spawned, but the selection is
+    /// recorded like any other.
+    ///
+    /// Independent of [`set_query`](Self::set_query): that one is what Tab
+    /// applies, this one is what Enter applies, and an entry may carry both
+    /// with different values (or just one).
+    pub fn action_set_query(mut self, query: impl Into<String>) -> Self {
+        self.action = Some(Action::SetQuery {
+            suggestion: QuerySuggestion::new(query),
+        });
+        self
+    }
+
+    /// Like [`action_set_query`](Self::action_set_query), but only the text
+    /// under the active prefix is replaced; the prefix stays in front of it.
+    pub fn action_set_query_keeping_prefix(mut self, query: impl Into<String>) -> Self {
+        self.action = Some(Action::SetQuery {
+            suggestion: QuerySuggestion::keeping_prefix(query),
+        });
         self
     }
 
@@ -668,6 +707,14 @@ mod tests {
 
         assert_eq!(Action::NoOp.argv(&external), None);
         assert_eq!(
+            Action::SetQuery {
+                suggestion: QuerySuggestion::new("42")
+            }
+            .argv(&external),
+            None,
+            "a query suggestion spawns nothing"
+        );
+        assert_eq!(
             Action::Exec {
                 args: vec![],
                 mode: ExecMode::Direct,
@@ -813,5 +860,64 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// Tab applies `set_query`, Enter applies `action_set_query`, and the
+    /// two carry independent values on the same entry.
+    #[test]
+    fn the_enter_suggestion_is_independent_of_the_tab_suggestion() {
+        let e = entry("id", "title")
+            .set_query("tab value")
+            .action_set_query("enter value")
+            .score(1.0);
+
+        let tab = e.entry.set_query.expect("tab suggestion");
+        assert_eq!(tab.query, "tab value");
+        assert!(!tab.keep_prefix);
+        assert_eq!(
+            e.entry.action.query_suggestion().map(|s| s.query.as_str()),
+            Some("enter value"),
+            "Enter applies its own value, not the tab one"
+        );
+    }
+
+    #[test]
+    fn action_set_query_keeps_the_prefix_when_asked() {
+        let e = entry("id", "title")
+            .action_set_query_keeping_prefix("u+2603")
+            .score(1.0);
+        let suggestion = e
+            .entry
+            .action
+            .query_suggestion()
+            .expect("a query suggestion");
+        assert!(suggestion.keep_prefix);
+        assert_eq!(suggestion.resolve(Some(":")), ":u+2603");
+        assert!(
+            e.entry.set_query.is_none(),
+            "the tab suggestion stays unset"
+        );
+    }
+
+    /// The accessor is how the UI pulls the suggestion out of the row
+    /// without matching on action variants itself.
+    #[test]
+    fn only_the_set_query_action_exposes_a_suggestion() {
+        let ls = || vec!["ls".to_string()];
+        let with = entry("id", "t").action_set_query("q").score(1.0);
+        assert!(with.entry.action.query_suggestion().is_some());
+
+        for no in [
+            entry("a", "t").exec(ls()).score(1.0),
+            entry("b", "t").clipboard("x").score(1.0),
+            entry("c", "t").set_query("tab-only").score(1.0),
+            entry("d", "t").score(1.0),
+        ] {
+            assert!(
+                no.entry.action.query_suggestion().is_none(),
+                "{:?} should not offer a suggestion",
+                no.entry.action
+            );
+        }
     }
 }

@@ -188,6 +188,8 @@ entry("my-entry-id", "Display Name")
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
 | `.set_query_keeping_prefix(text)` | `String` | Query suggestion applied under the active prefix, which stays in front of it |
+| `.action_set_query(query)` | `String` | Selection action: Enter replaces the query with this text and the launcher stays open |
+| `.action_set_query_keeping_prefix(text)` | `String` | Same, but only the text under the active prefix is replaced |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
 | `.match_fields(fields)` | `Vec<MatchField>` | Fuzzy-match these weighted text fields |
 | `.match_field(text)` | `String` | Shortcut for a single fuzzy-match field at weight 1.0 |
@@ -296,6 +298,11 @@ suggests its name (`snowman`).
 A suggestion keeps the prefix that is *active*, not the provider's first one,
 so a provider declaring several prefixes still lands on the one the user typed.
 
+Tab is one of two triggers for a suggestion; the other is selection — see
+[`.action_set_query`](#action-what-happens-on-selection) below. The two are
+separate values: `.set_query` is what Tab inserts, `.action_set_query` is
+what Enter inserts, and an entry may carry both.
+
 ### Action: what happens on selection
 
 When the user selects an entry, its `Action` is performed:
@@ -308,10 +315,19 @@ When the user selects an entry, its `Action` is performed:
   open after the command exits so its output remains readable. Uses the
   `terminal_hold` wrapper from `[engine.external]` (default
   `kitty --hold --`), which should be set alongside `terminal`.
+- **`.action_set_query(query)`** — nothing spawns: Enter replaces the query
+  with `query` (resolved against the active prefix, like Tab) and the
+  launcher **stays open**, so a selection can chain into the next one. The
+  selection itself is still recorded — launch history and
+  `Provider::handle` run as for any other action. The value is independent
+  of `.set_query`: Tab and Enter can insert different text.
 
-All three set `Action::Exec { args, mode, cwd }`; the builders pick the
+All three exec builders set `Action::Exec { args, mode, cwd }`; the builders pick the
 [`ExecMode`] for you (`Direct`, `Terminal`, `TerminalHold`), and the mode
 decides which configured wrapper the argv is appended to at perform time.
+`.action_set_query` sets `Action::SetQuery { suggestion }` instead — the UI
+pulls the suggestion out of the entry and applies it, which is what keeps
+the launcher open.
 
 The directory the command runs in is resolved at perform time, first
 existing candidate wins:
