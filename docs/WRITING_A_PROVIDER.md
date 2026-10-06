@@ -59,6 +59,15 @@ fuzzy-matches the provider's entries against `" 2 + 2"`, not the full input.
 Providers whose prefix did not match score against the full input instead. A
 `.score()`-based entry isn't affected by any query either way.
 
+The user can also mark a prefix as **exclusive** in the config file
+(`[engine.provider] exclusive_prefixes = [...]`, see
+[`CONFIG.md`](CONFIG.md)). When a query's global prefix is one of those, only
+the providers declaring that prefix are called — every other provider, yours
+with no prefixes included, is skipped for that keystroke. This is the switch
+to flip when a prefixed mode should own the whole result list instead of
+sharing it with the desktop entries; it is judged against the resolved
+prefix, and is empty (off) by default.
+
 ### `init(ctx)`
 
 Called once at startup, before any queries are served. The `InitContext`

@@ -329,7 +329,9 @@ pub struct HandleContext<'a> {
 ///   text after the prefix. Otherwise `prefix` is `None` and `query` is the
 ///   full typed text. A provider whose prefixes don't contain the global
 ///   prefix is treated like an unprefixed provider: it is called with
-///   `prefix: None` and the full typed text. [`QueryContext::original`]
+///   `prefix: None` and the full typed text — unless the global prefix is
+///   listed in [`ProviderConfig::exclusive_prefixes`](config::ProviderConfig::exclusive_prefixes),
+///   in which case such a provider is not called at all. [`QueryContext::original`]
 ///   always holds the full query as typed, including the prefix.
 /// - [`handle()`](Self::handle) — called when one of this provider's
 ///   entries is selected by the user, in addition to the entry's action.

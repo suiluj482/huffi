@@ -61,6 +61,16 @@ confidence_k     = 3.0
 # Base score for results shown while the query is empty.
 empty_query_score = 0.8
 
+[engine.provider]
+# Prefixes that own a query outright. When the resolved global prefix of a
+# query is one of these, only providers that declare that prefix are queried —
+# every other provider is skipped for that keystroke, including providers with
+# no prefixes of their own (the desktop entries behind an unprefixed query).
+# Exclusivity is judged against the *resolved* prefix (the longest one the
+# input starts with), so listing "=" leaves `==` queries shared. Empty (the
+# default) means every enabled provider shares every query.
+# exclusive_prefixes = ["=", "!", ":"]
+
 [engine.provider.builtin.desktop]
 # Display name shown in the UI (defaults to the provider id).
 # name    = "Applications"
