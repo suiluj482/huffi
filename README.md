@@ -170,6 +170,10 @@ weight_comment = 0.9      # comments match a bit harder
   [`freedesktop-desktop-entry`](https://crates.io/crates/freedesktop-desktop-entry),
   matching against name, keywords, generic name, and comment with field
   weighting.
+- **Configured actions** — static entries declared in `config.toml`
+  (`[[engine.provider.builtin.actions.extra.entries]]`): a title, keywords,
+  and exactly one of `exec`, `terminal_exec`, or `clipboard`. They
+  fuzzy-match like everything else and rank up with use.
 - **Boost / Delete** — correct the model in the moment. Both are scoped to the
   exact prefix you typed and are available on result rows with a history key:
   boost is a synthetic 10x launch, delete clears the prefix's association.
@@ -235,6 +239,7 @@ tests/          # in-process integration tests against the engine
 | Provider | Trigger | Source |
 |---|---|---|
 | `DesktopEntryProvider` | (always active) | `freedesktop-desktop-entry` — reads `.desktop` files |
+| `ActionsProvider` | (always active) | `config.toml` — static entries from `[[…extra.entries]]`, each running a command or copying text |
 | `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard, `Tab` applies its query suggestion |
 | `MetaProvider` | `@` prefix | launcher state — uptime, control socket path, pid, version (select copies the value) |
 | `UnicodeProvider` | `:` prefix | Unicode names + every emoji shortcode — `:smile` for 😄 — also `2603`, `u+1f600`, `0x1f600` and `+1`. `Tab` swaps a name for its code point and back; selecting copies the character, or the number for a code point row |

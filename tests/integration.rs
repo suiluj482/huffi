@@ -361,3 +361,71 @@ fn unicode_select_copies_and_then_ranks_first() {
     let (_prefix, after, _) = engine.query(":bee");
     assert_eq!(after[0].entry.id, target.entry.id);
 }
+
+/// Configured actions reach the result list by keyword, carry their command
+/// through to selection, and keep their history under the provider's own
+/// namespace. The engine runs dry, so the action is asserted rather than
+/// carried out.
+#[test]
+fn actions_provider_serves_configured_entries() {
+    use huffi::engine::config::EngineConfig;
+    use huffi::engine::provider::Action;
+    use huffi::engine::provider::config::ProviderOverride;
+
+    let dir = PathBuf::from("/tmp/huffi-actions-int");
+    let mut config = EngineConfig::default();
+    config.provider.builtin.insert(
+        "actions".to_string(),
+        ProviderOverride {
+            extra: Some(serde_json::json!({
+                "entries": [
+                    {
+                        "title": "Suspend",
+                        "keywords": ["sleep"],
+                        "exec": ["systemctl", "suspend"],
+                    },
+                    {
+                        "title": "Htop",
+                        "terminal_exec": ["htop"],
+                    },
+                ],
+            })),
+            ..Default::default()
+        },
+    );
+    let mut engine = Engine::new_with_config(&dir, true, &config).expect("engine failed to open");
+
+    // The keyword is what reaches the matcher: nothing else about the row
+    // says "sleep".
+    let reply = engine.query("sleep");
+    let hit = reply
+        .scored
+        .iter()
+        .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
+        .expect("a configured action for 'sleep'");
+    assert_eq!(hit.entry.id, "suspend");
+    assert_eq!(hit.history_key.as_deref(), Some("actions.suspend"));
+    match &hit.entry.action {
+        Action::Exec { args, terminal } => {
+            assert_eq!(args, &["systemctl".to_string(), "suspend".to_string()]);
+            assert!(!terminal);
+        }
+        other => panic!("expected Exec, got {other:?}"),
+    }
+
+    let reply = engine.query("htop");
+    let hit = reply
+        .scored
+        .iter()
+        .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
+        .expect("the htop action");
+    match &hit.entry.action {
+        Action::Exec { args, terminal } => {
+            assert_eq!(args, &["htop".to_string()]);
+            assert!(terminal);
+        }
+        other => panic!("expected terminal Exec, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

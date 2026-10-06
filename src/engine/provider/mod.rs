@@ -9,6 +9,7 @@
 //! | Provider | Trigger | Source |
 //! |---|---|---|
 //! | [`DesktopEntryProvider`] | (always active) | `freedesktop-desktop-entry` — `.desktop` files |
+//! | [`ActionsProvider`] | (always active) | config file — static entries from `[[…extra.entries]]` |
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | engine state — uptime, control socket path, pid, version |
 //! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
@@ -379,7 +380,8 @@ pub trait Provider: Send {
 pub use collection::ProviderCollection;
 
 pub use builtin::{
-    CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, RunnerProvider,
+    ActionsProvider, CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider,
+    RunnerProvider,
     TestProvider, UnicodeProvider,
 };
 pub use util::split_command;

@@ -5,6 +5,7 @@
 //! [`crate::engine::provider`] so they can be registered on a
 //! [`ProviderCollection`](crate::engine::provider::ProviderCollection) by name.
 
+pub mod actions;
 pub mod calculator;
 pub mod desktop;
 pub mod meta;
@@ -13,6 +14,7 @@ pub mod runner;
 pub mod test_provider;
 pub mod unicode;
 
+pub use actions::ActionsProvider;
 pub use calculator::CalculatorProvider;
 pub use desktop::DesktopEntryProvider;
 pub use meta::MetaProvider;

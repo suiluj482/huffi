@@ -227,10 +227,67 @@ working_dir = "~/src"
         );
     }
 
+    /// Configured action entries arrive as an array of tables, which must
+    /// reach the provider as a JSON array of objects.
+    #[test]
+    fn action_entries_parse_from_toml_array_of_tables() {
+        let parsed = Config::from_str(
+            r#"
+[[engine.provider.builtin.actions.extra.entries]]
+title = "Suspend"
+keywords = ["sleep"]
+exec = ["systemctl", "suspend"]
+
+[[engine.provider.builtin.actions.extra.entries]]
+title     = "Copy date"
+clipboard = "2026-10-06"
+"#,
+        )
+        .unwrap();
+        let actions = parsed
+            .engine
+            .provider
+            .builtin
+            .get("actions")
+            .expect("actions override");
+        let extra = actions.extra.as_ref().expect("extra config");
+        assert_eq!(extra["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(extra["entries"][0]["title"], "Suspend");
+        assert_eq!(extra["entries"][0]["exec"][1], "suspend");
+        assert_eq!(extra["entries"][1]["clipboard"], "2026-10-06");
+    }
+
     #[test]
     fn malformed_toml_is_error() {
         assert!(Config::from_str("paths = [").is_err());
         assert!(Config::from_str("[ui]\nwidth = \"not a number\"\n").is_err());
+    }
+
+    /// The reference block in docs/CONFIG.md is the config schema users
+    /// copy from; if it stops parsing, the docs have drifted from it.
+    #[test]
+    fn the_documented_reference_block_parses() {
+        let docs = include_str!("../docs/CONFIG.md");
+        let block = docs
+            .split("```toml\n")
+            .nth(1)
+            .expect("a toml reference block")
+            .split("```")
+            .next()
+            .expect("a closed block");
+        let parsed = Config::from_str(block).expect("the documented reference parses");
+        assert_eq!(parsed.ui.page_size, 10);
+        assert_eq!(parsed.engine.scoring.boost_weight, 10.0);
+        let entries = parsed
+            .engine
+            .provider
+            .builtin
+            .get("actions")
+            .and_then(|actions| actions.extra.as_ref())
+            .and_then(|extra| extra["entries"].as_array())
+            .expect("documented action entries");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["title"], "Suspend");
     }
 
     #[test]
