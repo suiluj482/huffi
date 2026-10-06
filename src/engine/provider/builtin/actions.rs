@@ -3,16 +3,17 @@
 //! The rows are declared under `[[engine.provider.builtin.actions.extra.entries]]`
 //! in `config.toml` — one table per entry, each carrying a title, optional
 //! display fields and keywords, and exactly one action (`exec`,
-//! `terminal_exec`, or `clipboard`). Everything the launcher can do for a
-//! `.desktop` file it can do for an entry the user typed by hand.
+//! `terminal_exec`, or `clipboard`), plus the theme-facing fields every
+//! entry builder offers: details, a layout variant, query suggestions, and
+//! history controls.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use serde::Deserialize;
 
 use crate::engine::provider::{
-    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, is_detail_key,
     parse_extra_config,
 };
 use crate::engine::scoring::MatchField;
@@ -51,7 +52,9 @@ impl Default for ActionsConfig {
 /// Exactly one of `exec`, `terminal_exec`, and `clipboard` must be set —
 /// an entry with none has nothing to do when selected, an entry with two
 /// has two contradictory things. `id` is optional: it defaults to a slug of
-/// the title, and the history key is always `actions.<id>`.
+/// the title, and the history key defaults to `actions.<id>`. The remaining
+/// fields mirror [`EntryBuilder`](crate::engine::provider::EntryBuilder)
+/// one for one; anything left unset keeps the builder's own default.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ActionEntry {
     /// Stable id within the provider; defaults to a slug of [`title`](Self::title).
@@ -75,6 +78,32 @@ pub struct ActionEntry {
     /// Extra fuzzy-match fields, each at `weight_keyword`.
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Named display fields for the row's `detail-<key>` widgets. Keys must
+    /// match `[a-z0-9-]+`, values are strings — quote numbers in TOML.
+    #[serde(default)]
+    pub details: BTreeMap<String, String>,
+    /// Row layout variant, e.g. `"info"`: selects a theme template and adds
+    /// `variant-<name>` CSS classes. Must match `[a-z0-9-]+`.
+    #[serde(default)]
+    pub variant: Option<String>,
+    /// Query suggestion applied when the row is tab-selected; replaces the
+    /// whole query. Mutually exclusive with
+    /// [`set_query_keeping_prefix`](Self::set_query_keeping_prefix).
+    #[serde(default)]
+    pub set_query: Option<String>,
+    /// Query suggestion applied under the active prefix, which stays in
+    /// front of it. The one to use for refining the query that found the
+    /// row, since `prefixes` is user-configurable.
+    #[serde(default)]
+    pub set_query_keeping_prefix: Option<String>,
+    /// Whether launches of this entry are recorded in the history model.
+    /// Defaults to `true`; `false` leaves the row unlearnable. Mutually
+    /// exclusive with [`history_key`](Self::history_key).
+    #[serde(default = "default_true")]
+    pub history: bool,
+    /// Override the history key, which otherwise derives as `actions.<id>`.
+    #[serde(default)]
+    pub history_key: Option<String>,
     /// Command to run on selection (no terminal).
     #[serde(default)]
     pub exec: Option<Vec<String>>,
@@ -84,6 +113,10 @@ pub struct ActionEntry {
     /// Text to copy to the clipboard on selection.
     #[serde(default)]
     pub clipboard: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Provides the entries a user configured under
@@ -181,6 +214,36 @@ fn resolve(entries: &[ActionEntry]) -> Result<Vec<(String, &ActionEntry)>, Strin
         {
             return Err(format!("{label}: command must not be empty"));
         }
+        if cfg.set_query.is_some() && cfg.set_query_keeping_prefix.is_some() {
+            return Err(format!(
+                "{label}: set_query and set_query_keeping_prefix are mutually exclusive"
+            ));
+        }
+        // Validated here rather than left to `EntryBuilder::detail`, whose
+        // `debug_assert!` would panic a debug build on a bad key from config.
+        for key in cfg.details.keys() {
+            if !is_detail_key(key) {
+                return Err(format!("{label}: detail key {key:?} must match [a-z0-9-]+"));
+            }
+        }
+        if let Some(variant) = &cfg.variant {
+            // A variant becomes a CSS class (`variant-<variant>`) and a path
+            // segment of the theme's template lookup, so it gets the same
+            // charset detail keys get — which also rules out `../`.
+            if !is_detail_key(variant) {
+                return Err(format!(
+                    "{label}: variant {variant:?} must match [a-z0-9-]+"
+                ));
+            }
+        }
+        if !cfg.history && cfg.history_key.is_some() {
+            return Err(format!(
+                "{label}: history = false conflicts with history_key"
+            ));
+        }
+        if cfg.history_key.as_deref() == Some("") {
+            return Err(format!("{label}: history_key must not be empty"));
+        }
         let id = cfg
             .id
             .clone()
@@ -240,7 +303,14 @@ fn build(id: &str, cfg: &ActionEntry, weights: Weights) -> Entry {
         }
     }
 
-    let mut builder = entry(id, &cfg.title).history_key(format!("{HISTORY_PREFIX}.{id}"));
+    let mut builder = entry(id, &cfg.title);
+    if cfg.history {
+        builder = builder.history_key(
+            cfg.history_key
+                .clone()
+                .unwrap_or_else(|| format!("{HISTORY_PREFIX}.{id}")),
+        );
+    }
     if let Some(subtitle) = &cfg.subtitle {
         builder = builder.subtitle(subtitle);
     }
@@ -252,6 +322,17 @@ fn build(id: &str, cfg: &ActionEntry, weights: Weights) -> Entry {
     }
     if let Some(path) = &cfg.icon_path {
         builder = builder.icon_path(path);
+    }
+    for (key, value) in &cfg.details {
+        builder = builder.detail(key, value);
+    }
+    if let Some(variant) = &cfg.variant {
+        builder = builder.variant(variant);
+    }
+    if let Some(query) = &cfg.set_query {
+        builder = builder.set_query(query);
+    } else if let Some(query) = &cfg.set_query_keeping_prefix {
+        builder = builder.set_query_keeping_prefix(query);
     }
     if let Some(args) = &cfg.exec {
         builder = builder.exec(args.clone());
@@ -452,6 +533,152 @@ mod tests {
             ],
         }));
         assert!(msg.contains("duplicate id \"suspend\""), "{msg}");
+    }
+
+    /// The theme-facing fields reach the row: named details for
+    /// `detail-<key>` widgets, a variant for template + CSS class selection,
+    /// and a Tab suggestion under whatever prefix is active.
+    #[test]
+    fn details_variant_and_suggestions_reach_the_entry() {
+        let (mut provider, result) = init(Some(serde_json::json!({
+            "entries": [{
+                "title": "Volume",
+                "exec": ["pavucontrol"],
+                "variant": "info",
+                "details": { "level": "80%", "sink": "speakers" },
+                "set_query_keeping_prefix": "mute",
+            }],
+        })));
+        assert!(matches!(result, ProviderResult::Ok));
+        let entries = provider.query(QueryContext {
+            prefix: None,
+            query: "",
+            original: "",
+        });
+        let row = &entries[0];
+        assert_eq!(row.entry.details["level"], "80%");
+        assert_eq!(row.entry.details["sink"], "speakers");
+        assert_eq!(row.entry.variant.as_deref(), Some("info"));
+        let suggestion = row.entry.set_query.as_ref().expect("a suggestion");
+        assert!(suggestion.keep_prefix);
+        assert_eq!(suggestion.query, "mute");
+    }
+
+    /// A detail key reaching `EntryBuilder::detail` would hit its
+    /// `debug_assert!` and panic this test; the config check has to fire
+    /// first, as a plain config error.
+    #[test]
+    fn a_bad_detail_key_is_a_config_error_not_a_panic() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{
+                "title": "Broken",
+                "exec": ["true"],
+                "details": { "Not A Key": "value" },
+            }],
+        }));
+        assert!(msg.contains("detail key \"Not A Key\""), "{msg}");
+        assert!(msg.contains("[a-z0-9-]+"), "{msg}");
+    }
+
+    /// The variant is a CSS class and a path segment, so it takes the same
+    /// charset as a detail key — `../` included in what it must not be.
+    #[test]
+    fn a_bad_variant_is_rejected() {
+        for variant in ["Info Row", "../other"] {
+            let msg = config_error(serde_json::json!({
+                "entries": [{
+                    "title": "Broken",
+                    "exec": ["true"],
+                    "variant": variant,
+                }],
+            }));
+            assert!(msg.contains("variant"), "{msg}: {variant}");
+            assert!(msg.contains("[a-z0-9-]+"), "{msg}: {variant}");
+        }
+    }
+
+    #[test]
+    fn two_query_suggestions_are_rejected() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{
+                "title": "Ambiguous",
+                "exec": ["true"],
+                "set_query": "a",
+                "set_query_keeping_prefix": "b",
+            }],
+        }));
+        assert!(
+            msg.contains("set_query and set_query_keeping_prefix are mutually exclusive"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn history_false_drops_the_history_key() {
+        let (mut provider, result) = init(Some(serde_json::json!({
+            "entries": [{
+                "title": "Throwaway",
+                "clipboard": "x",
+                "history": false,
+            }],
+        })));
+        assert!(matches!(result, ProviderResult::Ok));
+        let entries = provider.query(QueryContext {
+            prefix: None,
+            query: "",
+            original: "",
+        });
+        assert!(
+            entries[0].history_key.is_none(),
+            "an opted-out row must be invisible to the history model"
+        );
+        assert_eq!(entries[0].entry.id, "throwaway");
+    }
+
+    #[test]
+    fn history_key_overrides_the_derived_key() {
+        let (mut provider, result) = init(Some(serde_json::json!({
+            "entries": [{
+                "title": "Renamed later",
+                "exec": ["true"],
+                "history_key": "legacy-key",
+            }],
+        })));
+        assert!(matches!(result, ProviderResult::Ok));
+        let entries = provider.query(QueryContext {
+            prefix: None,
+            query: "",
+            original: "",
+        });
+        assert_eq!(entries[0].history_key.as_deref(), Some("legacy-key"));
+    }
+
+    #[test]
+    fn history_false_with_a_history_key_is_rejected() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{
+                "title": "Contradiction",
+                "exec": ["true"],
+                "history": false,
+                "history_key": "why",
+            }],
+        }));
+        assert!(
+            msg.contains("history = false conflicts with history_key"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn an_empty_history_key_is_rejected() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{
+                "title": "Empty",
+                "exec": ["true"],
+                "history_key": "",
+            }],
+        }));
+        assert!(msg.contains("history_key must not be empty"), "{msg}");
     }
 
     /// A title with nothing to slug (an emoji, say) cannot supply an id.

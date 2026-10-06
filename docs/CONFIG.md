@@ -152,11 +152,32 @@ weight_keyword = 0.8
 # the title ("Open project huffi" → "open-project-huffi") and the history key
 # is actions.<id>; set id explicitly if you plan to retitle entries, since a
 # new title starts the history over.
+#
+# Optional per entry:
+#   subtitle, comment, icon (theme name), icon_path (file)  — display
+#   keywords                        — fuzzy-matched alongside the title
+#   details = { key = "value" }     — named detail widgets for the row;
+#                                     keys match [a-z0-9-]+, values are
+#                                     strings (quote numbers); a theme shows
+#                                     them only if its template declares the
+#                                     matching detail-<key> widget
+#   variant = "info"                — row layout: picks a theme template
+#                                     (falling back when the theme ships
+#                                     none) and adds variant-<name> CSS
+#                                     classes; must match [a-z0-9-]+
+#   set_query = "..."               — Tab suggestion replacing the query, or
+#   set_query_keeping_prefix = "…"  — one under the active prefix (exactly
+#                                     one of the two)
+#   history = false                 — keep this row out of the history model
+#                                     (default true)
+#   history_key = "..."             — override the derived actions.<id>;
+#                                     conflicts with history = false
 [[engine.provider.builtin.actions.extra.entries]]
 title    = "Suspend"
 subtitle = "Power"
 icon     = "system-lock-screen"
 keywords = ["sleep", "shutdown"]   # matched alongside the title
+details  = { manager = "systemd" } # shown by a theme with detail-manager
 exec     = ["systemctl", "suspend"]
 
 [[engine.provider.builtin.actions.extra.entries]]

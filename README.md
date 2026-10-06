@@ -172,8 +172,9 @@ weight_comment = 0.9      # comments match a bit harder
   weighting.
 - **Configured actions** — static entries declared in `config.toml`
   (`[[engine.provider.builtin.actions.extra.entries]]`): a title, keywords,
-  and exactly one of `exec`, `terminal_exec`, or `clipboard`. They
-  fuzzy-match like everything else and rank up with use.
+  and exactly one of `exec`, `terminal_exec`, or `clipboard`, plus
+  theme-ready `details` and layout `variant`s. They fuzzy-match like
+  everything else and rank up with use.
 - **Boost / Delete** — correct the model in the moment. Both are scoped to the
   exact prefix you typed and are available on result rows with a history key:
   boost is a synthetic 10x launch, delete clears the prefix's association.
