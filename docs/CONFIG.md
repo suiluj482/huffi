@@ -135,6 +135,65 @@ weight_name         = 1.0
 weight_shortcode    = 1.3
 weight_codepoint    = 0.6
 
+[engine.provider.builtin.actions]
+# The actions provider ships always active with no prefix, so configured
+# actions compete in every query like applications do, ranked by usage. Gate
+# them behind a prefix instead with e.g.:
+# prefixes = [">"]
+# prefix_only = true
+
+[engine.provider.builtin.actions.extra]
+# Fuzzy-match field weights: one field per entry title, one per keyword.
+weight_title   = 1.0
+weight_keyword = 0.8
+
+# Static entries, one table each, in config order. Each entry needs a title
+# and exactly one of exec, terminal_exec, clipboard. id defaults to a slug of
+# the title ("Open project huffi" → "open-project-huffi") and the history key
+# is actions.<id>; set id explicitly if you plan to retitle entries, since a
+# new title starts the history over.
+#
+# Optional per entry:
+#   subtitle, comment, icon (theme name), icon_path (file)  — display
+#   keywords                        — fuzzy-matched alongside the title
+#   details = { key = "value" }     — named detail widgets for the row;
+#                                     keys match [a-z0-9-]+, values are
+#                                     strings (quote numbers); a theme shows
+#                                     them only if its template declares the
+#                                     matching detail-<key> widget
+#   variant = "info"                — row layout: picks a theme template
+#                                     (falling back when the theme ships
+#                                     none) and adds variant-<name> CSS
+#                                     classes; must match [a-z0-9-]+
+#   set_query = "..."               — Tab suggestion replacing the query, or
+#   set_query_keeping_prefix = "…"  — one under the active prefix (exactly
+#                                     one of the two)
+#   cwd = "..."                     — directory the command runs in;
+#                                     overrides [engine.external].working_dir
+#                                     for this entry, `~/` expands against
+#                                     $HOME (exec / terminal_exec only)
+#   history = false                 — keep this row out of the history model
+#                                     (default true)
+#   history_key = "..."             — override the derived actions.<id>;
+#                                     conflicts with history = false
+[[engine.provider.builtin.actions.extra.entries]]
+title    = "Suspend"
+subtitle = "Power"
+icon     = "system-lock-screen"
+keywords = ["sleep", "shutdown"]   # matched alongside the title
+details  = { manager = "systemd" } # shown by a theme with detail-manager
+exec     = ["systemctl", "suspend"]
+
+[[engine.provider.builtin.actions.extra.entries]]
+title         = "Htop"
+comment       = "Interactive process viewer"
+terminal_exec = ["htop"]
+
+[[engine.provider.builtin.actions.extra.entries]]
+title     = "Copy today's date"
+icon_path = "/home/me/.local/share/icons/calendar.svg"
+clipboard = "2026-10-06"
+
 [engine.external]
 # For `Terminal=true` desktop entries: the argv items to prepend to the
 # entry's command — the terminal binary plus whatever flags it expects before

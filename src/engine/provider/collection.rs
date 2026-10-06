@@ -7,9 +7,9 @@ use crate::engine::scoring::QueryGroup;
 
 use super::config::{ProviderConfig, ProviderOverride};
 use super::{
-    CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext, InitContext,
-    NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext, RunnerProvider,
-    UnicodeProvider,
+    ActionsProvider, CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext,
+    InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
+    RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -61,6 +61,7 @@ impl ProviderCollection {
         collection.add_provider(Box::new(DesktopEntryProvider::new(
             freedesktop_desktop_entry::default_paths().collect(),
         )))?;
+        collection.add_provider(Box::new(ActionsProvider::new()))?;
         collection.add_provider(Box::new(CalculatorProvider::new()))?;
         collection.add_provider(Box::new(NixRunProvider::new()))?;
         collection.add_provider(Box::new(UnicodeProvider::new()))?;
@@ -467,6 +468,21 @@ mod tests {
         assert!(providers.iter().any(|p| {
             p.id == "calculator" && p.name == "calculator" && p.prefixes == vec!["="]
         }));
+    }
+
+    /// The actions provider ships always-on and inert: no prefix to type,
+    /// nothing to show until the user configures entries.
+    #[test]
+    fn actions_provider_is_registered_always_active() {
+        let c = collection();
+        let actions = c
+            .providers()
+            .into_iter()
+            .find(|p| p.id == "actions")
+            .expect("the actions provider is registered");
+        assert!(actions.enabled);
+        assert!(actions.prefixes.is_empty());
+        assert!(!actions.prefix_only);
     }
 
     #[test]
