@@ -189,6 +189,7 @@ weight_comment = 0.9
 [engine.external]
 terminal = ["foot"]
 terminal_hold = ["konsole", "--hold", "-e"]
+working_dir = "~/src"
 "#,
         )
         .unwrap();
@@ -220,6 +221,10 @@ terminal_hold = ["konsole", "--hold", "-e"]
             ]
         );
         assert_eq!(parsed.engine.external.clipboard, "wl-copy");
+        assert_eq!(
+            parsed.engine.external.working_dir.as_deref(),
+            Some(std::path::Path::new("~/src"))
+        );
     }
 
     #[test]

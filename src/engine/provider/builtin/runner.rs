@@ -392,7 +392,7 @@ mod tests {
         let entries = p.query(query_ctx("git s"));
         for e in &entries {
             match &e.entry.action {
-                Action::Exec { args, mode } => {
+                Action::Exec { args, mode, .. } => {
                     assert_eq!(*mode, ExecMode::TerminalHold);
                     assert_eq!(
                         args,

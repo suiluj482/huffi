@@ -6,6 +6,8 @@
 //! `ExternalConfig` here (used by `Action::perform` in
 //! `provider/util.rs`).
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 use crate::engine::provider::config::ProviderConfig;
@@ -46,6 +48,12 @@ pub struct ExternalConfig {
     pub terminal_hold: Vec<String>,
     /// Clipboard tool used by the calculator, meta, and other providers.
     pub clipboard: String,
+    /// Working directory for spawned actions when the entry has none of
+    /// its own (a desktop file's `Path=`, or a provider's `.cwd()`). A
+    /// leading `~/` expands against `$HOME`. `None` — the default — means
+    /// the user's home directory; that keeps the resident daemon's spawns
+    /// out of `/`, which is what systemd's service defaults to.
+    pub working_dir: Option<PathBuf>,
 }
 
 impl Default for ExternalConfig {
@@ -54,6 +62,7 @@ impl Default for ExternalConfig {
             terminal: vec!["kitty".into(), "--".into()],
             terminal_hold: vec!["kitty".into(), "--hold".into(), "--".into()],
             clipboard: "wl-copy".into(),
+            working_dir: None,
         }
     }
 }

@@ -396,7 +396,7 @@ mod tests {
         };
         let e = build_entry(&package, NixConfig::default());
         match &e.entry.action {
-            crate::engine::provider::Action::Exec { args, mode } => {
+            crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(*mode, crate::engine::provider::ExecMode::Terminal);
                 assert_eq!(
                     args,

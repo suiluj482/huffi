@@ -139,6 +139,10 @@ terminal = ["kitty", "--"]
 terminal_hold = ["kitty", "--hold", "--"]
 # Clipboard tool used by the calculator and meta providers.
 clipboard = "wl-copy"
+# Working directory for spawned actions when the entry has none of its own
+# (a desktop file's `Path=`, or a provider's `.cwd()`). Unset by default,
+# which means the user's home directory; a leading `~/` expands.
+# working_dir = "~/src"
 ```
 
 ## Nix (Home Manager)

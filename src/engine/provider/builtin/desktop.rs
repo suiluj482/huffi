@@ -96,6 +96,7 @@ fn read_desktop_entry(path: &Path, weights: DesktopConfig) -> Option<Entry> {
     let name = desktop.name::<&str>(&[])?.into_owned();
     let exec = desktop.exec().map(|s| s.to_string())?;
     let terminal = desktop.terminal();
+    let cwd = desktop.path().map(Path::new).map(Path::to_path_buf);
     let generic_name = desktop.generic_name::<&str>(&[]).map(|s| s.into_owned());
     let comment = desktop.comment::<&str>(&[]).map(|c| c.into_owned());
     let icon = desktop.icon().map(|s| s.to_owned());
@@ -145,6 +146,10 @@ fn read_desktop_entry(path: &Path, weights: DesktopConfig) -> Option<Entry> {
         entry(&id, &name).exec(exec_args)
     };
 
+    if let Some(cwd) = cwd {
+        e = e.cwd(cwd);
+    }
+
     e = e.history_key(&id);
     if let Some(c) = comment {
         e = e.comment(c);
@@ -157,4 +162,52 @@ fn read_desktop_entry(path: &Path, weights: DesktopConfig) -> Option<Entry> {
     }
 
     Some(e.match_fields(match_fields))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::provider::{Action, ExecMode};
+
+    fn read(content: &str, name: &str) -> Option<Entry> {
+        let path =
+            std::env::temp_dir().join(format!("huffi-{name}-{}.desktop", std::process::id()));
+        std::fs::write(&path, content).expect("write temp desktop file");
+        let result = read_desktop_entry(&path, DesktopConfig::default());
+        std::fs::remove_file(&path).ok();
+        result
+    }
+
+    #[test]
+    fn the_path_key_becomes_the_entry_cwd() {
+        let entry = read(
+            "[Desktop Entry]\nType=Application\nName=Files\nExec=thunar\nTerminal=true\nPath=/tmp\n",
+            "desktop-path",
+        )
+        .expect("entry");
+        match entry.entry.action {
+            Action::Exec {
+                mode,
+                cwd: Some(ref cwd),
+                ..
+            } => {
+                assert_eq!(mode, ExecMode::Terminal);
+                assert_eq!(cwd, Path::new("/tmp"));
+            }
+            other => panic!("expected a terminal exec running in /tmp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_entry_without_a_path_key_has_no_own_cwd() {
+        let entry = read(
+            "[Desktop Entry]\nType=Application\nName=Files\nExec=thunar\n",
+            "desktop-no-path",
+        )
+        .expect("entry");
+        match entry.entry.action {
+            Action::Exec { cwd: None, .. } => {}
+            other => panic!("expected an exec without cwd, got {other:?}"),
+        }
+    }
 }

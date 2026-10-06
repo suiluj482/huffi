@@ -184,6 +184,7 @@ entry("my-entry-id", "Display Name")
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.terminal_hold(args)` | `Vec<String>` | Shell command to run in a terminal that stays open after it exits |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
+| `.cwd(path)` | path | Directory the exec action runs in, if it differs from the configured `working_dir` |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
 | `.set_query_keeping_prefix(text)` | `String` | Query suggestion applied under the active prefix, which stays in front of it |
@@ -308,9 +309,22 @@ When the user selects an entry, its `Action` is performed:
   `terminal_hold` wrapper from `[engine.external]` (default
   `kitty --hold --`), which should be set alongside `terminal`.
 
-All three set `Action::Exec { args, mode }`; the builders pick the
+All three set `Action::Exec { args, mode, cwd }`; the builders pick the
 [`ExecMode`] for you (`Direct`, `Terminal`, `TerminalHold`), and the mode
 decides which configured wrapper the argv is appended to at perform time.
+
+The directory the command runs in is resolved at perform time, first
+existing candidate wins:
+
+1. **`.cwd(path)`** — the entry's own directory (a leading `~/` expands).
+   Chain it before or after the exec builder; it is merged when the entry
+   is finished. The desktop provider sets it from the freedesktop `Path=`
+   key. Calling it on an entry without an exec action has no effect.
+2. **`working_dir`** from `[engine.external]` — the user's global override.
+3. **`$HOME`** — the default, which keeps the resident daemon's spawns out
+   of `/` (systemd's service cwd) without any configuration.
+4. Otherwise huffi's own cwd is inherited, and an explicit candidate that
+   doesn't exist is reported on stderr before moving on.
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
