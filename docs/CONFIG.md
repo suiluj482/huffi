@@ -95,6 +95,21 @@ weight_desc         = 0.0
 # Default: 7 days.
 cache_max_age_secs  = 604800
 
+[engine.provider.builtin.runner]
+# Trigger prefix: `>cargo test` runs `cargo test` in the terminal.
+# prefixes = [">"]
+# Only call the provider when a query matches one of its prefixes.
+# prefix_only = true
+
+[engine.provider.builtin.runner.extra]
+# Shell history files to suggest from, in order (later files win when the
+# same command appears in several). Default: $HISTFILE, ~/.bash_history and
+# ~/.zsh_history, whichever exist.
+# history_files = ["/home/user/.zsh_history"]
+# Keep only the newest N distinct history commands; 0 = unlimited. Applied
+# once at startup, never per query. Default: 5000.
+max_history_lines  = 5000
+
 [engine.provider.builtin.unicode]
 # Trigger prefix: `:smile` copies 😄
 # prefixes = [":"]
@@ -117,8 +132,17 @@ weight_codepoint    = 0.6
 # alacritty/xterm use ["alacritty", "-e"], foot takes none. The final argv
 # is `terminal… <entry command>…`.
 terminal = ["kitty", "--"]
+# Same, for entries that should keep the terminal open after the command
+# exits (the runner provider's `>` commands). Set this whenever you change
+# `terminal`: kitty/konsole stay open with ["kitty", "--hold", "--"], and a
+# terminal without a hold flag can be pointed at a wrapper script.
+terminal_hold = ["kitty", "--hold", "--"]
 # Clipboard tool used by the calculator and meta providers.
 clipboard = "wl-copy"
+# Working directory for spawned actions when the entry has none of its own
+# (a desktop file's `Path=`, or a provider's `.cwd()`). Unset by default,
+# which means the user's home directory; a leading `~/` expands.
+# working_dir = "~/src"
 ```
 
 ## Nix (Home Manager)
@@ -141,6 +165,7 @@ and declarative settings are supported:
       engine.provider.builtin.desktop.extra.weight_comment = 0.9;
       engine.provider.builtin.nix.extra.weight_desc = 0.6;
       engine.external.terminal = [ "foot", "--" ];
+      engine.external.terminal_hold = [ "foot", "--hold", "--" ];
     };
     # …or point at a checked-in file instead:
     # configFile = ./huffi.toml;

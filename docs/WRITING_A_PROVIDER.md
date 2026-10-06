@@ -182,10 +182,14 @@ entry("my-entry-id", "Display Name")
 | `.variant(name)` | `String` | Pick a layout variant, e.g. `"list"`, resolving `providers/<id>/<variant>/entry.ui` |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
+| `.terminal_hold(args)` | `Vec<String>` | Shell command to run in a terminal that stays open after it exits |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
+| `.cwd(path)` | path | Directory the exec action runs in, if it differs from the configured `working_dir` |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
 | `.set_query_keeping_prefix(text)` | `String` | Query suggestion applied under the active prefix, which stays in front of it |
+| `.action_set_query(query)` | `String` | Selection action: Enter replaces the query with this text and the launcher stays open |
+| `.action_set_query_keeping_prefix(text)` | `String` | Same, but only the text under the active prefix is replaced |
 | `.score(s)` | `f32` | Static score (no fuzzy matching) |
 | `.match_fields(fields)` | `Vec<MatchField>` | Fuzzy-match these weighted text fields |
 | `.match_field(text)` | `String` | Shortcut for a single fuzzy-match field at weight 1.0 |
@@ -294,6 +298,11 @@ suggests its name (`snowman`).
 A suggestion keeps the prefix that is *active*, not the provider's first one,
 so a provider declaring several prefixes still lands on the one the user typed.
 
+Tab is one of two triggers for a suggestion; the other is selection — see
+[`.action_set_query`](#action-what-happens-on-selection) below. The two are
+separate values: `.set_query` is what Tab inserts, `.action_set_query` is
+what Enter inserts, and an entry may carry both.
+
 ### Action: what happens on selection
 
 When the user selects an entry, its `Action` is performed:
@@ -302,6 +311,36 @@ When the user selects an entry, its `Action` is performed:
   stderr discarded. The first element of `args` is the program to run.
 - **`.terminal_exec(args)`** — same, but the command is launched inside a
   terminal emulator (configurable default `kitty`) instead.
+- **`.terminal_hold(args)`** — like `.terminal_exec`, but the terminal stays
+  open after the command exits so its output remains readable. Uses the
+  `terminal_hold` wrapper from `[engine.external]` (default
+  `kitty --hold --`), which should be set alongside `terminal`.
+- **`.action_set_query(query)`** — nothing spawns: Enter replaces the query
+  with `query` (resolved against the active prefix, like Tab) and the
+  launcher **stays open**, so a selection can chain into the next one. The
+  selection itself is still recorded — launch history and
+  `Provider::handle` run as for any other action. The value is independent
+  of `.set_query`: Tab and Enter can insert different text.
+
+All three exec builders set `Action::Exec { args, mode, cwd }`; the builders pick the
+[`ExecMode`] for you (`Direct`, `Terminal`, `TerminalHold`), and the mode
+decides which configured wrapper the argv is appended to at perform time.
+`.action_set_query` sets `Action::SetQuery { suggestion }` instead — the UI
+pulls the suggestion out of the entry and applies it, which is what keeps
+the launcher open.
+
+The directory the command runs in is resolved at perform time, first
+existing candidate wins:
+
+1. **`.cwd(path)`** — the entry's own directory (a leading `~/` expands).
+   Chain it before or after the exec builder; it is merged when the entry
+   is finished. The desktop provider sets it from the freedesktop `Path=`
+   key. Calling it on an entry without an exec action has no effect.
+2. **`working_dir`** from `[engine.external]` — the user's global override.
+3. **`$HOME`** — the default, which keeps the resident daemon's spawns out
+   of `/` (systemd's service cwd) without any configuration.
+4. Otherwise huffi's own cwd is inherited, and an explicit candidate that
+   doesn't exist is reported on stderr before moving on.
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
@@ -517,6 +556,7 @@ is passed through `InitContext`. Built-ins are registered in
 [`CalculatorProvider`]: ../src/engine/provider/builtin/calculator.rs
 [`UnicodeProvider`]: ../src/engine/provider/builtin/unicode.rs
 [`entry()`]: ../src/engine/provider/util.rs
+[`ExecMode`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs
 [`THEMING.md`]: THEMING.md

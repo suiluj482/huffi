@@ -27,7 +27,7 @@ use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::PreprocessedQuery;
 pub use util::{
-    Action, EntryBuilder, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
+    Action, EntryBuilder, ExecMode, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
 };
 
 /// A source for an entry's icon. Providers describe *what* to show without
@@ -377,8 +377,8 @@ pub trait Provider: Send {
 pub use collection::ProviderCollection;
 
 pub use builtin::{
-    CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, TestProvider,
-    UnicodeProvider,
+    CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider, RunnerProvider,
+    TestProvider, UnicodeProvider,
 };
 pub use util::split_command;
 
