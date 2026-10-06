@@ -41,6 +41,7 @@ in
         engine.scoring.boost_weight = 4.0;
         engine.provider.desktop.weight_comment = 0.9;
         engine.external.terminal = [ "foot" "--" ];
+        engine.external.terminal_hold = [ "foot" "--hold" "--" ];
       };
       description = ''
         huffi configuration, rendered as TOML to `~/.config/huffi/config.toml`.

@@ -296,8 +296,8 @@ mod tests {
             .expect("meta-kill entry");
         assert_eq!(kill.entry.title, "Quit huffi");
         match &kill.entry.action {
-            crate::engine::provider::Action::Exec { args, terminal } => {
-                assert!(!terminal);
+            crate::engine::provider::Action::Exec { args, mode } => {
+                assert_eq!(*mode, crate::engine::provider::ExecMode::Direct);
                 assert_eq!(args[0], "kill");
                 assert_eq!(args[1], std::process::id().to_string());
             }
@@ -320,8 +320,8 @@ mod tests {
         assert_eq!(open.entry.title, "Open data folder");
         assert_eq!(open.entry.subtitle.as_deref(), Some("/tmp/data"));
         match &open.entry.action {
-            crate::engine::provider::Action::Exec { args, terminal } => {
-                assert!(!terminal);
+            crate::engine::provider::Action::Exec { args, mode } => {
+                assert_eq!(*mode, crate::engine::provider::ExecMode::Direct);
                 assert_eq!(args, &vec!["xdg-open".to_string(), "/tmp/data".to_string()]);
             }
             _ => panic!("expected Exec action"),

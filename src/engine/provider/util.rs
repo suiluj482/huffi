@@ -8,11 +8,36 @@ use crate::engine::scoring::{MatchField, Rank};
 
 use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult, QuerySuggestion};
 
+/// How an [`Action::Exec`] launches its args.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecMode {
+    /// Spawn the args directly, no wrapper.
+    Direct,
+    /// Append the args to the configured `terminal` wrapper; the terminal
+    /// closes once the command exits.
+    Terminal,
+    /// Append the args to the configured `terminal_hold` wrapper; the
+    /// terminal stays open after the command exits, so its output remains
+    /// readable.
+    TerminalHold,
+}
+
+impl ExecMode {
+    /// The wrapper argv this mode prepends, `None` for [`Direct`](Self::Direct).
+    fn wrapper(self, external: &ExternalConfig) -> Option<Vec<String>> {
+        match self {
+            ExecMode::Direct => None,
+            ExecMode::Terminal => Some(external.terminal.clone()),
+            ExecMode::TerminalHold => Some(external.terminal_hold.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Run `args` as a program. With `terminal`, the args are appended to
-    /// the configured terminal wrapper before spawning.
-    Exec { args: Vec<String>, terminal: bool },
+    /// Run `args` as a program, wrapped according to `mode` — directly, in
+    /// the configured terminal, or in a terminal that stays open.
+    Exec { args: Vec<String>, mode: ExecMode },
     /// Copy `value` to the clipboard on selection. The clipboard binary is
     /// resolved from config when the action is performed.
     Clipboard { value: String },
@@ -21,26 +46,29 @@ pub enum Action {
 }
 
 impl Action {
-    /// Perform the action, resolving external binaries (terminal wrapper,
-    /// clipboard tool) from `external`.
-    pub fn perform(&self, external: &ExternalConfig) {
+    /// The argv to spawn for this action, resolving external binaries
+    /// (terminal wrapper, clipboard tool) from `external`. `None` when
+    /// there is nothing to run.
+    fn argv(&self, external: &ExternalConfig) -> Option<Vec<String>> {
         let args: Vec<String> = match self {
-            Action::Exec {
-                args,
-                terminal: false,
-            } => args.clone(),
-            Action::Exec {
-                args,
-                terminal: true,
-            } => {
-                let mut cmd = external.terminal.clone();
+            Action::Exec { args, mode } => {
+                let mut cmd = mode.wrapper(external).unwrap_or_default();
                 cmd.extend(args.iter().cloned());
                 cmd
             }
             Action::Clipboard { value } => {
                 vec![external.clipboard.clone(), value.clone()]
             }
-            Action::NoOp => return,
+            Action::NoOp => return None,
+        };
+        (!args.is_empty()).then_some(args)
+    }
+
+    /// Perform the action, resolving external binaries (terminal wrapper,
+    /// clipboard tool) from `external`.
+    pub fn perform(&self, external: &ExternalConfig) {
+        let Some(args) = self.argv(external) else {
+            return;
         };
         let Some(program) = args.first() else {
             return;
@@ -192,7 +220,7 @@ impl EntryBuilder {
     pub fn exec(mut self, args: Vec<String>) -> Self {
         self.action = Some(Action::Exec {
             args,
-            terminal: false,
+            mode: ExecMode::Direct,
         });
         self
     }
@@ -200,7 +228,19 @@ impl EntryBuilder {
     pub fn terminal_exec(mut self, args: Vec<String>) -> Self {
         self.action = Some(Action::Exec {
             args,
-            terminal: true,
+            mode: ExecMode::Terminal,
+        });
+        self
+    }
+
+    /// Like [`terminal_exec`](Self::terminal_exec), but the terminal stays
+    /// open after the command exits, so its output remains readable. Uses
+    /// the `terminal_hold` wrapper from `[engine.external]` instead of
+    /// `terminal`.
+    pub fn terminal_hold(mut self, args: Vec<String>) -> Self {
+        self.action = Some(Action::Exec {
+            args,
+            mode: ExecMode::TerminalHold,
         });
         self
     }
@@ -494,5 +534,91 @@ mod tests {
     fn an_entry_without_a_suggestion_has_nothing_to_resolve() {
         let entry = entry("id", "title").score(1.0);
         assert!(entry.entry.set_query.is_none());
+    }
+
+    #[test]
+    fn action_argv_resolves_the_configured_wrappers() {
+        let external = ExternalConfig::default();
+        let exec = Action::Exec {
+            args: vec!["ls".into()],
+            mode: ExecMode::Direct,
+        };
+        assert_eq!(exec.argv(&external), Some(vec!["ls".to_string()]));
+
+        let terminal = Action::Exec {
+            args: vec!["ls".into()],
+            mode: ExecMode::Terminal,
+        };
+        assert_eq!(
+            terminal.argv(&external),
+            Some(vec![
+                "kitty".to_string(),
+                "--".to_string(),
+                "ls".to_string()
+            ])
+        );
+
+        let hold = Action::Exec {
+            args: vec!["sh".into(), "-c".into(), "ls".into()],
+            mode: ExecMode::TerminalHold,
+        };
+        assert_eq!(
+            hold.argv(&external),
+            Some(vec![
+                "kitty".to_string(),
+                "--hold".to_string(),
+                "--".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                "ls".to_string(),
+            ])
+        );
+
+        let clipboard = Action::Clipboard { value: "x".into() };
+        assert_eq!(
+            clipboard.argv(&external),
+            Some(vec!["wl-copy".to_string(), "x".to_string()])
+        );
+
+        assert_eq!(Action::NoOp.argv(&external), None);
+        assert_eq!(
+            Action::Exec {
+                args: vec![],
+                mode: ExecMode::Direct
+            }
+            .argv(&external),
+            None
+        );
+    }
+
+    #[test]
+    fn builders_pick_the_exec_mode() {
+        let ls = || vec!["ls".to_string()];
+        let direct = entry("id", "title").exec(ls()).score(1.0);
+        assert_eq!(
+            direct.entry.action,
+            Action::Exec {
+                args: ls(),
+                mode: ExecMode::Direct
+            }
+        );
+
+        let terminal = entry("id", "title").terminal_exec(ls()).score(1.0);
+        assert_eq!(
+            terminal.entry.action,
+            Action::Exec {
+                args: ls(),
+                mode: ExecMode::Terminal
+            }
+        );
+
+        let hold = entry("id", "title").terminal_hold(ls()).score(1.0);
+        assert_eq!(
+            hold.entry.action,
+            Action::Exec {
+                args: ls(),
+                mode: ExecMode::TerminalHold
+            }
+        );
     }
 }

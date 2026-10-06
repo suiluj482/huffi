@@ -182,6 +182,7 @@ entry("my-entry-id", "Display Name")
 | `.variant(name)` | `String` | Pick a layout variant, e.g. `"list"`, resolving `providers/<id>/<variant>/entry.ui` |
 | `.exec(args)` | `Vec<String>` | Shell command to run on selection (no terminal) |
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
+| `.terminal_hold(args)` | `Vec<String>` | Shell command to run in a terminal that stays open after it exits |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
@@ -302,6 +303,14 @@ When the user selects an entry, its `Action` is performed:
   stderr discarded. The first element of `args` is the program to run.
 - **`.terminal_exec(args)`** — same, but the command is launched inside a
   terminal emulator (configurable default `kitty`) instead.
+- **`.terminal_hold(args)`** — like `.terminal_exec`, but the terminal stays
+  open after the command exits so its output remains readable. Uses the
+  `terminal_hold` wrapper from `[engine.external]` (default
+  `kitty --hold --`), which should be set alongside `terminal`.
+
+All three set `Action::Exec { args, mode }`; the builders pick the
+[`ExecMode`] for you (`Direct`, `Terminal`, `TerminalHold`), and the mode
+decides which configured wrapper the argv is appended to at perform time.
 
 If no action is set, selection does nothing (`Action::NoOp`).
 
@@ -517,6 +526,7 @@ is passed through `InitContext`. Built-ins are registered in
 [`CalculatorProvider`]: ../src/engine/provider/builtin/calculator.rs
 [`UnicodeProvider`]: ../src/engine/provider/builtin/unicode.rs
 [`entry()`]: ../src/engine/provider/util.rs
+[`ExecMode`]: ../src/engine/provider/util.rs
 [`nucleo`]: https://github.com/helix-editor/nucleo
 [`rink-core`]: https://github.com/tiffany352/rink-rs
 [`THEMING.md`]: THEMING.md
