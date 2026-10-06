@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::engine::scoring::Rank;
 use crate::engine::scoring::history::{KnownHistory, QueryHistory};
-use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
 pub use util::{
@@ -119,13 +119,15 @@ impl QuerySuggestion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryMeta {
+/// One launchable result: everything a provider declares about an entry.
+///
+/// Query-independent by construction — the fields a keystroke varies (`rank`)
+/// and the history key both sit here too, because a provider builds them once
+/// in [`init`](Provider::init) and they are read on every keystroke.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
     /// Id unique within the provider; selection looks results up by it.
     pub id: String,
-    /// The provider that produced this entry, stamped by
-    /// [`ProviderCollection`] when the entry is queried.
-    pub provider_id: Option<String>,
     /// Primary label rendered in the entry list.
     pub title: String,
     /// Secondary label shown below the title.
@@ -159,10 +161,14 @@ pub struct EntryMeta {
     pub set_query: Option<QuerySuggestion>,
     /// What happens when the entry is selected.
     pub action: Action,
+    /// How the entry earns its score: a provider-declared value, or the
+    /// fields the matcher fuzzy-matches against.
+    pub rank: Rank,
+    /// Key this entry's usage history is recorded under. Entries without one
+    /// appear in results but neither contribute to nor are influenced by
+    /// history ranking.
+    pub history_key: Option<String>,
 }
-
-pub type Entry = Scoreable<EntryMeta>;
-pub type ScoredEntry = Scored<EntryMeta>;
 
 /// Static metadata describing a provider: its stable `id`, display name,
 /// the string prefixes that trigger it, whether it is active, and whether
@@ -490,19 +496,19 @@ mod tests {
 
     #[test]
     fn entry_title_is_correct() {
-        let entry = &sample_entries()[0].entry;
+        let entry = &sample_entries()[0];
         assert_eq!(entry.title, "Firefox");
     }
 
     #[test]
     fn entry_comment_is_correct() {
-        let entry = &sample_entries()[0].entry;
+        let entry = &sample_entries()[0];
         assert_eq!(entry.comment.as_deref(), Some("Browse the World Wide Web"));
     }
 
     #[test]
     fn entry_no_comment() {
-        let entry = &sample_entries()[2].entry;
+        let entry = &sample_entries()[2];
         assert!(entry.comment.is_none());
     }
 

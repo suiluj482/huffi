@@ -15,18 +15,23 @@ use std::path::Path;
 
 use crate::engine::config::{EngineConfig, ExternalConfig};
 use crate::engine::provider::{
-    EntryMeta, Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
+    Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
 };
 use crate::engine::scoring::history::{KeyedHistoryRecord, QueryHistory};
-use crate::engine::scoring::{Scored, Scorer};
+use crate::engine::scoring::{EntryAnnotation, QueryGroup, Scorer};
 
 /// The result of a query: the resolved [`PreprocessedQuery`], the
-/// precomputed [`QueryHistory`] for it, and the full ranked result set.
+/// precomputed [`QueryHistory`] for it, the entry batches the results were
+/// drawn from, and the full ranked result set.
 ///
 /// Like [`pre`](Self::pre), the history is built once before providers run
 /// and reused everywhere the query is revisited — by providers in their
 /// `QueryContext`, by the scorer's final blend, and by [`Engine::select`]
 /// when it notifies a provider of a selection.
+///
+/// [`scored`](Self::scored) holds [`EntryAnnotation`] positions rather than
+/// entries, so `groups` has to stay alive for as long as the reply does — it
+/// is owned here precisely so the reply can be read on its own.
 ///
 /// [`Engine::query`] returns a read-only reference into the engine's
 /// single-slot cache, so querying copies nothing; the UI clones only the
@@ -35,7 +40,20 @@ use crate::engine::scoring::{Scored, Scorer};
 pub struct QueryReply {
     pub pre: PreprocessedQuery,
     pub history: QueryHistory,
-    pub scored: Vec<Scored<EntryMeta>>,
+    pub groups: Vec<QueryGroup>,
+    pub scored: Vec<EntryAnnotation>,
+}
+
+impl QueryReply {
+    /// The entry a scored position points at.
+    pub fn entry(&self, scored: &EntryAnnotation) -> &provider::Entry {
+        scored.resolve(&self.groups)
+    }
+
+    /// The id of the provider that produced a scored entry.
+    pub fn provider_id(&self, scored: &EntryAnnotation) -> &str {
+        scored.provider_id(&self.groups)
+    }
 }
 
 /// Owns the providers and the scorer, exposing querying, selection, and
@@ -131,10 +149,11 @@ impl Engine {
                 self.providers
                     .grouped_entries(&pre, &history, known_history, self.generation)
             };
-            let scored = self.scorer.score(groups, &history);
+            let scored = self.scorer.score(&groups, &history);
             self.cache = Some(QueryReply {
                 pre,
                 history,
+                groups,
                 scored,
             });
         }
@@ -151,18 +170,29 @@ impl Engine {
     pub fn select(&mut self, query: &str, entry_id: &str) {
         let (pre, history, hit) = {
             let reply = self.query(query);
-            let hit = reply.scored.iter().find(|s| s.entry.id == entry_id);
-            (reply.pre.clone(), reply.history.clone(), hit.cloned())
+            let found = reply.scored.iter().find(|a| {
+                let entry = reply.entry(a);
+                entry.id == entry_id
+            });
+            let hit = found.map(|a| {
+                let entry = reply.entry(a);
+                (
+                    entry.action.clone(),
+                    Some(reply.provider_id(a).to_string()),
+                    entry.history_key.clone(),
+                )
+            });
+            (reply.pre.clone(), reply.history.clone(), hit)
         };
-        let Some(hit) = hit else {
+        let Some((action, provider_id, history_key)) = hit else {
             eprintln!("[engine] select: no entry '{entry_id}' for query '{query}'");
             return;
         };
         self.cache = None;
         if !self.dry_run {
-            hit.entry.action.perform(&self.external);
+            action.perform(&self.external);
         }
-        if let Some(provider_id) = &hit.entry.provider_id {
+        if let Some(provider_id) = &provider_id {
             let known_history = self.scorer.known_history();
             self.providers.handle(
                 provider_id,
@@ -173,7 +203,7 @@ impl Engine {
                 self.generation,
             );
         }
-        if let Some(key) = &hit.history_key {
+        if let Some(key) = &history_key {
             self.scorer.record_launch(query, key);
         }
     }
@@ -562,14 +592,14 @@ mod tests {
 
         assert_eq!(reply.pre.prefix.as_deref(), Some("=="));
         assert!(
-            reply.scored.iter().any(|s| s.entry.id == "pfx"),
+            reply.scored.iter().any(|a| reply.entry(a).id == "pfx"),
             "prefixed provider entry should fuzzy-match the stripped query"
         );
         assert!(
-            !reply.scored.iter().any(|s| s.entry.id == "other"),
+            !reply.scored.iter().any(|a| reply.entry(a).id == "other"),
             "unprefixed provider entry should not fuzzy-match the original query"
         );
-        assert_eq!(reply.scored[0].entry.provider_id.as_deref(), Some("pfx"));
+        assert_eq!(reply.provider_id(&reply.scored[0]), "pfx");
     }
 
     #[test]
@@ -589,7 +619,7 @@ mod tests {
         {
             let reply = e.query("::fire");
             assert_eq!(reply.pre.prefix.as_deref(), Some("::"));
-            assert_eq!(reply.scored[0].entry.id, "firefox");
+            assert_eq!(reply.entry(&reply.scored[0]).id, "firefox");
             assert!(
                 reply.scored[0].history_score.is_some_and(|h| h > 0.0),
                 "select should feed usage history into ranking"
@@ -618,8 +648,11 @@ mod tests {
             e.boost("fi", "files");
         }
 
-        let scored = &e.query("fi").scored;
-        assert_eq!(scored[0].history_key.as_deref(), Some("files"));
+        let reply = e.query("fi");
+        assert_eq!(
+            reply.entry(&reply.scored[0]).history_key.as_deref(),
+            Some("files")
+        );
     }
 
     #[test]
@@ -766,8 +799,9 @@ mod tests {
         let (provider, handled) = counting_provider("c", &calls);
         e.add_provider(provider).unwrap();
 
+        let reply = e.query("al");
         assert!(
-            e.query("al").scored.iter().any(|s| s.entry.id == "alpha"),
+            reply.scored.iter().any(|a| reply.entry(a).id == "alpha"),
             "precondition: entry is in the result set"
         );
 
@@ -828,24 +862,24 @@ mod tests {
         let reply = e.query("\\calc 2 + 2");
         assert_eq!(reply.pre.prefix.as_deref(), Some("\\calc "));
         assert!(
-            reply
-                .scored
-                .iter()
-                .all(|s| s.entry.provider_id.as_deref() == Some("calc")),
+            reply.scored.iter().all(|s| reply.provider_id(s) == "calc"),
             "a targeted query only returns the targeted provider's entries"
         );
 
         let reply = e.query("\\");
         assert_eq!(reply.pre.prefix.as_deref(), Some("\\"));
         assert!(
-            reply.scored.iter().any(|s| s.entry.id == "provider-calc"),
+            reply
+                .scored
+                .iter()
+                .any(|s| reply.entry(s).id == "provider-calc"),
             "the bare prefix lists providers"
         );
         assert!(
             reply
                 .scored
                 .iter()
-                .all(|s| s.entry.provider_id.as_deref() == Some("providers")),
+                .all(|s| reply.provider_id(s) == "providers"),
             "the listing prefix is exclusive"
         );
     }
@@ -905,7 +939,7 @@ mod tests {
             };
             let group_dur = t.elapsed();
             let t = Instant::now();
-            let scored = engine.scorer.score(groups, &history);
+            let scored = engine.scorer.score(&groups, &history);
             let score_dur = t.elapsed();
 
             assert_eq!(scored.len(), n);

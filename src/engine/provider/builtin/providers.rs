@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn lists_only_enabled_providers() {
         let entries = query(&mut provider());
-        let ids: Vec<_> = entries.iter().map(|e| e.entry.id.as_str()).collect();
+        let ids: Vec<_> = entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["provider-desktop", "provider-calculator"]);
     }
 
@@ -148,13 +148,13 @@ mod tests {
         let entries = query(&mut p);
         let calc = entries
             .iter()
-            .find(|e| e.entry.id == "provider-calculator")
+            .find(|e| e.id == "provider-calculator")
             .expect("calculator entry");
         assert_eq!(
-            calc.entry.set_query.as_ref().map(|s| s.query.as_str()),
+            calc.set_query.as_ref().map(|s| s.query.as_str()),
             Some("\\calculator ")
         );
-        match &calc.entry.action {
+        match &calc.action {
             Action::SetQuery { suggestion } => {
                 assert_eq!(suggestion.query, "\\calculator ");
                 assert!(!suggestion.keep_prefix);
@@ -169,13 +169,10 @@ mod tests {
         let entries = query(&mut p);
         let calc = entries
             .iter()
-            .find(|e| e.entry.id == "provider-calculator")
+            .find(|e| e.id == "provider-calculator")
             .unwrap();
-        assert_eq!(calc.entry.subtitle.as_deref(), Some("="));
-        let desktop = entries
-            .iter()
-            .find(|e| e.entry.id == "provider-desktop")
-            .unwrap();
-        assert_eq!(desktop.entry.subtitle.as_deref(), Some("always active"));
+        assert_eq!(calc.subtitle.as_deref(), Some("="));
+        let desktop = entries.iter().find(|e| e.id == "provider-desktop").unwrap();
+        assert_eq!(desktop.subtitle.as_deref(), Some("always active"));
     }
 }

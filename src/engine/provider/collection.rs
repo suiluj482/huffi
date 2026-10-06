@@ -9,8 +9,8 @@ use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
     ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider,
-    EntryMeta, FilesProvider, Generation, HandleContext, InitContext, NixRunProvider, Provider,
-    ProviderMeta, ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
+    FilesProvider, Generation, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta,
+    ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -312,7 +312,7 @@ impl ProviderCollection {
         history: &QueryHistory,
         known_history: &KnownHistory,
         generation: Generation,
-    ) -> Vec<QueryGroup<EntryMeta>> {
+    ) -> Vec<QueryGroup> {
         let target_prefix = self.target_prefix.clone();
         self.providers
             .iter_mut()
@@ -328,13 +328,10 @@ impl ProviderCollection {
                     known_history,
                     generation,
                 );
-                let mut entries = p.query(ctx);
-                for e in entries.iter_mut() {
-                    e.entry.provider_id = Some(meta.id.clone());
-                }
                 Some(QueryGroup {
                     query: ctx.query.to_string(),
-                    entries,
+                    provider_id: meta.id.clone(),
+                    entries: p.query(ctx),
                 })
             })
             .collect()
@@ -798,32 +795,29 @@ mod tests {
     }
 
     #[test]
-    fn entries_are_stamped_with_provider_id() {
+    fn groups_carry_the_provider_id() {
         let mut c = collection();
         c.add_provider(Box::new(TestProvider::new(
-            "desktop",
-            vec![match_fields_entry("desktop", "Firefox")],
+            "stamped",
+            vec![match_fields_entry("stamped", "Firefox")],
         )))
         .unwrap();
         let pre = c.preprocess_query("firefox");
-        let entries: Vec<_> = c
-            .grouped_entries(
-                &pre,
-                &QueryHistory::EMPTY,
-                &KnownHistory::EMPTY,
-                Generation::default(),
-            )
-            .into_iter()
-            .flat_map(|g| g.entries)
-            .map(|s| s.entry)
-            .collect();
-        for e in &entries {
-            assert!(e.provider_id.is_some());
-        }
+        let groups = c.grouped_entries(
+            &pre,
+            &QueryHistory::EMPTY,
+            &KnownHistory::EMPTY,
+            Generation::default(),
+        );
+        let stamped = groups
+            .iter()
+            .find(|g| g.provider_id == "stamped")
+            .expect("a group for the added provider");
+        assert_eq!(stamped.entries.len(), 1);
+        assert_eq!(stamped.entries[0].id, "stamped");
         assert!(
-            entries
-                .iter()
-                .any(|e| e.provider_id.as_deref() == Some("desktop"))
+            groups.iter().all(|g| !g.provider_id.is_empty()),
+            "every group names the provider it came from"
         );
     }
 

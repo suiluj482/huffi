@@ -1,7 +1,11 @@
 use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 
 use super::config::ScoringConfig;
-use super::{BaseScored, MatchField, QueryGroup, Rank, Scoreable};
+use super::{EntryAnnotation, MatchField, QueryGroup, Rank};
+
+/// A fuzzy match before the batch maximum is known: just where it sits and
+/// what the matcher returned.
+type RawScore = (u32, u32, f64);
 
 pub struct BaseScorer {
     fuzzy_matcher: nucleo::Matcher,
@@ -31,17 +35,22 @@ impl BaseScorer {
     /// [`Rank::MatchFields`] entries are fuzzy-scored and normalized against
     /// the best fuzzy match in the whole batch. Entries from a group with an
     /// empty query keep the empty-query baseline and are exempt as well.
-    pub fn base_scoring<T>(&mut self, groups: Vec<QueryGroup<T>>) -> Vec<BaseScored<T>> {
-        let mut base_scored = Vec::new();
-        let mut raw = Vec::new();
+    ///
+    /// Entries are read in place and referenced by position, so nothing here
+    /// moves or copies an [`Entry`](crate::engine::provider::Entry).
+    pub fn base_scoring(&mut self, groups: &[QueryGroup]) -> Vec<EntryAnnotation> {
+        let mut base_scored: Vec<EntryAnnotation> = Vec::new();
+        let mut raw: Vec<RawScore> = Vec::new();
         let mut haystack_buf: Vec<char> = Vec::new();
-        for g in groups {
+        for (group, g) in groups.iter().enumerate() {
+            let group = group as u32;
             if g.query.is_empty() {
-                base_scored.extend(g.entries.into_iter().map(|s| BaseScored {
-                    entry: s.entry,
-                    rank: s.rank,
-                    history_key: s.history_key,
+                base_scored.extend((0..g.entries.len() as u32).map(|index| EntryAnnotation {
+                    group,
+                    index,
                     base_score: self.empty_query_score,
+                    history_score: None,
+                    combined: self.empty_query_score,
                 }));
                 continue;
             }
@@ -59,30 +68,25 @@ impl BaseScorer {
                 false,
             );
 
-            for s in g.entries {
-                match s.rank {
-                    Rank::Score(score) => base_scored.push(BaseScored {
-                        entry: s.entry,
-                        rank: Rank::Score(score),
-                        history_key: s.history_key,
+            for (index, entry) in g.entries.iter().enumerate() {
+                let index = index as u32;
+                match entry.rank {
+                    Rank::Score(score) => base_scored.push(EntryAnnotation {
+                        group,
+                        index,
                         base_score: score as f64,
+                        history_score: None,
+                        combined: score as f64,
                     }),
-                    Rank::MatchFields(fields) => {
+                    Rank::MatchFields(ref fields) => {
                         if let Some(r) = score_fields(
                             &mut self.fuzzy_matcher,
                             &needle,
-                            &fields,
+                            fields,
                             &mut haystack_buf,
                         ) && r > 0.0
                         {
-                            raw.push((
-                                Scoreable {
-                                    entry: s.entry,
-                                    rank: Rank::MatchFields(fields),
-                                    history_key: s.history_key,
-                                },
-                                r,
-                            ));
+                            raw.push((group, index, r));
                         }
                     }
                 }
@@ -90,12 +94,16 @@ impl BaseScorer {
         }
 
         normalize_in_place(&mut raw);
-        base_scored.extend(raw.into_iter().map(|(s, r)| BaseScored {
-            entry: s.entry,
-            rank: s.rank,
-            history_key: s.history_key,
-            base_score: r,
-        }));
+        base_scored.extend(
+            raw.into_iter()
+                .map(|(group, index, base_score)| EntryAnnotation {
+                    group,
+                    index,
+                    base_score,
+                    history_score: None,
+                    combined: base_score,
+                }),
+        );
         base_scored
     }
 }
@@ -105,9 +113,9 @@ impl BaseScorer {
 /// Only [`Rank::MatchFields`] entries reach this step; their base score is
 /// the raw score divided by the maximum across the whole batch, so results
 /// from different providers remain comparable.
-fn normalize_in_place<T>(raw: &mut [(Scoreable<T>, f64)]) {
-    let max = raw.iter().map(|(_, r)| *r).fold(0.0f64, f64::max);
-    for (_, r) in raw.iter_mut() {
+fn normalize_in_place(raw: &mut [RawScore]) {
+    let max = raw.iter().map(|(_, _, r)| *r).fold(0.0f64, f64::max);
+    for (_, _, r) in raw.iter_mut() {
         *r = if max > 0.0 { *r / max } else { 0.0 };
     }
 }
@@ -218,9 +226,7 @@ mod tests {
         let needle = atom("fi");
         let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[("Firefox", 1.0), ("Browse the Web", 0.5)]);
-        assert!(
-            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_some()
-        );
+        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_some());
     }
 
     #[test]
@@ -255,9 +261,7 @@ mod tests {
         let needle = atom("fi");
         let mut haystack_buf: Vec<char> = Vec::new();
         let fields = fields(&[]);
-        assert!(
-            score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_none()
-        );
+        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields, &mut haystack_buf).is_none());
     }
 
     #[test]
@@ -286,34 +290,32 @@ mod tests {
         );
     }
 
-    fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {
-        Scoreable {
-            entry,
-            rank,
-            history_key: None,
+    fn ranked(rank: Rank) -> crate::engine::provider::Entry {
+        match rank {
+            Rank::Score(score) => crate::engine::provider::entry("e", "t").score(score),
+            Rank::MatchFields(f) => crate::engine::provider::entry("e", "t").match_fields(f),
+        }
+    }
+
+    fn group(query: &str, entries: Vec<crate::engine::provider::Entry>) -> QueryGroup {
+        QueryGroup {
+            query: query.to_string(),
+            provider_id: "p".to_string(),
+            entries,
         }
     }
 
     #[test]
     fn normalize_uses_global_max_for_match_fields() {
-        let mf = |v: f32| {
-            scoreable(
-                (),
-                Rank::MatchFields(vec![MatchField {
-                    text: "x".into(),
-                    weight: v,
-                }]),
-            )
-        };
-        let mut raw = vec![(mf(1.0), 300.0), (mf(2.0), 100.0)];
+        let mut raw: Vec<RawScore> = vec![(0, 0, 300.0), (1, 0, 100.0)];
         normalize_in_place(&mut raw);
-        assert_eq!(raw[0].1, 1.0);
-        assert!((raw[1].1 - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(raw[0].2, 1.0);
+        assert!((raw[1].2 - 1.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn normalize_empty_returns_empty() {
-        let mut raw: Vec<(Scoreable<()>, f64)> = vec![];
+        let mut raw: Vec<RawScore> = vec![];
         normalize_in_place(&mut raw);
         assert!(raw.is_empty());
     }
@@ -321,11 +323,8 @@ mod tests {
     #[test]
     fn base_scoring_empty_query_group_keeps_baseline() {
         let mut bs = BaseScorer::default();
-        let groups = vec![QueryGroup {
-            query: String::new(),
-            entries: vec![scoreable((), Rank::Score(1.0))],
-        }];
-        let scored = bs.base_scoring(groups);
+        let groups = vec![group("", vec![ranked(Rank::Score(1.0))])];
+        let scored = bs.base_scoring(&groups);
         assert_eq!(
             scored[0].base_score,
             ScoringConfig::default().empty_query_score
@@ -335,21 +334,26 @@ mod tests {
     #[test]
     fn base_scoring_score_entries_bypass_normalization() {
         let mut bs = BaseScorer::default();
-        let groups = vec![QueryGroup {
-            query: "fi".into(),
-            entries: vec![
-                scoreable((), Rank::Score(0.5)),
-                scoreable((), Rank::MatchFields(fields(&[("Firefox", 1.0)]))),
+        let groups = vec![group(
+            "fi",
+            vec![
+                ranked(Rank::Score(0.5)),
+                ranked(Rank::MatchFields(fields(&[("Firefox", 1.0)]))),
             ],
-        }];
-        let scored = bs.base_scoring(groups);
+        )];
+        let scored = bs.base_scoring(&groups);
+        let rank_of = |a: &EntryAnnotation| {
+            groups[a.group as usize].entries[a.index as usize]
+                .rank
+                .clone()
+        };
         let score = scored
             .iter()
-            .find(|s| matches!(s.rank, Rank::Score(_)))
+            .find(|a| matches!(rank_of(a), Rank::Score(_)))
             .unwrap();
         let fuzzy = scored
             .iter()
-            .find(|s| matches!(s.rank, Rank::MatchFields(_)))
+            .find(|a| matches!(rank_of(a), Rank::MatchFields(_)))
             .unwrap();
         assert_eq!(
             score.base_score, 0.5,
@@ -362,22 +366,16 @@ mod tests {
     fn base_scoring_per_group_query() {
         let mut bs = BaseScorer::default();
         let groups = vec![
-            QueryGroup {
-                query: "fi".into(),
-                entries: vec![scoreable(
-                    (),
-                    Rank::MatchFields(fields(&[("Firefox", 1.0)])),
-                )],
-            },
-            QueryGroup {
-                query: "==fi".into(),
-                entries: vec![scoreable(
-                    (),
-                    Rank::MatchFields(fields(&[("Firefox", 1.0)])),
-                )],
-            },
+            group(
+                "fi",
+                vec![ranked(Rank::MatchFields(fields(&[("Firefox", 1.0)])))],
+            ),
+            group(
+                "==fi",
+                vec![ranked(Rank::MatchFields(fields(&[("Firefox", 1.0)])))],
+            ),
         ];
-        let scored = bs.base_scoring(groups);
+        let scored = bs.base_scoring(&groups);
         assert_eq!(
             scored.len(),
             1,

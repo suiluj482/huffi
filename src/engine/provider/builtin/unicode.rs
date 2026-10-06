@@ -273,8 +273,8 @@ impl Characters {
             rows.iter()
                 .map(|row| {
                     let row = &self.rows[*row as usize];
-                    let (id, display) = (&row.entry.id, &row.entry.title);
-                    let name = row.entry.subtitle.as_deref().unwrap_or_default();
+                    let (id, display) = (&row.id, &row.title);
+                    let name = row.subtitle.as_deref().unwrap_or_default();
                     entry(id.clone(), display.clone())
                         .subtitle(name)
                         .clipboard(number.clone())
@@ -396,7 +396,7 @@ mod tests {
     }
 
     fn titles(rows: &[Entry]) -> Vec<&str> {
-        rows.iter().map(|row| row.entry.title.as_str()).collect()
+        rows.iter().map(|row| row.title.as_str()).collect()
     }
 
     fn field_texts(row: &Entry) -> Vec<&str> {
@@ -410,7 +410,7 @@ mod tests {
     /// engine puts the active one back when the suggestion is applied, which is
     /// what makes a `prefixes` override work.
     fn suggestion(row: &Entry) -> &str {
-        let suggestion = row.entry.set_query.as_ref().expect("a suggestion");
+        let suggestion = row.set_query.as_ref().expect("a suggestion");
         assert!(
             suggestion.keep_prefix,
             "{:?} must not carry its own prefix",
@@ -431,9 +431,9 @@ mod tests {
     fn an_empty_query_offers_a_placeholder() {
         let rows = query(&mut provider(), "");
         assert_eq!(titles(&rows), vec!["Search unicode characters"]);
-        assert_eq!(rows[0].entry.id, PLACEHOLDER_ID);
+        assert_eq!(rows[0].id, PLACEHOLDER_ID);
         assert_eq!(
-            rows[0].entry.subtitle.as_deref(),
+            rows[0].subtitle.as_deref(),
             Some("a name, a shortcode, or a code point")
         );
     }
@@ -530,14 +530,11 @@ mod tests {
     #[test]
     fn selecting_a_code_point_row_copies_the_number() {
         let rows = query(&mut provider(), "2603");
-        let Action::Clipboard { value } = &rows[0].entry.action else {
-            panic!(
-                "expected a clipboard action, got {:?}",
-                rows[0].entry.action
-            );
+        let Action::Clipboard { value } = &rows[0].action else {
+            panic!("expected a clipboard action, got {:?}", rows[0].action);
         };
         assert_eq!(value, "2603");
-        assert_eq!(rows[0].entry.title, "☃️", "the character is still shown");
+        assert_eq!(rows[0].title, "☃️", "the character is still shown");
         assert_eq!(suggestion(&rows[0]), "snowman");
     }
 
@@ -546,8 +543,8 @@ mod tests {
     #[test]
     fn selecting_a_name_row_copies_the_character_and_suggests_the_number() {
         let row = row_for(characters(), '→');
-        let Action::Clipboard { value } = &row.entry.action else {
-            panic!("expected a clipboard action, got {:?}", row.entry.action);
+        let Action::Clipboard { value } = &row.action else {
+            panic!("expected a clipboard action, got {:?}", row.action);
         };
         assert_eq!(value, "→");
         assert_eq!(suggestion(row), "u+2192");
@@ -574,10 +571,10 @@ mod tests {
         // The snowman's id spells out the whole text it pastes, variation
         // selector and all, so history keeps one key per pasted character.
         let row = row_for(characters(), '☃');
-        assert_eq!(row.entry.id, "unicode-2603-fe0f");
+        assert_eq!(row.id, "unicode-2603-fe0f");
         assert_eq!(row.history_key.as_deref(), Some("unicode-2603-fe0f"));
         let row = row_for(characters(), '→');
-        assert_eq!(row.entry.id, "unicode-2192");
+        assert_eq!(row.id, "unicode-2192");
         assert_eq!(row.history_key.as_deref(), Some("unicode-2192"));
     }
 
@@ -586,7 +583,7 @@ mod tests {
     #[test]
     fn sequences_sharing_a_code_point_have_different_ids() {
         let rows = query(&mut provider(), "1f1e9");
-        let ids: HashSet<&str> = rows.iter().map(|row| row.entry.id.as_str()).collect();
+        let ids: HashSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(ids.len(), rows.len(), "no two flags share an id");
         for id in ["unicode-1f1e9-1f1ea", "unicode-1f1e9-1f1ff"] {
             assert!(ids.contains(id), "{id} in {ids:?}");
@@ -603,7 +600,7 @@ mod tests {
         let rows = characters()
             .rows
             .iter()
-            .filter(|row| row.entry.title == "☃")
+            .filter(|row| row.title == "☃")
             .count();
         assert_eq!(rows, 0, "the bare character is not a row of its own");
     }
@@ -611,10 +608,8 @@ mod tests {
     #[test]
     fn a_sequence_emoji_is_pasted_whole() {
         let rows = query(&mut provider(), "flag_de");
-        let flag = rows
-            .iter()
-            .find(|row| row.entry.id == "unicode-1f1e9-1f1ea");
-        let Action::Clipboard { value } = &flag.expect("the German flag").entry.action else {
+        let flag = rows.iter().find(|row| row.id == "unicode-1f1e9-1f1ea");
+        let Action::Clipboard { value } = &flag.expect("the German flag").action else {
             panic!("expected a clipboard action");
         };
         assert_eq!(value, "🇩🇪");
@@ -651,11 +646,10 @@ mod tests {
         assert!(
             !rows
                 .iter()
-                .any(|row| row.entry.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00"))
+                .any(|row| row.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00"))
         );
         assert!(!rows.iter().any(|row| {
-            row.entry
-                .subtitle
+            row.subtitle
                 .as_deref()
                 .unwrap_or_default()
                 .starts_with("HANGUL")
@@ -676,7 +670,7 @@ mod tests {
     fn no_character_is_indexed_twice() {
         let mut seen = HashSet::new();
         for row in &characters().rows {
-            assert!(seen.insert(row.entry.id.clone()), "twice: {}", row.entry.id);
+            assert!(seen.insert(row.id.clone()), "twice: {}", row.id);
         }
     }
 

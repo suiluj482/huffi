@@ -397,7 +397,7 @@ mod tests {
             description: Some("A program that produces a familiar, friendly greeting".into()),
         };
         let e = build_entry(&package, NixConfig::default());
-        match &e.entry.action {
+        match &e.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(*mode, crate::engine::provider::ExecMode::Terminal);
                 assert_eq!(
@@ -412,9 +412,9 @@ mod tests {
             _ => panic!("expected Exec action"),
         }
         assert_eq!(e.history_key.as_deref(), Some("nix-hello"));
-        assert_eq!(e.entry.title, "hello");
+        assert_eq!(e.title, "hello");
         assert_eq!(
-            e.entry.subtitle.as_deref(),
+            e.subtitle.as_deref(),
             Some("A program that produces a familiar, friendly greeting")
         );
     }
@@ -550,7 +550,7 @@ mod tests {
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.id, "nix-hello");
+        assert_eq!(entries[0].id, "nix-hello");
     }
 
     #[test]
@@ -593,10 +593,11 @@ mod tests {
             let mut scorer = BaseScorer::default();
             let groups = vec![QueryGroup {
                 query: needle.to_string(),
+                provider_id: "nix".to_string(),
                 entries: cloned,
             }];
             let t = Instant::now();
-            let scored = scorer.base_scoring(groups);
+            let scored = scorer.base_scoring(&groups);
             let score_dur = t.elapsed();
 
             eprintln!(

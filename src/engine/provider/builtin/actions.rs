@@ -445,15 +445,15 @@ mod tests {
         assert_eq!(entries.len(), 2);
 
         let first = &entries[0];
-        assert_eq!(first.entry.id, "open-project-huffi");
-        assert_eq!(first.entry.title, "Open project huffi");
-        assert_eq!(first.entry.subtitle.as_deref(), Some("Projects"));
-        assert_eq!(first.entry.comment.as_deref(), Some("The launcher itself"));
+        assert_eq!(first.id, "open-project-huffi");
+        assert_eq!(first.title, "Open project huffi");
+        assert_eq!(first.subtitle.as_deref(), Some("Projects"));
+        assert_eq!(first.comment.as_deref(), Some("The launcher itself"));
         assert_eq!(
             first.history_key.as_deref(),
             Some("actions-open-project-huffi")
         );
-        match &first.entry.action {
+        match &first.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(
                     args,
@@ -480,12 +480,9 @@ mod tests {
         assert_eq!(fields[2].weight, 0.5);
 
         let second = &entries[1];
-        assert_eq!(
-            second.entry.id, "date",
-            "an explicit id wins over the title"
-        );
+        assert_eq!(second.id, "date", "an explicit id wins over the title");
         assert_eq!(second.history_key.as_deref(), Some("actions-date"));
-        match &second.entry.action {
+        match &second.action {
             crate::engine::provider::Action::Clipboard { value } => {
                 assert_eq!(value, "2026-10-06")
             }
@@ -509,7 +506,7 @@ mod tests {
             known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
-        match &entries[0].entry.action {
+        match &entries[0].action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(args, &["htop".to_string()]);
                 assert_eq!(*mode, ExecMode::Terminal);
@@ -545,7 +542,7 @@ mod tests {
             known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
-        match &entries[0].entry.action {
+        match &entries[0].action {
             crate::engine::provider::Action::Exec { mode, cwd, .. } => {
                 assert_eq!(*mode, ExecMode::Direct);
                 assert_eq!(
@@ -555,7 +552,7 @@ mod tests {
             }
             other => panic!("expected Exec, got {other:?}"),
         }
-        match &entries[1].entry.action {
+        match &entries[1].action {
             crate::engine::provider::Action::Exec { mode, cwd, .. } => {
                 assert_eq!(*mode, ExecMode::Terminal);
                 assert_eq!(cwd.as_deref(), Some(std::path::Path::new("/tmp")));
@@ -656,10 +653,10 @@ mod tests {
             generation: Generation::default(),
         });
         let row = &entries[0];
-        assert_eq!(row.entry.details["level"], "80%");
-        assert_eq!(row.entry.details["sink"], "speakers");
-        assert_eq!(row.entry.variant.as_deref(), Some("info"));
-        let suggestion = row.entry.set_query.as_ref().expect("a suggestion");
+        assert_eq!(row.details["level"], "80%");
+        assert_eq!(row.details["sink"], "speakers");
+        assert_eq!(row.variant.as_deref(), Some("info"));
+        let suggestion = row.set_query.as_ref().expect("a suggestion");
         assert!(suggestion.keep_prefix);
         assert_eq!(suggestion.query, "mute");
     }
@@ -735,7 +732,7 @@ mod tests {
             entries[0].history_key.is_none(),
             "an opted-out row must be invisible to the history model"
         );
-        assert_eq!(entries[0].entry.id, "throwaway");
+        assert_eq!(entries[0].id, "throwaway");
     }
 
     #[test]
@@ -810,7 +807,7 @@ mod tests {
             known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
-        assert_eq!(entries[0].entry.id, "snow");
+        assert_eq!(entries[0].id, "snow");
         assert_eq!(entries[0].history_key.as_deref(), Some("actions-snow"));
     }
 

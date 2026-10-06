@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use huffi::engine::Engine;
-use huffi::engine::provider::{Entry, EntryMeta, MetaProvider, TestProvider, entry};
-use huffi::engine::scoring::{MatchField, Scored};
+use huffi::engine::provider::{Entry, MetaProvider, TestProvider, entry};
+use huffi::engine::scoring::MatchField;
 
 static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -12,6 +12,25 @@ const CONTROL_SOCKET: &str = "/tmp/huffi-int.sock";
 struct TestEngine {
     engine: Engine,
     data_dir: PathBuf,
+}
+
+/// One ranked result: everything the entry itself carries, plus the scores the
+/// engine computed and the provider that produced it.
+///
+/// `Deref` lets assertions read entry fields (`hit.title`, `hit.id`) directly
+/// while the score and provider live alongside them.
+#[derive(Debug)]
+struct Hit {
+    entry: Entry,
+    combined: f64,
+    provider_id: String,
+}
+
+impl std::ops::Deref for Hit {
+    type Target = Entry;
+    fn deref(&self) -> &Entry {
+        &self.entry
+    }
 }
 
 impl TestEngine {
@@ -36,10 +55,22 @@ impl TestEngine {
         }
     }
 
-    fn query(&mut self, query: &str) -> (Option<String>, Vec<Scored<EntryMeta>>, usize) {
+    /// Run a query and resolve the ranked annotations into rows, so assertions
+    /// can read entry fields and scores without touching the index-based
+    /// representation.
+    fn query(&mut self, query: &str) -> (Option<String>, Vec<Hit>, usize) {
         let reply = self.engine.query(query);
         let total = reply.scored.len();
-        (reply.pre.prefix.clone(), reply.scored.to_vec(), total)
+        let hits = reply
+            .scored
+            .iter()
+            .map(|a| Hit {
+                entry: reply.entry(a).clone(),
+                combined: a.combined,
+                provider_id: reply.provider_id(a).to_string(),
+            })
+            .collect();
+        (reply.pre.prefix.clone(), hits, total)
     }
 }
 
@@ -105,14 +136,14 @@ fn select_then_query_changes_ranking() {
 
     if let Some(top) = first_results.first() {
         for _ in 0..5 {
-            engine.engine.select("~~calc", &top.entry.id);
+            engine.engine.select("~~calc", &top.id);
         }
     }
 
     let (_, second_results, _) = engine.query("~~calc");
     assert!(!second_results.is_empty());
     if let Some(top_before) = first_results.first() {
-        assert_eq!(second_results[0].entry.id, top_before.entry.id);
+        assert_eq!(second_results[0].id, top_before.id);
     }
 }
 
@@ -143,7 +174,7 @@ fn exclusive_prefix_hands_the_query_to_its_providers_only() {
         ]
     };
 
-    let run = |exclusive: bool| -> Vec<Scored<EntryMeta>> {
+    let run = |exclusive: bool| -> Vec<Hit> {
         let id = DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = PathBuf::from(format!("/tmp/huffi-int-excl-{}-{id}", std::process::id()));
         let mut config = EngineConfig::default();
@@ -155,16 +186,23 @@ fn exclusive_prefix_hands_the_query_to_its_providers_only() {
         engine
             .add_provider(Box::new(TestProvider::new("shared", shared_row())))
             .expect("shared provider");
-        let scored = engine.query("= 2 + 2").scored.to_vec();
+        let reply = engine.query("= 2 + 2");
+        let hits = reply
+            .scored
+            .iter()
+            .map(|a| Hit {
+                entry: reply.entry(a).clone(),
+                combined: a.combined,
+                provider_id: reply.provider_id(a).to_string(),
+            })
+            .collect();
         let _ = std::fs::remove_dir_all(&dir);
-        scored
+        hits
     };
 
     let shared = run(false);
     assert!(
-        shared
-            .iter()
-            .any(|s| s.entry.provider_id.as_deref() == Some("shared")),
+        shared.iter().any(|s| s.provider_id == "shared"),
         "without exclusivity the unprefixed provider shares the query"
     );
 
@@ -174,9 +212,7 @@ fn exclusive_prefix_hands_the_query_to_its_providers_only() {
         "the prefix's own provider still answers"
     );
     assert!(
-        exclusive
-            .iter()
-            .all(|s| s.entry.provider_id.as_deref() == Some("calculator")),
+        exclusive.iter().all(|s| s.provider_id == "calculator"),
         "only providers declaring the exclusive prefix may answer: {exclusive:?}"
     );
 }
@@ -188,9 +224,9 @@ fn meta_provider_answers_at_prefix() {
     assert_eq!(prefix.as_deref(), Some("@"));
     let socket = results
         .iter()
-        .find(|r| r.entry.id == "meta-socket")
+        .find(|r| r.id == "meta-socket")
         .expect("meta-socket hit");
-    assert_eq!(socket.entry.subtitle.as_deref(), Some(CONTROL_SOCKET));
+    assert_eq!(socket.subtitle.as_deref(), Some(CONTROL_SOCKET));
 }
 
 #[test]
@@ -227,16 +263,13 @@ fn boost_moves_app_to_top() {
     let target = before[1]
         .history_key
         .clone()
-        .unwrap_or(before[1].entry.id.clone());
+        .unwrap_or(before[1].id.clone());
     for _ in 0..10 {
         engine.engine.boost("~~br", &target);
     }
 
     let (_, after, _) = engine.query("~~br");
-    let top_key = after[0]
-        .history_key
-        .clone()
-        .unwrap_or(after[0].entry.id.clone());
+    let top_key = after[0].history_key.clone().unwrap_or(after[0].id.clone());
     assert_eq!(top_key, target);
 }
 
@@ -251,8 +284,8 @@ fn unicode_prefix_is_gated_on_the_colon() {
     // The provider hands over every row and the engine ranks them: the row
     // whose CLDR name is exactly what was typed comes first.
     let top = results.first().expect("a row for ':snowman'");
-    assert_eq!(top.entry.title, "☃️");
-    assert_eq!(top.entry.subtitle.as_deref(), Some("snowman"));
+    assert_eq!(top.title, "☃️");
+    assert_eq!(top.subtitle.as_deref(), Some("snowman"));
     assert!(top.combined > 0.0, "a named row has to survive scoring");
 
     // Nothing after the prefix is a placeholder, not an empty list. Other
@@ -261,15 +294,15 @@ fn unicode_prefix_is_gated_on_the_colon() {
     let (_prefix, results, _total) = engine.query(":");
     let unicode: Vec<_> = results
         .iter()
-        .filter(|r| r.entry.provider_id.as_deref() == Some("unicode"))
+        .filter(|r| r.provider_id == "unicode")
         .collect();
     assert_eq!(
         unicode.len(),
         1,
         "expected just the placeholder: {unicode:?}"
     );
-    assert_eq!(unicode[0].entry.id, "unicode-placeholder");
-    assert_eq!(unicode[0].entry.title, "Search unicode characters");
+    assert_eq!(unicode[0].id, "unicode-placeholder");
+    assert_eq!(unicode[0].title, "Search unicode characters");
 
     // Without the prefix the provider stays out of it entirely.
     let (prefix, _results, _total) = engine.query("snowman");
@@ -284,7 +317,7 @@ fn unicode_code_point_query_reaches_the_results() {
     let (prefix, results, _total) = engine.query(":u+1f600");
     assert_eq!(prefix.as_deref(), Some(":"));
     let top = results.first().expect("a row for ':u+1f600'");
-    assert_eq!(top.entry.title, "😀");
+    assert_eq!(top.title, "😀");
     assert!(top.combined > 0.0);
 }
 
@@ -311,8 +344,8 @@ fn unicode_suggestions_follow_a_prefix_override() {
     // that ends up in front of it.
     let reply = engine.query("~snowman");
     assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
-    let top = reply.scored.first().expect("a row for '~snowman'");
-    let suggestion = top.entry.set_query.as_ref().expect("a suggestion");
+    let top = reply.entry(reply.scored.first().expect("a row for '~snowman'"));
+    let suggestion = top.set_query.as_ref().expect("a suggestion");
     assert!(suggestion.keep_prefix, "the prefix must not be baked in");
     assert_eq!(suggestion.query, "u+2603", "the text alone, no prefix");
     assert_eq!(suggestion.resolve(reply.pre.prefix.as_deref()), "~u+2603");
@@ -321,8 +354,8 @@ fn unicode_suggestions_follow_a_prefix_override() {
     // prefix. Both rows have to exist for the round trip to be reachable.
     let reply = engine.query("~u+2603");
     assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
-    let top = reply.scored.first().expect("a row for '~u+2603'");
-    let suggestion = top.entry.set_query.as_ref().expect("a suggestion");
+    let top = reply.entry(reply.scored.first().expect("a row for '~u+2603'"));
+    let suggestion = top.set_query.as_ref().expect("a suggestion");
     assert_eq!(suggestion.query, "snowman");
     assert_eq!(suggestion.resolve(reply.pre.prefix.as_deref()), "~snowman");
 
@@ -341,25 +374,24 @@ fn unicode_select_copies_and_then_ranks_first() {
     assert!(!before.is_empty(), "expected a row for ':bee'");
     let target = before
         .iter()
-        .find(|r| r.entry.title == "🐝")
-        .expect("the honeybee emoji")
-        .clone();
+        .find(|r| r.title == "🐝")
+        .expect("the honeybee emoji");
 
     // The test engine runs dry, so the action is asserted rather than carried
     // out: what matters is that selecting the row copies the character and
     // not its name or its code point.
-    match &target.entry.action {
+    match &target.action {
         Action::Clipboard { value } => assert_eq!(value, "🐝"),
         other => panic!("expected Clipboard action, got {other:?}"),
     }
     assert_eq!(target.history_key.as_deref(), Some("unicode-1f41d"));
 
     for _ in 0..5 {
-        engine.engine.select(":bee", &target.entry.id);
+        engine.engine.select(":bee", &target.id);
     }
 
     let (_prefix, after, _) = engine.query(":bee");
-    assert_eq!(after[0].entry.id, target.entry.id);
+    assert_eq!(after[0].id, target.id);
 }
 
 /// Configured actions reach the result list by keyword, carry their command
@@ -402,11 +434,12 @@ fn actions_provider_serves_configured_entries() {
     let hit = reply
         .scored
         .iter()
-        .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
+        .find(|r| reply.provider_id(r) == "actions")
         .expect("a configured action for 'sleep'");
-    assert_eq!(hit.entry.id, "suspend");
-    assert_eq!(hit.history_key.as_deref(), Some("actions-suspend"));
-    match &hit.entry.action {
+    let entry = reply.entry(hit);
+    assert_eq!(entry.id, "suspend");
+    assert_eq!(entry.history_key.as_deref(), Some("actions-suspend"));
+    match &entry.action {
         Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["systemctl".to_string(), "suspend".to_string()]);
             assert_eq!(*mode, ExecMode::Direct);
@@ -418,9 +451,9 @@ fn actions_provider_serves_configured_entries() {
     let hit = reply
         .scored
         .iter()
-        .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
+        .find(|r| reply.provider_id(r) == "actions")
         .expect("the htop action");
-    match &hit.entry.action {
+    match &reply.entry(hit).action {
         Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["htop".to_string()]);
             assert_eq!(*mode, ExecMode::Terminal);
@@ -464,8 +497,8 @@ fn files_provider_lists_and_descends() {
     let titles: Vec<&str> = reply
         .scored
         .iter()
-        .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
-        .map(|s| s.entry.title.as_str())
+        .filter(|s| reply.provider_id(s) == "files")
+        .map(|s| reply.entry(s).title.as_str())
         .collect();
     assert!(titles.contains(&"sub"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
@@ -476,8 +509,8 @@ fn files_provider_lists_and_descends() {
     let titles: Vec<&str> = reply
         .scored
         .iter()
-        .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
-        .map(|s| s.entry.title.as_str())
+        .filter(|s| reply.provider_id(s) == "files")
+        .map(|s| reply.entry(s).title.as_str())
         .collect();
     assert!(titles.contains(&"sub"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
@@ -486,14 +519,18 @@ fn files_provider_lists_and_descends() {
     let dir_row = reply
         .scored
         .iter()
-        .find(|s| s.entry.title == "sub")
+        .find(|s| reply.entry(s).title == "sub")
         .expect("the sub directory")
         .clone();
-    let suggestion = dir_row.entry.set_query.as_ref().expect("a suggestion");
+    let suggestion = reply
+        .entry(&dir_row)
+        .set_query
+        .as_ref()
+        .expect("a suggestion");
     assert_eq!(suggestion.resolve(Some("/")), "/sub/");
 
     // Enter on the directory opens a terminal working in it.
-    match &dir_row.entry.action {
+    match &reply.entry(&dir_row).action {
         Action::Exec { mode, cwd, .. } => {
             assert_eq!(*mode, huffi::engine::provider::ExecMode::Terminal);
             assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
@@ -507,17 +544,18 @@ fn files_provider_lists_and_descends() {
     let file_row = file_reply
         .scored
         .iter()
-        .find(|s| s.entry.title == "note.txt")
+        .find(|s| file_reply.entry(s).title == "note.txt")
         .expect("the file row")
         .clone();
-    match &file_row.entry.action {
+    match &file_reply.entry(&file_row).action {
         Action::Exec { mode, cwd, .. } => {
             assert_eq!(*mode, huffi::engine::provider::ExecMode::Direct);
             assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
         }
         other => panic!("expected direct Exec, got {other:?}"),
     }
-    engine.select("/sub/n", &file_row.entry.id);
+    let file_id = file_reply.entry(&file_row).id.clone();
+    engine.select("/sub/n", &file_id);
     let key = engine
         .list_entries("/sub/n")
         .iter()
@@ -533,8 +571,7 @@ fn files_provider_lists_and_descends() {
         reply
             .scored
             .iter()
-            .any(|s| s.entry.provider_id.as_deref() == Some("files")
-                && s.entry.title == "note.txt"),
+            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
         "the remembered file is rebuilt from its history key"
     );
 
@@ -545,8 +582,7 @@ fn files_provider_lists_and_descends() {
         reply
             .scored
             .iter()
-            .any(|s| s.entry.provider_id.as_deref() == Some("files")
-                && s.entry.title == "note.txt"),
+            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
         "the remembered file is rebuilt even under an unrelated query"
     );
 
@@ -558,8 +594,7 @@ fn files_provider_lists_and_descends() {
         !reply
             .scored
             .iter()
-            .any(|s| s.entry.provider_id.as_deref() == Some("files")
-                && s.entry.title == "note.txt"),
+            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
         "a vanished path is not reconstructed"
     );
 
@@ -597,12 +632,12 @@ fn files_provider_offers_open_with_variants() {
     let mut engine = Engine::new_with_config(&data_dir, true, &config).expect("engine failed");
 
     let files_titles = |engine: &mut Engine| -> Vec<String> {
-        engine
-            .query("/note.txt")
+        let reply = engine.query("/note.txt");
+        reply
             .scored
             .iter()
-            .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
-            .map(|s| s.entry.title.clone())
+            .filter(|s| reply.provider_id(s) == "files")
+            .map(|s| reply.entry(s).title.clone())
             .collect()
     };
 
@@ -617,24 +652,23 @@ fn files_provider_offers_open_with_variants() {
     let titles: Vec<&str> = reply
         .scored
         .iter()
-        .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
-        .map(|s| s.entry.title.as_str())
+        .filter(|s| reply.provider_id(s) == "files")
+        .map(|s| reply.entry(s).title.as_str())
         .collect();
     assert!(titles.contains(&"note.txt (code)"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
     let variant = reply
         .scored
         .iter()
-        .find(|s| {
-            s.entry.provider_id.as_deref() == Some("files") && s.entry.title == "note.txt (code)"
-        })
+        .find(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt (code)")
         .expect("the code variant")
         .clone();
     assert_eq!(
-        variant.history_key,
+        reply.entry(&variant).history_key,
         Some(format!("files-{}@code", root.join("note.txt").display()))
     );
-    engine.select("/note.txt @co", &variant.entry.id);
+    let variant_id = reply.entry(&variant).id.clone();
+    engine.select("/note.txt @co", &variant_id);
 
     // The space is optional: the same variant matches without one.
     let reply = engine.query("/note.txt@cod");
@@ -642,7 +676,7 @@ fn files_provider_offers_open_with_variants() {
         reply
             .scored
             .iter()
-            .any(|s| s.entry.title == "note.txt (code)"),
+            .any(|s| reply.entry(s).title == "note.txt (code)"),
         "the suffix works without a space too"
     );
 

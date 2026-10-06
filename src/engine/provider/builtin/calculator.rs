@@ -260,9 +260,9 @@ mod tests {
     use super::*;
 
     /// One result's entry fields, so assertions read `shown.title` rather than
-    /// `shown.entry.title`.
-    fn shown(reply: &QueryReply) -> crate::engine::provider::EntryMeta {
-        CalculatorProvider::new().present(reply).entry
+    /// `shown.title`.
+    fn shown(reply: &QueryReply) -> crate::engine::provider::Entry {
+        CalculatorProvider::new().present(reply)
     }
 
     fn detail<'a>(details: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
