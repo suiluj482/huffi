@@ -9,8 +9,7 @@ use super::config::{ProviderConfig, ProviderOverride};
 use super::{
     ActionsProvider, CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext,
     InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
-    RunnerProvider,
-    UnicodeProvider,
+    RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {

@@ -370,6 +370,7 @@ fn unicode_select_copies_and_then_ranks_first() {
 fn actions_provider_serves_configured_entries() {
     use huffi::engine::config::EngineConfig;
     use huffi::engine::provider::Action;
+    use huffi::engine::provider::ExecMode;
     use huffi::engine::provider::config::ProviderOverride;
 
     let dir = PathBuf::from("/tmp/huffi-actions-int");
@@ -406,9 +407,9 @@ fn actions_provider_serves_configured_entries() {
     assert_eq!(hit.entry.id, "suspend");
     assert_eq!(hit.history_key.as_deref(), Some("actions.suspend"));
     match &hit.entry.action {
-        Action::Exec { args, terminal } => {
+        Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["systemctl".to_string(), "suspend".to_string()]);
-            assert!(!terminal);
+            assert_eq!(*mode, ExecMode::Direct);
         }
         other => panic!("expected Exec, got {other:?}"),
     }
@@ -420,9 +421,9 @@ fn actions_provider_serves_configured_entries() {
         .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
         .expect("the htop action");
     match &hit.entry.action {
-        Action::Exec { args, terminal } => {
+        Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["htop".to_string()]);
-            assert!(terminal);
+            assert_eq!(*mode, ExecMode::Terminal);
         }
         other => panic!("expected terminal Exec, got {other:?}"),
     }

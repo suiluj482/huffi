@@ -168,6 +168,10 @@ weight_keyword = 0.8
 #   set_query = "..."               — Tab suggestion replacing the query, or
 #   set_query_keeping_prefix = "…"  — one under the active prefix (exactly
 #                                     one of the two)
+#   cwd = "..."                     — directory the command runs in;
+#                                     overrides [engine.external].working_dir
+#                                     for this entry, `~/` expands against
+#                                     $HOME (exec / terminal_exec only)
 #   history = false                 — keep this row out of the history model
 #                                     (default true)
 #   history_key = "..."             — override the derived actions.<id>;

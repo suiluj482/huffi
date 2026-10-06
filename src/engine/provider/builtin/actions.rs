@@ -8,6 +8,7 @@
 //! history controls.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -104,6 +105,12 @@ pub struct ActionEntry {
     /// Override the history key, which otherwise derives as `actions.<id>`.
     #[serde(default)]
     pub history_key: Option<String>,
+    /// Directory the command runs in, overriding the configured
+    /// `working_dir` for this entry. A leading `~/` expands against `$HOME`.
+    /// Only meaningful for [`exec`](Self::exec) and
+    /// [`terminal_exec`](Self::terminal_exec) — nothing else runs anywhere.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
     /// Command to run on selection (no terminal).
     #[serde(default)]
     pub exec: Option<Vec<String>>,
@@ -194,7 +201,8 @@ struct Weights {
 
 /// Resolve every configured entry to its final id, rejecting anything the
 /// launcher could not dispatch or learn from: an entry with no action (or
-/// two), an empty command, an id no title can supply, and a duplicate id —
+/// two), an empty command, a `cwd` with no command to run it in, an id no
+/// title can supply, and a duplicate id —
 /// duplicates would make selection dispatch and history ambiguous.
 fn resolve(entries: &[ActionEntry]) -> Result<Vec<(String, &ActionEntry)>, String> {
     let mut seen = HashSet::new();
@@ -213,6 +221,16 @@ fn resolve(entries: &[ActionEntry]) -> Result<Vec<(String, &ActionEntry)>, Strin
             || cfg.terminal_exec.as_ref().is_some_and(Vec::is_empty)
         {
             return Err(format!("{label}: command must not be empty"));
+        }
+        if cfg.cwd.is_some() && cfg.exec.is_none() && cfg.terminal_exec.is_none() {
+            return Err(format!("{label}: cwd requires exec or terminal_exec"));
+        }
+        if cfg
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| cwd.as_os_str().is_empty())
+        {
+            return Err(format!("{label}: cwd must not be empty"));
         }
         if cfg.set_query.is_some() && cfg.set_query_keeping_prefix.is_some() {
             return Err(format!(
@@ -341,12 +359,16 @@ fn build(id: &str, cfg: &ActionEntry, weights: Weights) -> Entry {
     } else if let Some(value) = &cfg.clipboard {
         builder = builder.clipboard(value.clone());
     }
+    if let Some(cwd) = &cfg.cwd {
+        builder = builder.cwd(cwd);
+    }
     builder.match_fields(fields)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::ExecMode;
 
     /// The provider never reads `data_dir`, so the path is a placeholder.
     fn init(extra: Option<serde_json::Value>) -> (ActionsProvider, ProviderResult) {
@@ -424,7 +446,7 @@ mod tests {
             Some("actions.open-project-huffi")
         );
         match &first.entry.action {
-            crate::engine::provider::Action::Exec { args, terminal } => {
+            crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(
                     args,
                     &[
@@ -432,7 +454,7 @@ mod tests {
                         "/home/me/projects/huffi".to_string()
                     ]
                 );
-                assert!(!terminal);
+                assert_eq!(*mode, ExecMode::Direct);
             }
             other => panic!("expected Exec, got {other:?}"),
         }
@@ -477,12 +499,73 @@ mod tests {
             original: "",
         });
         match &entries[0].entry.action {
-            crate::engine::provider::Action::Exec { args, terminal } => {
+            crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(args, &["htop".to_string()]);
-                assert!(terminal);
+                assert_eq!(*mode, ExecMode::Terminal);
             }
             other => panic!("expected terminal Exec, got {other:?}"),
         }
+    }
+
+    /// The configured working directory lands on the exec action, without
+    /// disturbing its mode; a terminal therefore starts there too.
+    #[test]
+    fn cwd_reaches_the_exec_action() {
+        let (mut provider, result) = init(Some(serde_json::json!({
+            "entries": [
+                {
+                    "title": "Build",
+                    "exec": ["make"],
+                    "cwd": "/home/me/projects/huffi",
+                },
+                {
+                    "title": "Shell",
+                    "terminal_exec": ["zsh"],
+                    "cwd": "/tmp",
+                },
+            ],
+        })));
+        assert!(matches!(result, ProviderResult::Ok));
+        let entries = provider.query(QueryContext {
+            prefix: None,
+            query: "",
+            original: "",
+        });
+        match &entries[0].entry.action {
+            crate::engine::provider::Action::Exec { mode, cwd, .. } => {
+                assert_eq!(*mode, ExecMode::Direct);
+                assert_eq!(
+                    cwd.as_deref(),
+                    Some(std::path::Path::new("/home/me/projects/huffi"))
+                );
+            }
+            other => panic!("expected Exec, got {other:?}"),
+        }
+        match &entries[1].entry.action {
+            crate::engine::provider::Action::Exec { mode, cwd, .. } => {
+                assert_eq!(*mode, ExecMode::Terminal);
+                assert_eq!(cwd.as_deref(), Some(std::path::Path::new("/tmp")));
+            }
+            other => panic!("expected terminal Exec, got {other:?}"),
+        }
+    }
+
+    /// `EntryBuilder::cwd` has nowhere to put the directory when the action
+    /// spawns nothing, so the config check has to fire first.
+    #[test]
+    fn cwd_without_a_command_is_rejected() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{ "title": "Copy", "clipboard": "x", "cwd": "/tmp" }],
+        }));
+        assert!(msg.contains("cwd requires exec or terminal_exec"), "{msg}");
+    }
+
+    #[test]
+    fn an_empty_cwd_is_rejected() {
+        let msg = config_error(serde_json::json!({
+            "entries": [{ "title": "Nowhere", "exec": ["true"], "cwd": "" }],
+        }));
+        assert!(msg.contains("cwd must not be empty"), "{msg}");
     }
 
     /// An entry with nothing to do on selection is a config mistake, not a
