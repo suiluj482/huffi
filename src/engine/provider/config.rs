@@ -1,11 +1,13 @@
 //! Per-provider configuration, loaded from the `[engine.provider]` tables of
 //! the config file.
 //!
-//! Built-in providers are keyed by their [`ProviderMeta::id`] under
-//! `[engine.provider.builtin.<id>]`. Each section can override the provider's
-//! display name, prefixes, enabled flag, and `prefix_only` flag, and carry an
-//! arbitrary `extra` config block that is passed through to the provider at
-//! init time.
+//! The `[engine.provider]` table itself carries cross-provider routing — the
+//! [`exclusive_prefixes`](ProviderConfig::exclusive_prefixes) list deciding
+//! which prefixes own a query outright. Built-in providers are keyed by their
+//! [`ProviderMeta::id`] under `[engine.provider.builtin.<id>]`. Each section
+//! can override the provider's display name, prefixes, enabled flag, and
+//! `prefix_only` flag, and carry an arbitrary `extra` config block that is
+//! passed through to the provider at init time.
 
 use std::collections::HashMap;
 
@@ -21,6 +23,17 @@ pub struct ProviderConfig {
     /// [`ProviderMeta::id`].
     #[serde(default)]
     pub builtin: HashMap<String, ProviderOverride>,
+    /// Prefixes that own a query outright: when the resolved global prefix
+    /// for a query is one of these, only providers declaring that prefix are
+    /// queried — every other provider, including providers with no prefixes
+    /// of their own, is skipped for that keystroke.
+    ///
+    /// Empty (the default) means no prefix is exclusive and queries are
+    /// shared by every enabled provider, as before. A listed prefix no
+    /// provider declares is inert: it never resolves as a global prefix, so
+    /// the filter never fires.
+    #[serde(default)]
+    pub exclusive_prefixes: Vec<String>,
 }
 
 /// User-facing overrides for a single provider. Every field is optional;

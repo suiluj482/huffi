@@ -220,6 +220,32 @@ terminal = ["foot"]
     }
 
     #[test]
+    fn exclusive_prefixes_parse_and_default_to_empty() {
+        let parsed =
+            Config::from_str("[engine.provider]\nexclusive_prefixes = [\"=\", \"!\"]\n").unwrap();
+        assert_eq!(
+            parsed.engine.provider.exclusive_prefixes,
+            vec!["=".to_string(), "!".to_string()]
+        );
+        assert!(
+            Config::from_str("")
+                .unwrap()
+                .engine
+                .provider
+                .exclusive_prefixes
+                .is_empty()
+        );
+        assert!(
+            Config::from_str("[engine.provider.builtin.desktop]\nname = \"Apps\"\n")
+                .unwrap()
+                .engine
+                .provider
+                .exclusive_prefixes
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn out_of_range_scoring_values_are_rejected() {
         assert!(Config::from_str("[engine.scoring]\nhalf_life_days = 0\n").is_err());
         assert!(Config::from_str("[engine.scoring]\nboost_weight = -1\n").is_err());

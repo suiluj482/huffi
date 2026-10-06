@@ -127,6 +127,60 @@ fn query_reports_active_prefix() {
     );
 }
 
+/// An exclusive prefix hands the query to the providers that triggered it
+/// alone: rows from providers that don't declare the prefix — the unprefixed
+/// ones included — stay out of the results entirely.
+#[test]
+fn exclusive_prefix_hands_the_query_to_its_providers_only() {
+    use huffi::engine::config::EngineConfig;
+
+    let shared_row = || {
+        vec![
+            entry("shared-row", "shared row").match_fields(vec![MatchField {
+                text: "= 2 + 2".into(),
+                weight: 1.0,
+            }]),
+        ]
+    };
+
+    let run = |exclusive: bool| -> Vec<Scored<EntryMeta>> {
+        let id = DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = PathBuf::from(format!("/tmp/huffi-int-excl-{}-{id}", std::process::id()));
+        let mut config = EngineConfig::default();
+        if exclusive {
+            config.provider.exclusive_prefixes = vec!["=".into()];
+        }
+        let mut engine =
+            Engine::new_with_config(&dir, true, &config).expect("engine failed to open");
+        engine
+            .add_provider(Box::new(TestProvider::new("shared", shared_row())))
+            .expect("shared provider");
+        let scored = engine.query("= 2 + 2").scored.to_vec();
+        let _ = std::fs::remove_dir_all(&dir);
+        scored
+    };
+
+    let shared = run(false);
+    assert!(
+        shared
+            .iter()
+            .any(|s| s.entry.provider_id.as_deref() == Some("shared")),
+        "without exclusivity the unprefixed provider shares the query"
+    );
+
+    let exclusive = run(true);
+    assert!(
+        !exclusive.is_empty(),
+        "the prefix's own provider still answers"
+    );
+    assert!(
+        exclusive
+            .iter()
+            .all(|s| s.entry.provider_id.as_deref() == Some("calculator")),
+        "only providers declaring the exclusive prefix may answer: {exclusive:?}"
+    );
+}
+
 #[test]
 fn meta_provider_answers_at_prefix() {
     let mut engine = TestEngine::new();
