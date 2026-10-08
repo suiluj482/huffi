@@ -243,6 +243,7 @@ tests/          # in-process integration tests against the engine
 | `ActionsProvider` | (always active) | `config.toml` — static entries from `[[…extra.entries]]`, each running a command or copying text |
 | `CalculatorProvider` | `=` prefix | `rink-core` — evaluates math expressions, copies to clipboard, `Tab` applies its query suggestion |
 | `MetaProvider` | `@` prefix | launcher state — uptime, control socket path, pid, version (select copies the value) |
+| `ProvidersProvider` | `\` prefix | lists the registered providers — type `\` to browse, or `\<id> ` (e.g. `\desktop fire`) to scope a query to one provider exclusively |
 | `UnicodeProvider` | `:` prefix | Unicode names + every emoji shortcode — `:smile` for 😄 — also `2603`, `u+1f600`, `0x1f600` and `+1`. `Tab` swaps a name for its code point and back; selecting copies the character, or the number for a code point row |
 | `RunnerProvider` | `>` prefix | shell history — `>cargo test` runs the typed command in the terminal, with history commands as fuzzy suggestions |
 

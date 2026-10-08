@@ -276,6 +276,16 @@ fn spawn_instance(
         engine.add_provider(Box::new(TestProvider::new("test", test_entries)))?;
     }
 
+    // Registered last so its snapshot sees every provider, including the
+    // dry-run test provider. It lists providers under the configured target
+    // prefix (default `\`) and scopes a query to one of them via `\<id> `.
+    let target_prefix = engine.target_prefix().to_string();
+    let providers_snapshot = engine.providers();
+    engine.add_provider(Box::new(huffi::engine::provider::ProvidersProvider::new(
+        providers_snapshot,
+        target_prefix,
+    )))?;
+
     let main_loop = glib::MainLoop::new(None::<&glib::MainContext>, false);
     let launcher = ui::app::Launcher::new(
         listener,

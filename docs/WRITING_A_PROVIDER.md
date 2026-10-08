@@ -68,6 +68,13 @@ to flip when a prefixed mode should own the whole result list instead of
 sharing it with the desktop entries; it is judged against the resolved
 prefix, and is empty (off) by default.
 
+The built-in [`ProvidersProvider`] (the *target prefix*, `\` by default and
+configurable via `[engine.provider] target_prefix`) lets the user scope a
+query to any single provider by id: `\desktop fire`
+resolves to a *target* for the `desktop` provider, which is queried alone
+with `prefix: Some("\\desktop ")` and `fire` verbatim as `query`. The target
+token carries its separating space.
+
 ### `init(ctx)`
 
 Called once at startup, before any queries are served. The `InitContext`
