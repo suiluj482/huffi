@@ -245,6 +245,7 @@ tests/          # in-process integration tests against the engine
 | `MetaProvider` | `@` prefix | launcher state — uptime, control socket path, pid, version (select copies the value) |
 | `UnicodeProvider` | `:` prefix | Unicode names + every emoji shortcode — `:smile` for 😄 — also `2603`, `u+1f600`, `0x1f600` and `+1`. `Tab` swaps a name for its code point and back; selecting copies the character, or the number for a code point row |
 | `RunnerProvider` | `>` prefix | shell history — `>cargo test` runs the typed command in the terminal, with history commands as fuzzy suggestions |
+| `CliphistProvider` | `\|` prefix | clipboard history via the `cliphist` binary — `\|text` searches past copies; selecting an entry copies it back to the clipboard |
 
 The `Provider` trait lets you plug arbitrary data sources into the
 launcher. See **[docs/WRITING_A_PROVIDER.md](docs/WRITING_A_PROVIDER.md)**

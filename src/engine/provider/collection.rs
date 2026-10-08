@@ -9,7 +9,7 @@ use super::config::{ProviderConfig, ProviderOverride};
 use super::{
     ActionsProvider, CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext,
     InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
-    RunnerProvider, UnicodeProvider,
+    RunnerProvider, UnicodeProvider, CliphistProvider,
 };
 
 pub struct ProviderCollection {
@@ -66,6 +66,7 @@ impl ProviderCollection {
         collection.add_provider(Box::new(NixRunProvider::new()))?;
         collection.add_provider(Box::new(UnicodeProvider::new()))?;
         collection.add_provider(Box::new(RunnerProvider::new()))?;
+        collection.add_provider(Box::new(CliphistProvider::new()))?;
         Ok(collection)
     }
 }

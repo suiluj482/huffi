@@ -381,7 +381,7 @@ pub use collection::ProviderCollection;
 
 pub use builtin::{
     ActionsProvider, CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider,
-    RunnerProvider, TestProvider, UnicodeProvider,
+    RunnerProvider, TestProvider, UnicodeProvider, CliphistProvider,
 };
 pub use util::split_command;
 
