@@ -3,6 +3,13 @@
 let
   cfg = config.programs.huffi;
   tomlFormat = pkgs.formats.toml { };
+  configFileSource =
+    if cfg.configFile != null then
+      cfg.configFile
+    else if cfg.settings != { } then
+      tomlFormat.generate "huffi-config.toml" cfg.settings
+    else
+      null;
 in
 {
   options.programs.huffi = {
@@ -56,18 +63,17 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
-    home.file.".config/huffi/config.toml" = lib.mkIf (cfg.configFile != null || cfg.settings != { }) (
-      if cfg.configFile != null then
-        { source = cfg.configFile; }
-      else
-        { source = tomlFormat.generate "config.toml" cfg.settings; }
-    );
+    home.file.".config/huffi/config.toml" = lib.mkIf (configFileSource != null) {
+      source = configFileSource;
+    };
 
     systemd.user.services.huffi = lib.mkIf cfg.enablePreloading {
       Unit = {
         Description = "Huffi launcher (resident instance)";
         PartOf = [ "graphical-session.target" ];
         After = [ "graphical-session.target" ];
+        X-Restart-Triggers = [ cfg.package ]
+          ++ lib.optionals (configFileSource != null) [ configFileSource ];
       };
 
       Service = {
