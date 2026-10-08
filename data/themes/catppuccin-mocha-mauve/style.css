@@ -140,6 +140,9 @@ window {
     font-size: 11px;
     color: @huffi_subtext0_color;
 }
+.footer-active {
+    color: @huffi_accent_color;
+}
 .flat-btn {
     min-width: 0;
     min-height: 0;
