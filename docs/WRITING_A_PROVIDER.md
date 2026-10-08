@@ -277,7 +277,26 @@ invisible to the history model: they can't be boosted, deleted, or learned
 from usage. This is appropriate for ephemeral or computed entries.
 
 The `history_key` should be stable across restarts, same as `id`.
-Often they are the same value.
+
+It should also be namespaced by your provider's id. The history store is a
+single flat map shared by every provider, so a key carrying only a bare entry
+id can collide with another provider's key: a desktop entry named `suspend`
+and an actions entry named `suspend` would otherwise share one history record
+and boost each other. Prefix the key with the provider id and a `-` separator.
+
+| Provider id | History key example |
+|---|---|
+| `actions` | `actions-suspend` |
+| `desktop` | `desktop-firefox.desktop` |
+| `runner` | `runner-git status` |
+| `unicode` | `unicode-2192` |
+| `nix` | `nix-hello` |
+
+A provider whose entry ids already begin with the provider id (like
+`unicode-…`, `nix-…`, and `meta-…`) can use the id itself as the key. A
+provider that returns a single entry named after the provider, like the
+calculator, can use the bare provider id. Don't invent a second namespace
+like `huffi-…`; the provider id is the namespace.
 
 ### Query suggestions
 
@@ -498,7 +517,7 @@ impl Provider for CustomDirProvider {
                 .match_fields(vec![
                     MatchField { text: "Projects".into(), weight: 1.0 },
                 ])
-                .history_key("custom-projects")
+                .history_key("custom-dirs-projects")
         ];
         ProviderResult::Ok
     }

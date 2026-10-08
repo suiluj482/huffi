@@ -20,7 +20,7 @@ use crate::engine::provider::{
 use crate::engine::scoring::MatchField;
 
 /// History namespace for configured entries: every entry's history key is
-/// `actions.<id>`, so it can never collide with a key from another provider.
+/// `actions-<id>`, so it can never collide with a key from another provider.
 const HISTORY_PREFIX: &str = "actions";
 
 /// The `extra` config of the actions provider: the entries themselves plus
@@ -53,7 +53,7 @@ impl Default for ActionsConfig {
 /// Exactly one of `exec`, `terminal_exec`, and `clipboard` must be set —
 /// an entry with none has nothing to do when selected, an entry with two
 /// has two contradictory things. `id` is optional: it defaults to a slug of
-/// the title, and the history key defaults to `actions.<id>`. The remaining
+/// the title, and the history key defaults to `actions-<id>`. The remaining
 /// fields mirror [`EntryBuilder`](crate::engine::provider::EntryBuilder)
 /// one for one; anything left unset keeps the builder's own default.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -102,7 +102,7 @@ pub struct ActionEntry {
     /// exclusive with [`history_key`](Self::history_key).
     #[serde(default = "default_true")]
     pub history: bool,
-    /// Override the history key, which otherwise derives as `actions.<id>`.
+    /// Override the history key, which otherwise derives as `actions-<id>`.
     #[serde(default)]
     pub history_key: Option<String>,
     /// Directory the command runs in, overriding the configured
@@ -326,7 +326,7 @@ fn build(id: &str, cfg: &ActionEntry, weights: Weights) -> Entry {
         builder = builder.history_key(
             cfg.history_key
                 .clone()
-                .unwrap_or_else(|| format!("{HISTORY_PREFIX}.{id}")),
+                .unwrap_or_else(|| format!("{HISTORY_PREFIX}-{id}")),
         );
     }
     if let Some(subtitle) = &cfg.subtitle {
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(first.entry.comment.as_deref(), Some("The launcher itself"));
         assert_eq!(
             first.history_key.as_deref(),
-            Some("actions.open-project-huffi")
+            Some("actions-open-project-huffi")
         );
         match &first.entry.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
@@ -476,7 +476,7 @@ mod tests {
             second.entry.id, "date",
             "an explicit id wins over the title"
         );
-        assert_eq!(second.history_key.as_deref(), Some("actions.date"));
+        assert_eq!(second.history_key.as_deref(), Some("actions-date"));
         match &second.entry.action {
             crate::engine::provider::Action::Clipboard { value } => {
                 assert_eq!(value, "2026-10-06")
@@ -785,7 +785,7 @@ mod tests {
             original: "",
         });
         assert_eq!(entries[0].entry.id, "snow");
-        assert_eq!(entries[0].history_key.as_deref(), Some("actions.snow"));
+        assert_eq!(entries[0].history_key.as_deref(), Some("actions-snow"));
     }
 
     #[test]
