@@ -853,9 +853,9 @@ impl Launcher {
 
     /// Split providers into the footer's two groups — the ones answering the
     /// current query and the rest — as `(id, label)` pairs the renderer turns
-    /// into clickable chips. A provider is active exactly when
-    /// [`matches_query`] holds, the same gate dispatch uses; with no resolved
-    /// query yet, none are active.
+    /// into clickable chips. Disabled providers are omitted entirely. A provider
+    /// is active exactly when [`matches_query`] holds, the same gate dispatch
+    /// uses; with no resolved query yet, none are active.
     fn provider_footer_entries(
         providers: &[ProviderMeta],
         pre: Option<&PreprocessedQuery>,
@@ -864,6 +864,9 @@ impl Launcher {
         let mut active = Vec::new();
         let mut idle = Vec::new();
         for p in providers {
+            if !p.enabled {
+                continue;
+            }
             let entry = (p.id.clone(), Self::footer_label(p));
             if pre.is_some_and(|pre| matches_query(p, target_prefix, pre)) {
                 active.push(entry);
@@ -979,15 +982,16 @@ impl Launcher {
             None => self.badge_box.set_visible(false),
         }
 
-        if providers.is_empty() {
+        // Split by whether the provider answers this query. Active ones stay in
+        // the accent colour on the left; the rest are the muted reminder of
+        // what prefixes are available on the right. Every chip scopes the
+        // query to its provider when clicked. Disabled providers are omitted
+        // entirely, so a footer with nothing to show is hidden.
+        let (active, idle) =
+            Self::provider_footer_entries(&providers, pre.as_ref(), &target_prefix);
+        if active.is_empty() && idle.is_empty() {
             self.footer.set_visible(false);
         } else {
-            // Split by whether the provider answers this query. Active ones
-            // stay in the accent colour on the left; the rest are the muted
-            // reminder of what prefixes are available on the right. Every chip
-            // scopes the query to its provider when clicked.
-            let (active, idle) =
-                Self::provider_footer_entries(&providers, pre.as_ref(), &target_prefix);
             for group in [&self.footer_active, &self.footer_idle] {
                 while let Some(child) = group.first_child() {
                     group.remove(&child);
@@ -1409,6 +1413,16 @@ mod tests {
                 vec![chip("desktop", "Desktop")]
             )
         );
+    }
+
+    #[test]
+    fn footer_omits_disabled_providers() {
+        let mut disabled = meta("calc", "Calc", &["="], true);
+        disabled.enabled = false;
+        let providers = vec![meta("desktop", "Desktop", &[], false), disabled];
+        let (active, idle) = Launcher::provider_footer_entries(&providers, None, "\\");
+        assert!(active.is_empty());
+        assert_eq!(idle, vec![chip("desktop", "Desktop")]);
     }
 
     #[test]
