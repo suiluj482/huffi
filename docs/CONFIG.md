@@ -69,7 +69,14 @@ empty_query_score = 0.8
 # Exclusivity is judged against the *resolved* prefix (the longest one the
 # input starts with), so listing "=" leaves `==` queries shared. Empty (the
 # default) means every enabled provider shares every query.
+# The built-in `\` provider-listing prefix is always exclusive, and `\<id> `
+# targets one provider by id regardless of this list.
 # exclusive_prefixes = ["=", "!", ":"]
+# The delimiter that introduces a provider target: `\<id> ` scopes the query
+# to the provider with id <id>, and a bare delimiter (or a partial one) lists
+# the providers. Defaults to `\`. Must not be empty; an empty value falls back
+# to the default.
+# target_prefix = "\\"
 
 # Every built-in provider also accepts the same four overrides under its own
 # [engine.provider.builtin.<id>] table:
@@ -155,7 +162,7 @@ weight_keyword = 0.8
 # Static entries, one table each, in config order. Each entry needs a title
 # and exactly one of exec, terminal_exec, clipboard. id defaults to a slug of
 # the title ("Open project huffi" → "open-project-huffi") and the history key
-# is actions.<id>; set id explicitly if you plan to retitle entries, since a
+# is actions-<id>; set id explicitly if you plan to retitle entries, since a
 # new title starts the history over.
 #
 # Optional per entry:
@@ -179,7 +186,7 @@ weight_keyword = 0.8
 #                                     $HOME (exec / terminal_exec only)
 #   history = false                 — keep this row out of the history model
 #                                     (default true)
-#   history_key = "..."             — override the derived actions.<id>;
+#   history_key = "..."             — override the derived actions-<id>;
 #                                     conflicts with history = false
 [[engine.provider.builtin.actions.extra.entries]]
 title    = "Suspend"

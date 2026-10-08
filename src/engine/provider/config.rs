@@ -3,7 +3,9 @@
 //!
 //! The `[engine.provider]` table itself carries cross-provider routing — the
 //! [`exclusive_prefixes`](ProviderConfig::exclusive_prefixes) list deciding
-//! which prefixes own a query outright. Built-in providers are keyed by their
+//! which prefixes own a query outright and the
+//! [`target_prefix`](ProviderConfig::target_prefix) delimiter that introduces
+//! a `\<id> ` provider target. Built-in providers are keyed by their
 //! [`ProviderMeta::id`] under `[engine.provider.builtin.<id>]`. Each section
 //! can override the provider's display name, prefixes, enabled flag, and
 //! `prefix_only` flag, and carry an arbitrary `extra` config block that is
@@ -15,9 +17,17 @@ use serde::Deserialize;
 
 use super::ProviderMeta;
 
+/// The default delimiter that introduces a provider target, e.g. `\desktop `.
+/// A query `<delimiter><id> <rest>` scopes to the provider with id `<id>`;
+/// a bare or partial delimiter lists the providers. This is the `Default`
+/// for [`ProviderConfig::target_prefix`] and the fallback for an empty value.
+pub(crate) fn default_target_prefix() -> String {
+    "\\".to_string()
+}
+
 /// Configuration for every provider. Built-in provider overrides live under
 /// `builtin`, keyed by provider id (e.g. `[engine.provider.builtin.desktop]`).
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProviderConfig {
     /// Per-provider overrides for built-in providers, keyed by
     /// [`ProviderMeta::id`].
@@ -34,6 +44,22 @@ pub struct ProviderConfig {
     /// the filter never fires.
     #[serde(default)]
     pub exclusive_prefixes: Vec<String>,
+    /// The delimiter that introduces a provider-targeting query: `\<id> `
+    /// scopes the query to the provider with id `<id>`, and a bare `<id>`
+    /// prefix lists the providers. Defaults to `\`. Must not be empty; an
+    /// empty configured value falls back to the default.
+    #[serde(default = "default_target_prefix")]
+    pub target_prefix: String,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            builtin: HashMap::new(),
+            exclusive_prefixes: Vec::new(),
+            target_prefix: default_target_prefix(),
+        }
+    }
 }
 
 /// User-facing overrides for a single provider. Every field is optional;

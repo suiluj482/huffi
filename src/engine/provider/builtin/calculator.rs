@@ -8,8 +8,10 @@ use crate::engine::provider::{
 };
 
 /// Id shared by every entry this provider returns, and the key its single
-/// result is tracked under in history.
-const ENTRY_ID: &str = "huffi-calculator";
+/// stable result is tracked under in history. It is the provider id itself:
+/// with one entry there is nothing to disambiguate, so the key is just the
+/// namespace.
+const ENTRY_ID: &str = "calculator";
 
 /// Shown when the user has typed the `=` prefix but nothing after it.
 const PLACEHOLDER: &str = "type to calculate";

@@ -93,12 +93,14 @@ impl Provider for MetaProvider {
             entry("meta-kill", "Quit huffi")
                 .subtitle(format!("terminate pid {pid}"))
                 .exec(vec!["kill".into(), pid])
+                .history_key("meta-kill")
                 .match_field("Quit huffi"),
         );
         entries.push(
             entry("meta-open-data", "Open data folder")
                 .subtitle(data.clone())
                 .exec(vec!["xdg-open".into(), data])
+                .history_key("meta-open-data")
                 .match_field("Open data folder"),
         );
 
@@ -110,10 +112,14 @@ impl Provider for MetaProvider {
 /// copies that value to the clipboard when selected. Only the label is
 /// fuzzy-matched, so `@uptime` finds the entry but arbitrary path fragments
 /// do not.
+///
+/// The entry id doubles as the history key: every id already carries the
+/// `meta-` provider prefix, so it is namespaced by construction.
 fn meta_entry(id: &str, label: &str, value: String) -> Entry {
     entry(id, label)
         .subtitle(value.clone())
         .clipboard(value)
+        .history_key(id)
         .match_field(label)
 }
 
@@ -244,6 +250,29 @@ mod tests {
         assert!(entries.iter().any(|e| e.entry.id == "meta-threads"));
         assert!(entries.iter().any(|e| e.entry.id == "meta-kill"));
         assert!(entries.iter().any(|e| e.entry.id == "meta-open-data"));
+    }
+
+    #[test]
+    fn every_entry_carries_a_namespaced_history_key() {
+        let mut p = provider("/tmp/data");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+        });
+        for e in &entries {
+            assert!(
+                e.entry.id.starts_with("meta-"),
+                "id {} must carry the provider prefix",
+                e.entry.id
+            );
+            assert_eq!(
+                e.history_key.as_deref(),
+                Some(e.entry.id.as_str()),
+                "{} must key history by its namespaced id",
+                e.entry.id
+            );
+        }
     }
 
     #[test]
