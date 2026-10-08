@@ -14,8 +14,8 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GBox, Button, DrawingArea, Entry, EventControllerKey, EventControllerScroll,
-    EventControllerScrollFlags, GestureClick, GestureDrag, Image, Label, Orientation, Overlay,
-    PropagationPhase, Separator, Window,
+    EventControllerScrollFlags, GestureClick, GestureDrag, Image, Label, Orientation, Overflow,
+    Overlay, PropagationPhase, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
@@ -128,6 +128,9 @@ struct BuiltRow {
     scores: Vec<Label>,
 }
 
+/// A footer entry: the provider id its chip scopes to, and its display text.
+type FooterChip = (String, String);
+
 struct State {
     query: String,
     /// The query's resolved prefixing, from the engine: which prefix scopes
@@ -155,8 +158,8 @@ pub struct Launcher {
     badge_box: GBox,
     badge_label: Label,
     footer: GBox,
-    footer_active: Label,
-    footer_idle: Label,
+    footer_active: GBox,
+    footer_idle: GBox,
     backdrop: GBox,
     engine: Arc<Mutex<Engine>>,
     visible: Arc<AtomicBool>,
@@ -221,20 +224,19 @@ impl Launcher {
         // The footer splits providers by whether they answer the current
         // query: active ones hug the left in the accent colour, the rest sit
         // on the right in the muted footer colour as a reminder of the
-        // prefixes available. Both expand and ellipsize, so the two groups
-        // share the line and clip instead of overflowing the panel.
-        let footer_active = Label::new(None);
+        // prefixes available. Each provider is its own clickable chip that
+        // scopes the query to it; the groups clip instead of overflowing.
+        let footer_active = GBox::new(Orientation::Horizontal, 8);
         footer_active.add_css_class("footer");
-        footer_active.add_css_class("footer-active");
         footer_active.set_halign(Align::Start);
         footer_active.set_hexpand(true);
-        footer_active.set_ellipsize(pango::EllipsizeMode::End);
+        footer_active.set_overflow(Overflow::Hidden);
 
-        let footer_idle = Label::new(None);
+        let footer_idle = GBox::new(Orientation::Horizontal, 8);
         footer_idle.add_css_class("footer");
         footer_idle.set_halign(Align::End);
-        footer_idle.set_hexpand(true);
-        footer_idle.set_ellipsize(pango::EllipsizeMode::End);
+        footer_idle.set_hexpand(false);
+        footer_idle.set_overflow(Overflow::Hidden);
 
         let footer = GBox::new(Orientation::Horizontal, 12);
         footer.append(&footer_active);
@@ -839,31 +841,93 @@ impl Launcher {
         self.render_list();
     }
 
+    /// The footer text for one provider: its name, or `name: prefixes` when
+    /// it declares triggers.
+    fn footer_label(meta: &ProviderMeta) -> String {
+        if meta.prefixes.is_empty() {
+            meta.name.clone()
+        } else {
+            format!("{}: {}", meta.name, meta.prefixes.join(", "))
+        }
+    }
+
     /// Split providers into the footer's two groups — the ones answering the
-    /// current query and the rest — as render-ready labels (`name`, or
-    /// `name: prefixes` when the provider has triggers). A provider is active
-    /// exactly when [`matches_query`] holds, the same gate dispatch uses; with
-    /// no resolved query yet, none are active.
-    fn provider_footer_labels(
+    /// current query and the rest — as `(id, label)` pairs the renderer turns
+    /// into clickable chips. A provider is active exactly when
+    /// [`matches_query`] holds, the same gate dispatch uses; with no resolved
+    /// query yet, none are active.
+    fn provider_footer_entries(
         providers: &[ProviderMeta],
         pre: Option<&PreprocessedQuery>,
         target_prefix: &str,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> (Vec<FooterChip>, Vec<FooterChip>) {
         let mut active = Vec::new();
         let mut idle = Vec::new();
         for p in providers {
-            let text = if p.prefixes.is_empty() {
-                p.name.clone()
-            } else {
-                format!("{}: {}", p.name, p.prefixes.join(", "))
-            };
+            let entry = (p.id.clone(), Self::footer_label(p));
             if pre.is_some_and(|pre| matches_query(p, target_prefix, pre)) {
-                active.push(text);
+                active.push(entry);
             } else {
-                idle.push(text);
+                idle.push(entry);
             }
         }
         (active, idle)
+    }
+
+    /// The query that scopes `typed` to provider `id`: swap the active prefix
+    /// or `\<id> ` target for this provider's target, keeping whatever text
+    /// followed. A fresh query keeps all of its text, so clicking a provider
+    /// after typing `fire` yields `\desktop fire`; an empty query yields just
+    /// the target token (`\desktop `).
+    fn scoped_query(
+        target_prefix: &str,
+        id: &str,
+        typed: &str,
+        active: Option<&PreprocessedQuery>,
+    ) -> String {
+        let rest = match active.and_then(|pre| pre.prefix.as_deref()) {
+            Some(prefix) => typed.strip_prefix(prefix).unwrap_or(typed),
+            None => typed,
+        };
+        format!("{target_prefix}{id} {}", rest.trim_start())
+    }
+
+    /// Scope the query to the provider with this id, moving the caret to the
+    /// end and keeping keyboard focus in the entry.
+    fn scope_to_provider(self: &Rc<Self>, id: &str) {
+        let (target_prefix, active) = {
+            let st = self.state.borrow();
+            (st.target_prefix.clone(), st.active_pre.clone())
+        };
+        let typed = self.entry.text();
+        let text = Self::scoped_query(&target_prefix, id, &typed, active.as_ref());
+        self.set_query(text);
+        self.entry.grab_focus();
+    }
+
+    /// A borderless footer chip that scopes the query to `id` when clicked.
+    fn footer_chip(self: &Rc<Self>, id: &str, text: &str, active: bool) -> Button {
+        let button = Button::with_label(text);
+        button.add_css_class("footer-provider");
+        if active {
+            button.add_css_class("footer-active");
+        }
+        button.set_can_focus(false);
+        button.set_overflow(Overflow::Hidden);
+        button.set_cursor_from_name(Some("pointer"));
+        button.set_tooltip_text(Some(&format!("Scope to {text}")));
+        if let Some(label) = button.child().and_then(|c| c.downcast::<Label>().ok()) {
+            label.set_ellipsize(pango::EllipsizeMode::End);
+            label.set_single_line_mode(true);
+        }
+        let weak = Rc::downgrade(self);
+        let id = id.to_string();
+        button.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.scope_to_provider(&id);
+            }
+        });
+        button
     }
 
     fn render_list(self: &Rc<Self>) {
@@ -920,12 +984,24 @@ impl Launcher {
         } else {
             // Split by whether the provider answers this query. Active ones
             // stay in the accent colour on the left; the rest are the muted
-            // reminder of what prefixes are available on the right.
+            // reminder of what prefixes are available on the right. Every chip
+            // scopes the query to its provider when clicked.
             let (active, idle) =
-                Self::provider_footer_labels(&providers, pre.as_ref(), &target_prefix);
-            self.footer_active.set_text(&active.join("  ·  "));
-            self.footer_active.set_visible(!active.is_empty());
-            self.footer_idle.set_text(&idle.join("  ·  "));
+                Self::provider_footer_entries(&providers, pre.as_ref(), &target_prefix);
+            for group in [&self.footer_active, &self.footer_idle] {
+                while let Some(child) = group.first_child() {
+                    group.remove(&child);
+                }
+            }
+            for (id, text) in &active {
+                self.footer_active.append(&self.footer_chip(id, text, true));
+            }
+            for (id, text) in &idle {
+                self.footer_idle.append(&self.footer_chip(id, text, false));
+            }
+            // The active group stays visible even when empty: it expands to
+            // push the idle chips to the right edge.
+            self.footer_active.set_visible(true);
             self.footer_idle.set_visible(!idle.is_empty());
             self.footer.set_visible(true);
         }
@@ -1280,6 +1356,10 @@ mod tests {
         }
     }
 
+    fn chip(id: &str, label: &str) -> (String, String) {
+        (id.to_string(), label.to_string())
+    }
+
     #[test]
     fn footer_splits_active_from_idle() {
         let providers = vec![
@@ -1287,15 +1367,15 @@ mod tests {
             meta("calc", "Calc", &["="], true),
         ];
         let split = |pre: Option<&PreprocessedQuery>| {
-            Launcher::provider_footer_labels(&providers, pre, "\\")
+            Launcher::provider_footer_entries(&providers, pre, "\\")
         };
 
         // No resolved query yet: nothing is marked active.
         assert_eq!(
             split(None),
             (
-                Vec::<String>::new(),
-                vec!["Desktop".to_string(), "Calc: =".to_string()]
+                Vec::<(String, String)>::new(),
+                vec![chip("desktop", "Desktop"), chip("calc", "Calc: =")]
             )
         );
 
@@ -1304,21 +1384,61 @@ mod tests {
         let unscoped = pre(None, false);
         assert_eq!(
             split(Some(&unscoped)),
-            (vec!["Desktop".to_string()], vec!["Calc: =".to_string()])
+            (
+                vec![chip("desktop", "Desktop")],
+                vec![chip("calc", "Calc: =")]
+            )
         );
 
         // A target scopes to one provider alone.
         let target = pre(Some("\\calc "), true);
         assert_eq!(
             split(Some(&target)),
-            (vec!["Calc: =".to_string()], vec!["Desktop".to_string()])
+            (
+                vec![chip("calc", "Calc: =")],
+                vec![chip("desktop", "Desktop")]
+            )
         );
 
         // An exclusive declared prefix does the same.
         let exclusive = pre(Some("="), true);
         assert_eq!(
             split(Some(&exclusive)),
-            (vec!["Calc: =".to_string()], vec!["Desktop".to_string()])
+            (
+                vec![chip("calc", "Calc: =")],
+                vec![chip("desktop", "Desktop")]
+            )
+        );
+    }
+
+    #[test]
+    fn scoped_query_swaps_prefix_and_keeps_text() {
+        // Unscoped text is kept behind the new target.
+        assert_eq!(
+            Launcher::scoped_query("\\", "desktop", "fire", None),
+            "\\desktop fire"
+        );
+        // An empty query is just the target token, trailing space included.
+        assert_eq!(
+            Launcher::scoped_query("\\", "desktop", "", None),
+            "\\desktop "
+        );
+        // A `\<id> ` target is replaced, its body kept.
+        let target = pre(Some("\\calc "), true);
+        assert_eq!(
+            Launcher::scoped_query("\\", "desktop", "\\calc 2", Some(&target)),
+            "\\desktop 2"
+        );
+        // A declared prefix is replaced, its text kept (leading space trimmed).
+        let declared = pre(Some("="), true);
+        assert_eq!(
+            Launcher::scoped_query("\\", "desktop", "= 2 + 2", Some(&declared)),
+            "\\desktop 2 + 2"
+        );
+        // The configured target delimiter is honoured.
+        assert_eq!(
+            Launcher::scoped_query("@", "desktop", "fire", None),
+            "@desktop fire"
         );
     }
 }

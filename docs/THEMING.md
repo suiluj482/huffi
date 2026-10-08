@@ -239,6 +239,7 @@ results:
 | `panel`       | the panel behind everything, with its padding       |
 | `footer`      | the hint line under the results                    |
 | `footer-active` | the providers answering the current query, which the footer shows separately on the left (the rest, on the right, keep the plain `footer` colour) |
+| `footer-provider` | each clickable provider chip in the footer, with `:hover`; clicking scopes the query to that provider. An active chip carries both `footer-provider` and `footer-active` |
 | `badge`       | the suggestion badges                              |
 | `flat-btn`    | the borderless "+" / "−" buttons, with `:hover`   |
 
