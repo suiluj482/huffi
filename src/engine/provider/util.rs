@@ -410,7 +410,7 @@ impl EntryBuilder {
         self.build()
     }
 
-    fn build(self) -> Entry {
+    pub fn build(self) -> Entry {
         let mut action = self.action.unwrap_or(Action::NoOp);
         if let Some(cwd) = self.cwd {
             match &mut action {
@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn builders_pick_the_exec_mode() {
+    pub fn builders_pick_the_exec_mode() {
         let ls = || vec!["ls".to_string()];
         let direct = entry("id", "title").exec(ls()).score(1.0);
         assert_eq!(

@@ -14,6 +14,7 @@ pub mod providers;
 pub mod runner;
 pub mod test_provider;
 pub mod unicode;
+pub mod cliphist;
 
 pub use actions::ActionsProvider;
 pub use calculator::CalculatorProvider;
@@ -24,3 +25,4 @@ pub use providers::ProvidersProvider;
 pub use runner::RunnerProvider;
 pub use test_provider::TestProvider;
 pub use unicode::UnicodeProvider;
+pub use cliphist::CliphistProvider;
