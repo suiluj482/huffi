@@ -19,8 +19,8 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::Engine;
-use huffi::engine::provider::ProviderMeta;
 use huffi::engine::provider::{EntryMeta, Icon, QuerySuggestion, is_detail_key};
+use huffi::engine::provider::{ProviderMeta, matches_prefix};
 use huffi::engine::scoring::Scored;
 
 use crate::ui::control::{self, ControlRequest};
@@ -130,8 +130,12 @@ struct BuiltRow {
 
 struct State {
     query: String,
+    /// The prefix scoping the current result: a declared trigger (`=`) or a
+    /// `\<id> ` target, which carries its separator (`"\calc "`).
     active_prefix: Option<String>,
     providers: Vec<ProviderMeta>,
+    /// Delimiter introducing a `\<id> ` provider target, from the engine.
+    target_prefix: String,
     entries: Vec<Row>,
     rows: Vec<BuiltRow>,
     total: usize,
@@ -263,6 +267,7 @@ impl Launcher {
                 query: String::new(),
                 active_prefix: None,
                 providers: Vec::new(),
+                target_prefix: String::new(),
                 entries: Vec::new(),
                 rows: Vec::new(),
                 total: 0,
@@ -280,13 +285,20 @@ impl Launcher {
         tasks::run_blocking(
             {
                 let engine = Arc::clone(&this.engine);
-                move || engine.lock().unwrap().providers()
+                move || {
+                    let engine = engine.lock().unwrap();
+                    (engine.providers(), engine.target_prefix().to_string())
+                }
             },
             {
                 let weak = Rc::downgrade(&this);
-                move |providers| {
+                move |(providers, target_prefix)| {
                     if let Some(this) = weak.upgrade() {
-                        this.state.borrow_mut().providers = providers;
+                        {
+                            let mut st = this.state.borrow_mut();
+                            st.providers = providers;
+                            st.target_prefix = target_prefix;
+                        }
                         this.render_list();
                     }
                 }
@@ -619,9 +631,11 @@ impl Launcher {
         let local = selected % self.page_size;
         let suggestion = {
             let st = self.state.borrow();
+            // `active_prefix` carries a target's separator (`"\calc "`), so a
+            // keeping-prefix suggestion lands under it (`\calc 42`) rather than
+            // in the malformed `\calc42`. Resolved here rather than per row per
+            // keystroke, because only this one row is ever applied.
             st.entries.get(local).and_then(|row| {
-                // Resolved here rather than per row per keystroke, because only
-                // this one row is ever applied.
                 row.set_query
                     .as_ref()
                     .map(|s| s.resolve(st.active_prefix.as_deref()))
@@ -821,17 +835,23 @@ impl Launcher {
         }
         self.state.borrow_mut().rows = rows;
 
-        let (prefix, providers) = {
+        let (prefix, providers, target_prefix) = {
             let st = self.state.borrow();
-            (st.active_prefix.clone(), st.providers.clone())
+            (
+                st.active_prefix.clone(),
+                st.providers.clone(),
+                st.target_prefix.clone(),
+            )
         };
         match &prefix {
+            // Label with the provider owning the prefix: the target of a
+            // `\<id> ` query, or the provider that declared it.
             Some(pfx) => {
                 let label = match providers
                     .iter()
-                    .find(|p| p.prefixes.iter().any(|pfx2| pfx2 == pfx))
+                    .find(|p| matches_prefix(p, &target_prefix, pfx))
                 {
-                    Some(p) => format!("{pfx}  {}", p.name),
+                    Some(p) => format!("{}  {}", pfx.trim_end(), p.name),
                     None => pfx.clone(),
                 };
                 self.badge_label.set_text(&label);

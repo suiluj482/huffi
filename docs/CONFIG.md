@@ -69,7 +69,14 @@ empty_query_score = 0.8
 # Exclusivity is judged against the *resolved* prefix (the longest one the
 # input starts with), so listing "=" leaves `==` queries shared. Empty (the
 # default) means every enabled provider shares every query.
+# The built-in `\` provider-listing prefix is always exclusive, and `\<id> `
+# targets one provider by id regardless of this list.
 # exclusive_prefixes = ["=", "!", ":"]
+# The delimiter that introduces a provider target: `\<id> ` scopes the query
+# to the provider with id <id>, and a bare delimiter (or a partial one) lists
+# the providers. Defaults to `\`. Must not be empty; an empty value falls back
+# to the default.
+# target_prefix = "\\"
 
 [engine.provider.builtin.desktop]
 # Display name shown in the UI (defaults to the provider id).
