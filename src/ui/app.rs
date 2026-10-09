@@ -148,12 +148,14 @@ struct State {
     selected: usize,
     last_click: Option<(usize, Instant)>,
     fetch_id: u64,
+    loading: bool,
 }
 
 pub struct Launcher {
     window: Window,
     entry: Entry,
     list: GBox,
+    scrim: GBox,
     rail: DrawingArea,
     badge_box: GBox,
     badge_label: Label,
@@ -211,12 +213,27 @@ impl Launcher {
         list.set_margin_start(2);
         list.set_margin_end(2);
 
+        // A semitransparent scrim over the entries while a page is being
+        // fetched, so stale rows read as unavailable instead of current. It
+        // opts out of pointer targeting, so the rows and the scroll rail below
+        // stay operable for as long as they are on screen.
+        let scrim = GBox::new(Orientation::Vertical, 0);
+        scrim.add_css_class("loading-overlay");
+        scrim.set_hexpand(true);
+        scrim.set_vexpand(true);
+        scrim.set_visible(false);
+        scrim.set_can_target(false);
+
+        let list_overlay = Overlay::new();
+        list_overlay.set_child(Some(&list));
+        list_overlay.add_overlay(&scrim);
+
         let rail = DrawingArea::new();
         rail.set_width_request(6);
         rail.set_vexpand(true);
 
         let middle = GBox::new(Orientation::Horizontal, 0);
-        middle.append(&list);
+        middle.append(&list_overlay);
         middle.append(&rail);
 
         let sep2 = Separator::new(Orientation::Horizontal);
@@ -280,6 +297,7 @@ impl Launcher {
             window,
             entry,
             list,
+            scrim,
             rail,
             badge_box,
             badge_label,
@@ -300,6 +318,7 @@ impl Launcher {
                 selected: 0,
                 last_click: None,
                 fetch_id: 0,
+                loading: false,
             }),
             page_size: ui.page_size,
             icon_size: ui.icon_size,
@@ -344,11 +363,11 @@ impl Launcher {
             st.selected = 0;
             st.last_click = None;
         }
+        self.set_loading(true);
         if self.entry.text() != query {
             self.entry.set_text(&query);
             self.entry.set_position(-1);
         }
-        self.render_list();
         self.visible.store(true, Ordering::Relaxed);
         self.window.present();
         self.entry.grab_focus();
@@ -556,6 +575,14 @@ impl Launcher {
         self.state.borrow().selected / self.page_size
     }
 
+    /// Start or stop the entries' loading dim. The flag drives the scrim that
+    /// shades the list while a page fetch is in flight, so the two are set
+    /// together everywhere a fetch's life begins or ends.
+    fn set_loading(&self, loading: bool) {
+        self.state.borrow_mut().loading = loading;
+        self.scrim.set_visible(loading);
+    }
+
     fn set_query(self: &Rc<Self>, text: String) {
         {
             let mut st = self.state.borrow_mut();
@@ -564,13 +591,12 @@ impl Launcher {
             }
             st.query = text.clone();
             st.selected = 0;
-            st.entries.clear();
         }
+        self.set_loading(true);
         if self.entry.text() != text {
             self.entry.set_text(&text);
             self.entry.set_position(-1);
         }
-        self.render_list();
         self.fetch_page();
     }
 
@@ -588,10 +614,9 @@ impl Launcher {
         let old_page = old_selected / self.page_size;
         self.state.borrow_mut().selected = new_selected;
         if self.page() != old_page {
-            // Clear the current window so a stale page is never shown (and
-            // never submitted) while the new one is being fetched.
-            self.state.borrow_mut().entries.clear();
-            self.render_list();
+            // Dim the current window so a stale page is never read as current
+            // (and never submitted as such) while the new one is being fetched.
+            self.set_loading(true);
             self.fetch_page();
         } else {
             self.apply_selection();
@@ -838,6 +863,7 @@ impl Launcher {
             st.entries = entries;
             st.total = total;
         }
+        self.set_loading(false);
         self.render_list();
     }
 

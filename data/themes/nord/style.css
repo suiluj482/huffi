@@ -8,6 +8,7 @@
 
 window{background:transparent;}
 .panel{background-color:@huffi_base_color;padding:8px;}
+.loading-overlay{background-color:alpha(@huffi_base_color,0.6);}
 .huffi-entry{background-color:@huffi_surface0_color;border:1.5px solid @huffi_surface1_color;border-radius:0px;padding:12px;color:@huffi_text_color;caret-color:@huffi_accent_color;}
 .huffi-entry:focus-within{border-color:@huffi_accent_color;}
 .huffi-entry>text{background-color:transparent;color:@huffi_text_color;caret-color:@huffi_accent_color;}
