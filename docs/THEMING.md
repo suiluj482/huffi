@@ -237,6 +237,7 @@ results:
 |---------------|----------------------------------------------------|
 | `huffi-entry` | the search box (with `:focus-within`, `> text`, `> placeholder`, `> selection` for its parts) |
 | `panel`       | the panel behind everything, with its padding       |
+| `loading-overlay` | the scrim over the entries while a page is being fetched |
 | `footer`      | the hint line under the results                    |
 | `badge`       | the suggestion badges                              |
 | `flat-btn`    | the borderless "+" / "−" buttons, with `:hover`   |
