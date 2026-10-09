@@ -12,6 +12,7 @@
 //! | [`ActionsProvider`] | (always active) | config file — static entries from `[[…extra.entries]]` |
 //! | [`CalculatorProvider`] | `=` prefix | `rink-core` — math expression evaluation |
 //! | [`MetaProvider`] | `@` prefix | engine state — uptime, control socket path, pid, version |
+//! | [`ProvidersProvider`] | `\` prefix | registered providers — list them, then `\<id> ` to scope to one |
 //! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
 //! | [`UnicodeProvider`] | `:` prefix | `unicode_names2`, `emojis` — characters by name, shortcode, or code point |
 
@@ -26,7 +27,7 @@ use std::path::PathBuf;
 
 use crate::engine::scoring::{Scoreable, Scored};
 
-pub use collection::PreprocessedQuery;
+pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
 pub use util::{
     Action, EntryBuilder, ExecMode, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
 };
@@ -381,7 +382,7 @@ pub use collection::ProviderCollection;
 
 pub use builtin::{
     ActionsProvider, CalculatorProvider, DesktopEntryProvider, MetaProvider, NixRunProvider,
-    RunnerProvider, TestProvider, UnicodeProvider,
+    ProvidersProvider, RunnerProvider, TestProvider, UnicodeProvider, CliphistProvider,
 };
 pub use util::split_command;
 

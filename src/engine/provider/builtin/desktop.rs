@@ -9,6 +9,11 @@ use crate::engine::provider::{
 };
 use crate::engine::scoring::MatchField;
 
+/// History namespace for desktop entries: every entry's history key is
+/// `desktop-<id>`, so a desktop id can never collide with a key from another
+/// provider.
+const HISTORY_PREFIX: &str = "desktop";
+
 /// Fuzzy-match field weights for this provider. When provided via
 /// `[engine.provider.builtin.desktop.extra]`, the fields are parsed from
 /// the arbitrary extra config.
@@ -150,7 +155,7 @@ fn read_desktop_entry(path: &Path, weights: DesktopConfig) -> Option<Entry> {
         e = e.cwd(cwd);
     }
 
-    e = e.history_key(&id);
+    e = e.history_key(format!("{HISTORY_PREFIX}-{id}"));
     if let Some(c) = comment {
         e = e.comment(c);
     }
@@ -196,6 +201,19 @@ mod tests {
             }
             other => panic!("expected a terminal exec running in /tmp, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_history_key_is_namespaced_by_the_provider_id() {
+        let entry = read(
+            "[Desktop Entry]\nType=Application\nName=Files\nExec=thunar\n",
+            "desktop-history",
+        )
+        .expect("entry");
+        assert_eq!(
+            entry.history_key.as_deref(),
+            Some(format!("{HISTORY_PREFIX}-{}", entry.entry.id).as_str())
+        );
     }
 
     #[test]

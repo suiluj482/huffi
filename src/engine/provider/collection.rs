@@ -5,11 +5,11 @@ use anyhow::Context;
 
 use crate::engine::scoring::QueryGroup;
 
-use super::config::{ProviderConfig, ProviderOverride};
+use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
     ActionsProvider, CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext,
     InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
-    RunnerProvider, UnicodeProvider,
+    RunnerProvider, UnicodeProvider, CliphistProvider,
 };
 
 pub struct ProviderCollection {
@@ -21,6 +21,8 @@ pub struct ProviderCollection {
     /// Prefixes that own a query outright: when the resolved global prefix
     /// is one of these, only providers declaring that prefix are queried.
     exclusive_prefixes: Vec<String>,
+    /// The delimiter introducing a `\<id> ` provider target, from config.
+    target_prefix: String,
     /// Huffi's data folder; each provider gets `data_dir/providers/<id>/`.
     data_dir: std::path::PathBuf,
     /// Skip creating on-disk state when true.
@@ -30,12 +32,42 @@ pub struct ProviderCollection {
 /// The result of resolving the global prefix for a query.
 ///
 /// The longest declared provider prefix that the query starts with wins;
-/// there is at most one active prefix per query.
+/// there is at most one active prefix per query. A `\<id> ` query resolves
+/// instead to a *target*: only the provider with id `<id>` is queried, and
+/// [`prefix`](Self::prefix) holds the whole `\<id> ` token, separator
+/// included.
 #[derive(Debug, Clone)]
 pub struct PreprocessedQuery {
     pub original_query: String,
+    /// The prefix token that scopes the query, if any. For a `\<id> ` target
+    /// this includes the trailing separator (`"\calc "`); a declared prefix is
+    /// stored verbatim.
     pub prefix: Option<String>,
+    /// Whether only providers owning [`prefix`](Self::prefix) answer this
+    /// query: the target namespace, a target, or a configured exclusive
+    /// prefix.
+    pub exclusive: bool,
     pub query: String,
+}
+
+/// Whether `meta` owns `prefix`: it declared it, or `prefix` is the
+/// `<target_prefix><id> ` target token naming it.
+pub fn matches_prefix(meta: &ProviderMeta, target_prefix: &str, prefix: &str) -> bool {
+    meta.prefixes.iter().any(|p| p == prefix) || prefix == format!("{target_prefix}{} ", meta.id)
+}
+
+/// Whether `meta` should answer `pre`: it owns the active prefix, or the
+/// query is unscoped or non-exclusive and the provider is not prefix-only.
+///
+/// This is the single gate shared by dispatch and by the UI (e.g. a footer
+/// that marks every provider currently active).
+pub fn matches_query(meta: &ProviderMeta, target_prefix: &str, pre: &PreprocessedQuery) -> bool {
+    meta.enabled
+        && (pre
+            .prefix
+            .as_deref()
+            .is_some_and(|prefix| matches_prefix(meta, target_prefix, prefix))
+            || (!pre.exclusive && !meta.prefix_only))
 }
 
 impl ProviderCollection {
@@ -45,16 +77,23 @@ impl ProviderCollection {
     /// not in dry-run mode) and calls its [`init`](Provider::init) — unless
     /// the provider is disabled by its own default or by user config.
     /// `config.exclusive_prefixes` drives the exclusivity filter applied when
-    /// entries are grouped.
+    /// entries are grouped, and `config.target_prefix` the delimiter that
+    /// introduces a provider target (empty falls back to the default).
     pub fn new_with_config(
         data_dir: impl AsRef<Path>,
         dry_run: bool,
         config: &ProviderConfig,
     ) -> anyhow::Result<Self> {
+        let target_prefix = if config.target_prefix.is_empty() {
+            default_target_prefix()
+        } else {
+            config.target_prefix.clone()
+        };
         let mut collection = Self {
             providers: Vec::new(),
             overrides: config.builtin.clone(),
             exclusive_prefixes: config.exclusive_prefixes.clone(),
+            target_prefix,
             data_dir: data_dir.as_ref().to_path_buf(),
             dry_run,
         };
@@ -66,6 +105,7 @@ impl ProviderCollection {
         collection.add_provider(Box::new(NixRunProvider::new()))?;
         collection.add_provider(Box::new(UnicodeProvider::new()))?;
         collection.add_provider(Box::new(RunnerProvider::new()))?;
+        collection.add_provider(Box::new(CliphistProvider::new()))?;
         Ok(collection)
     }
 }
@@ -122,9 +162,28 @@ impl ProviderCollection {
 
     /// Resolve the global prefix for a query.
     ///
-    /// Matches the longest declared provider prefix that the query starts
-    /// with. If several prefixes are tied in length, the first declared wins.
+    /// A `<target_prefix><id> <rest>` query (see
+    /// [`target_prefix`](ProviderConfig::target_prefix)) that names an enabled
+    /// provider resolves to a target for that provider: [`prefix`] is the
+    /// whole `<target_prefix><id> ` token (separator included), [`exclusive`]
+    /// is `true`, and [`query`] is `<rest>` verbatim. The id must be followed
+    /// by whitespace, so typing `\desktop` still filters the provider list and
+    /// only `\desktop ` starts targeting it.
+    ///
+    /// Otherwise the longest declared provider prefix that the query starts
+    /// with wins. If several prefixes are tied in length, the first declared
+    /// wins. A prefix in the target namespace, or one listed in
+    /// [`ProviderConfig::exclusive_prefixes`](super::config::ProviderConfig::exclusive_prefixes),
+    /// is marked [`exclusive`].
+    ///
+    /// [`prefix`]: PreprocessedQuery::prefix
+    /// [`exclusive`]: PreprocessedQuery::exclusive
+    /// [`query`]: PreprocessedQuery::query
     pub fn preprocess_query(&self, query: &str) -> PreprocessedQuery {
+        if let Some(target) = self.target_query(query) {
+            return target;
+        }
+
         let mut longest: Option<String> = None;
         for (_, meta) in &self.providers {
             if !meta.enabled {
@@ -143,31 +202,66 @@ impl ProviderCollection {
         }
 
         match longest {
-            Some(prefix) => PreprocessedQuery {
-                original_query: query.to_string(),
-                prefix: Some(prefix.clone()),
-                query: query[prefix.len()..].to_string(),
-            },
+            Some(prefix) => {
+                let exclusive = prefix.starts_with(self.target_prefix.as_str())
+                    || self.exclusive_prefixes.iter().any(|e| e == &prefix);
+                PreprocessedQuery {
+                    original_query: query.to_string(),
+                    prefix: Some(prefix.clone()),
+                    exclusive,
+                    query: query[prefix.len()..].to_string(),
+                }
+            }
             None => PreprocessedQuery {
                 original_query: query.to_string(),
                 prefix: None,
+                exclusive: false,
                 query: query.to_string(),
             },
         }
     }
 
-    /// The provider-relative [`QueryContext`] for `meta`: prefix kept and
-    /// text stripped when this provider declared the query's global prefix,
-    /// otherwise prefix dropped and the full query kept.
+    /// Resolve a provider-targeting query, or `None` when `query` is not one.
+    ///
+    /// The shape is `\<id>` followed by whitespace: the first token after the
+    /// delimiter must be an enabled provider's id. A partial id (`\desk`), a
+    /// bare delimiter (`\`), or a delimiter not followed by whitespace falls
+    /// through to ordinary prefix matching, where the providers provider
+    /// handles the listing.
+    fn target_query(&self, query: &str) -> Option<PreprocessedQuery> {
+        let rest = query.strip_prefix(self.target_prefix.as_str())?;
+        let ws = rest.find(char::is_whitespace)?;
+        let id = &rest[..ws];
+        if !self
+            .providers
+            .iter()
+            .any(|(_, meta)| meta.enabled && meta.id == id)
+        {
+            return None;
+        }
+
+        Some(PreprocessedQuery {
+            original_query: query.to_string(),
+            prefix: Some(format!("{}{id} ", self.target_prefix)),
+            exclusive: true,
+            query: rest[ws..].trim_start().to_string(),
+        })
+    }
+
+    /// The provider-relative [`QueryContext`] for `meta`: prefix kept and text
+    /// stripped when this provider owns the query's global prefix (declared it
+    /// or is the query's target), otherwise prefix dropped and the full query
+    /// kept.
     fn provider_query_context<'a>(
         meta: &ProviderMeta,
         pre: &'a PreprocessedQuery,
+        target_prefix: &str,
     ) -> QueryContext<'a> {
-        if pre
+        let owns = pre
             .prefix
             .as_deref()
-            .is_some_and(|pfx| meta.prefixes.iter().any(|m| m == pfx))
-        {
+            .is_some_and(|prefix| matches_prefix(meta, target_prefix, prefix));
+        if owns {
             QueryContext {
                 prefix: pre.prefix.as_deref(),
                 query: &pre.query,
@@ -185,11 +279,11 @@ impl ProviderCollection {
     /// Query each provider and group its entries with the query they should
     /// be fuzzy-scored against. Entries are annotated with their provider id.
     ///
-    /// When the query's global prefix is declared exclusive (see
-    /// [`ProviderConfig::exclusive_prefixes`](super::config::ProviderConfig::exclusive_prefixes)),
-    /// only providers declaring that prefix are queried — every other
-    /// provider, including providers with no prefixes of their own, is
-    /// skipped for that keystroke.
+    /// Only providers for which [`matches_query`] holds are queried: those
+    /// owning the active prefix, plus — unless the prefix is exclusive or the
+    /// provider is prefix-only — every other provider. A `\<id> ` target and
+    /// the bare listing prefix `\` are exclusive, so only the targeted or
+    /// listing provider answers.
     ///
     /// Scoring itself is owned by [`crate::engine::Engine`]; export the raw
     /// groups here so the engine can hand them to the
@@ -198,20 +292,14 @@ impl ProviderCollection {
         &mut self,
         pre: &PreprocessedQuery,
     ) -> Vec<QueryGroup<EntryMeta>> {
-        let active = pre.prefix.as_deref();
-        let exclusive = active.is_some_and(|pfx| self.exclusive_prefixes.iter().any(|e| e == pfx));
+        let target_prefix = self.target_prefix.clone();
         self.providers
             .iter_mut()
             .filter_map(|(p, meta)| {
-                if !meta.enabled {
+                if !matches_query(meta, &target_prefix, pre) {
                     return None;
                 }
-                let ctx = Self::provider_query_context(meta, pre);
-                // `prefix_only` asks for the prefix outright; an exclusive
-                // prefix asks on behalf of every provider that declared it.
-                if (exclusive || meta.prefix_only) && ctx.prefix.is_none() {
-                    return None;
-                }
+                let ctx = Self::provider_query_context(meta, pre, &target_prefix);
                 let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
                     e.entry.provider_id = Some(meta.id.clone());
@@ -226,17 +314,18 @@ impl ProviderCollection {
 
     /// Notify the provider that produced `entry_id` that the entry was
     /// selected. The [`QueryContext`] built for the provider is
-    /// provider-relative: `prefix` is `Some` only when the global prefix is
-    /// in the provider's own prefix list. No-op when the provider is no
-    /// longer registered.
+    /// provider-relative: `prefix` is `Some` only when the provider owns the
+    /// query's global prefix (declared it or is the query's target). No-op
+    /// when the provider is no longer registered.
     pub fn handle(&mut self, provider_id: &str, entry_id: &str, pre: &PreprocessedQuery) {
+        let target_prefix = self.target_prefix.clone();
         for (provider, meta) in &mut self.providers {
             if meta.id != provider_id {
                 continue;
             }
             provider.handle(HandleContext {
                 entry_id,
-                query: Self::provider_query_context(meta, pre),
+                query: Self::provider_query_context(meta, pre, &target_prefix),
             });
             break;
         }
@@ -248,6 +337,11 @@ impl ProviderCollection {
             .iter()
             .map(|(_, meta)| meta.clone())
             .collect()
+    }
+
+    /// The delimiter introducing a provider target, from config (never empty).
+    pub fn target_prefix(&self) -> &str {
+        &self.target_prefix
     }
 
     /// The number of registered providers.
@@ -288,6 +382,7 @@ mod tests {
         let config = ProviderConfig {
             builtin: HashMap::new(),
             exclusive_prefixes: exclusive.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
         };
         ProviderCollection::new_with_config(dir, true, &config).unwrap()
     }
@@ -392,6 +487,204 @@ mod tests {
         let pre = c.preprocess_query("== 2");
         assert_eq!(pre.prefix.as_deref(), Some("=="));
         assert_eq!(pre.query, " 2");
+    }
+
+    #[test]
+    fn target_requires_trailing_whitespace() {
+        let c = collection();
+        // No trailing space: not a target, and nothing declares `\`, so no
+        // prefix resolves either.
+        let pre = c.preprocess_query("\\desktop");
+        assert_eq!(pre.prefix, None);
+
+        let pre = c.preprocess_query("\\desktop fire");
+        assert_eq!(pre.prefix.as_deref(), Some("\\desktop "));
+        assert!(pre.exclusive);
+        assert_eq!(pre.query, "fire");
+        assert_eq!(pre.original_query, "\\desktop fire");
+    }
+
+    #[test]
+    fn configured_target_prefix_replaces_the_default() {
+        let dir = std::env::temp_dir().join(format!(
+            "huffi-providers-target-prefix-{}",
+            std::process::id()
+        ));
+        let config = ProviderConfig {
+            target_prefix: "@".to_string(),
+            ..Default::default()
+        };
+        let mut c = ProviderCollection::new_with_config(&dir, true, &config).unwrap();
+        c.add_provider(Box::new(TrackingProvider::new(
+            "calc",
+            vec![],
+            Arc::new(Mutex::new(Vec::new())),
+        )))
+        .unwrap();
+
+        assert_eq!(c.target_prefix(), "@");
+        let pre = c.preprocess_query("@calc 2");
+        assert_eq!(pre.prefix.as_deref(), Some("@calc "));
+        assert!(pre.exclusive);
+        assert_eq!(pre.query, "2");
+        assert_eq!(
+            c.preprocess_query("\\calc 2").prefix,
+            None,
+            "the default delimiter no longer targets once overridden"
+        );
+
+        let empty = ProviderConfig {
+            target_prefix: String::new(),
+            ..Default::default()
+        };
+        let c = ProviderCollection::new_with_config(&dir, true, &empty).unwrap();
+        assert_eq!(c.target_prefix(), "\\", "an empty prefix falls back");
+    }
+
+    #[test]
+    fn target_queries_only_the_named_provider() {
+        let mut c = collection();
+        let calls: CallLog = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::new(
+            "desk",
+            vec![],
+            Arc::clone(&calls),
+        )))
+        .unwrap();
+        c.add_provider(Box::new(TrackingProvider::new(
+            "other",
+            vec![],
+            Arc::clone(&calls),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("\\desk fi");
+        let _ = c.grouped_entries(&pre);
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![(
+                "desk".to_string(),
+                Some("\\desk ".to_string()),
+                "fi".to_string()
+            )],
+            "only the targeted provider is queried, with the target token as its prefix"
+        );
+    }
+
+    #[test]
+    fn target_passes_body_verbatim() {
+        let mut c = collection();
+        let calls: CallLog = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::new(
+            "calc",
+            vec!["="],
+            Arc::clone(&calls),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("\\calc = 2 + 2");
+        assert_eq!(pre.prefix.as_deref(), Some("\\calc "));
+        assert!(pre.exclusive);
+        assert_eq!(pre.query, "= 2 + 2", "the target's own `=` is left alone");
+
+        let _ = c.grouped_entries(&pre);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![(
+                "calc".to_string(),
+                Some("\\calc ".to_string()),
+                "= 2 + 2".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn disabled_provider_is_not_targetable() {
+        let dir = std::env::temp_dir().join(format!(
+            "huffi-providers-target-disabled-{}",
+            std::process::id()
+        ));
+        let config = ProviderConfig {
+            builtin: HashMap::from([(
+                "calc".to_string(),
+                ProviderOverride {
+                    name: None,
+                    enabled: Some(false),
+                    prefixes: None,
+                    prefix_only: None,
+                    extra: None,
+                },
+            )]),
+            exclusive_prefixes: Vec::new(),
+            ..Default::default()
+        };
+        let mut c = ProviderCollection::new_with_config(dir, true, &config).unwrap();
+        c.add_provider(Box::new(TrackingProvider::new(
+            "calc",
+            vec!["="],
+            Arc::new(Mutex::new(Vec::new())),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("\\calc 2");
+        assert_eq!(pre.prefix, None, "a disabled provider cannot be targeted");
+    }
+
+    #[test]
+    fn handle_passes_target_relative_context() {
+        let mut c = collection();
+        let handles: HandleLog = Arc::new(Mutex::new(Vec::new()));
+        c.add_provider(Box::new(TrackingProvider::with_handle_log(
+            "calc",
+            vec!["="],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&handles),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("\\calc 2 + 2");
+        c.handle("calc", "calc-entry", &pre);
+
+        assert_eq!(
+            *handles.lock().unwrap(),
+            vec![(
+                "calc-entry".to_string(),
+                Some("\\calc ".into()),
+                "2 + 2".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn target_listing_prefix_is_exclusive() {
+        let mut c = collection();
+        let calls: CallLog = Arc::new(Mutex::new(Vec::new()));
+        // Stand in for the providers provider declaring the target prefix.
+        c.add_provider(Box::new(TrackingProvider::new(
+            "providers",
+            vec!["\\"],
+            Arc::clone(&calls),
+        )))
+        .unwrap();
+        c.add_provider(Box::new(TrackingProvider::new(
+            "desk",
+            vec![],
+            Arc::clone(&calls),
+        )))
+        .unwrap();
+
+        let pre = c.preprocess_query("\\desk");
+        assert_eq!(pre.prefix.as_deref(), Some("\\"));
+        assert!(pre.exclusive);
+        let _ = c.grouped_entries(&pre);
+
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.iter().map(|(id, _, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["providers"],
+            "the bare target prefix is exclusive"
+        );
     }
 
     #[test]
@@ -571,6 +864,7 @@ mod tests {
         let config = ProviderConfig {
             builtin: overrides,
             exclusive_prefixes: Vec::new(),
+            ..Default::default()
         };
         let c = ProviderCollection::new_with_config(dir, true, &config).unwrap();
         let providers = c.providers();
@@ -614,6 +908,7 @@ mod tests {
                 },
             )]),
             exclusive_prefixes: Vec::new(),
+            ..Default::default()
         };
         let mut c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
         c.add_provider(Box::new(ExtraCapturingProvider {
@@ -726,6 +1021,7 @@ mod tests {
                 },
             )]),
             exclusive_prefixes: Vec::new(),
+            ..Default::default()
         };
         let mut c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
         c.add_provider(Box::new(ConfigDisabled {
@@ -987,6 +1283,7 @@ mod tests {
                 },
             )]),
             exclusive_prefixes: vec!["!".to_string()],
+            ..Default::default()
         };
         let mut c = ProviderCollection::new_with_config(dir, true, &config).unwrap();
         c.add_provider(Box::new(TrackingProvider::new(
@@ -1078,6 +1375,7 @@ mod tests {
                 },
             )]),
             exclusive_prefixes: Vec::new(),
+            ..Default::default()
         };
         let c = ProviderCollection::new_with_config(dir, true, &override_cfg).unwrap();
         let providers = c.providers();

@@ -69,17 +69,32 @@ empty_query_score = 0.8
 # Exclusivity is judged against the *resolved* prefix (the longest one the
 # input starts with), so listing "=" leaves `==` queries shared. Empty (the
 # default) means every enabled provider shares every query.
+# The built-in `\` provider-listing prefix is always exclusive, and `\<id> `
+# targets one provider by id regardless of this list.
 # exclusive_prefixes = ["=", "!", ":"]
+# The delimiter that introduces a provider target: `\<id> ` scopes the query
+# to the provider with id <id>, and a bare delimiter (or a partial one) lists
+# the providers. Defaults to `\`. Must not be empty; an empty value falls back
+# to the default.
+# target_prefix = "\\"
+
+# Every built-in provider also accepts the same four overrides under its own
+# [engine.provider.builtin.<id>] table:
+#
+#   name        = "..."    display name in the UI; defaults to the provider id,
+#                          e.g. set "Applications" for the desktop provider
+#   enabled     = true     set false to skip the provider entirely
+#   prefixes    = []       trigger prefixes; empty means always active
+#   prefix_only = false    query the provider only while the input starts with
+#                          one of its prefixes
+#
+# A provider with prefixes but prefix_only = false still answers every query;
+# its prefixes then only mark a scope. Provider-specific settings live under
+# the nested `.extra` table, which is passed through verbatim. The sections
+# below show each provider's trigger and its own `.extra` keys.
 
 [engine.provider.builtin.desktop]
-# Display name shown in the UI (defaults to the provider id).
-# name    = "Applications"
-# Override whether the provider participates in queries.
-# enabled = true
-# Override trigger prefixes (empty = always active).
-# prefixes = []
-# Only call the provider when a query matches one of its prefixes.
-# prefix_only = false
+# Always active: reads `.desktop` files and also answers the unprefixed query.
 
 [engine.provider.builtin.desktop.extra]
 # Fuzzy-match field weights for the desktop-entry provider.
@@ -89,10 +104,7 @@ weight_generic_name = 0.7
 weight_comment      = 0.5
 
 [engine.provider.builtin.nix]
-# Trigger prefix: `!firefox` runs `nix run nixpkgs#firefox`.
-# prefixes = ["!"]
-# Only call the provider when a query matches one of its prefixes.
-# prefix_only = true
+# Trigger prefix `!`: `!firefox` runs `nix run nixpkgs#firefox`.
 
 [engine.provider.builtin.nix.extra]
 # Fuzzy-match field weights for the nix run provider. The package description
@@ -106,10 +118,7 @@ weight_desc         = 0.0
 cache_max_age_secs  = 604800
 
 [engine.provider.builtin.runner]
-# Trigger prefix: `>cargo test` runs `cargo test` in the terminal.
-# prefixes = [">"]
-# Only call the provider when a query matches one of its prefixes.
-# prefix_only = true
+# Trigger prefix `>`: `>cargo test` runs `cargo test` in the terminal.
 
 [engine.provider.builtin.runner.extra]
 # Shell history files to suggest from, in order (later files win when the
@@ -120,12 +129,17 @@ cache_max_age_secs  = 604800
 # once at startup, never per query. Default: 5000.
 max_history_lines  = 5000
 
+[engine.provider.builtin.cliphist]
+# Trigger prefix `|`: `|text` searches clipboard history; selecting an entry
+# copies it back to the clipboard. Needs the `cliphist` binary in PATH.
+
+[engine.provider.builtin.cliphist.extra]
+# Keep only the `max_entries` most recent clipboard entries; 0 = unlimited.
+# Applied per query. Default: 1000.
+max_entries = 1000
+
 [engine.provider.builtin.unicode]
-# Trigger prefix: `:smile` copies 😄
-# prefixes = [":"]
-# Only call the provider when a query matches one of its prefixes.
-# prefix_only = true
-# Set `enabled = false` to skip the provider entirely
+# Trigger prefix `:`: `:smile` copies 😄.
 
 [engine.provider.builtin.unicode.extra]
 # Fuzzy-match field weights for the Unicode provider: one field for the name
@@ -138,9 +152,7 @@ weight_codepoint    = 0.6
 [engine.provider.builtin.actions]
 # The actions provider ships always active with no prefix, so configured
 # actions compete in every query like applications do, ranked by usage. Gate
-# them behind a prefix instead with e.g.:
-# prefixes = [">"]
-# prefix_only = true
+# them behind a prefix instead by setting `prefixes` and `prefix_only` here.
 
 [engine.provider.builtin.actions.extra]
 # Fuzzy-match field weights: one field per entry title, one per keyword.
@@ -150,7 +162,7 @@ weight_keyword = 0.8
 # Static entries, one table each, in config order. Each entry needs a title
 # and exactly one of exec, terminal_exec, clipboard. id defaults to a slug of
 # the title ("Open project huffi" → "open-project-huffi") and the history key
-# is actions.<id>; set id explicitly if you plan to retitle entries, since a
+# is actions-<id>; set id explicitly if you plan to retitle entries, since a
 # new title starts the history over.
 #
 # Optional per entry:
@@ -174,7 +186,7 @@ weight_keyword = 0.8
 #                                     $HOME (exec / terminal_exec only)
 #   history = false                 — keep this row out of the history model
 #                                     (default true)
-#   history_key = "..."             — override the derived actions.<id>;
+#   history_key = "..."             — override the derived actions-<id>;
 #                                     conflicts with history = false
 [[engine.provider.builtin.actions.extra.entries]]
 title    = "Suspend"

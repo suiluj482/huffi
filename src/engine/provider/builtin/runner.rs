@@ -9,6 +9,11 @@ use crate::engine::provider::{
     parse_extra_config,
 };
 
+/// History namespace for runnable commands: every entry's history key is
+/// `runner-<command>`, so a command can never collide with a key from another
+/// provider (a desktop entry literally named `ls`, say).
+const HISTORY_PREFIX: &str = "runner";
+
 /// Per-provider tuning knobs. When provided via
 /// `[engine.provider.builtin.runner.extra]`, the fields are parsed from the
 /// arbitrary extra config, mirroring [`super::NixConfig`].
@@ -140,7 +145,7 @@ fn run_entry(command: &str, shell: &str) -> Entry {
     entry(format!("run:{command}"), command)
         .icon_name("utilities-terminal")
         .terminal_hold(shell_argv(shell, command))
-        .history_key(command)
+        .history_key(format!("{HISTORY_PREFIX}-{command}"))
         .score(1.0)
 }
 
@@ -149,7 +154,7 @@ fn history_entry(command: &str, shell: &str) -> Entry {
     entry(format!("hist:{command}"), command)
         .icon_name("utilities-terminal")
         .terminal_hold(shell_argv(shell, command))
-        .history_key(command)
+        .history_key(format!("{HISTORY_PREFIX}-{command}"))
         .match_field(command)
 }
 
@@ -357,7 +362,7 @@ mod tests {
         assert_eq!(entries[0].entry.title, "git s");
         assert_eq!(entries[0].entry.id, "run:git s");
         assert!(matches!(entries[0].rank, Rank::Score(s) if s == 1.0));
-        assert_eq!(entries[0].history_key.as_deref(), Some("git s"));
+        assert_eq!(entries[0].history_key.as_deref(), Some("runner-git s"));
         assert_eq!(entries[1].entry.id, "hist:git status");
     }
 
@@ -383,7 +388,7 @@ mod tests {
             "corpus copy of the exact query is skipped"
         );
         assert_eq!(entries[0].entry.id, "run:ls");
-        assert_eq!(entries[0].history_key.as_deref(), Some("ls"));
+        assert_eq!(entries[0].history_key.as_deref(), Some("runner-ls"));
     }
 
     #[test]
@@ -401,7 +406,10 @@ mod tests {
                 }
                 other => panic!("expected TerminalHold exec, got {other:?}"),
             }
-            assert_eq!(e.history_key.as_deref(), Some(e.entry.title.as_str()));
+            assert_eq!(
+                e.history_key,
+                Some(format!("{HISTORY_PREFIX}-{}", e.entry.title))
+            );
         }
     }
 

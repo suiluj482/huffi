@@ -154,6 +154,11 @@ impl Engine {
     pub fn providers(&self) -> Vec<ProviderMeta> {
         self.providers.providers()
     }
+
+    /// The delimiter introducing a provider target, for the UI.
+    pub fn target_prefix(&self) -> &str {
+        self.providers.target_prefix()
+    }
 }
 
 #[cfg(test)]
@@ -475,6 +480,52 @@ mod tests {
             *calls.lock().unwrap(),
             1,
             "a cold select resolves the query once but does not double-query"
+        );
+    }
+
+    #[test]
+    fn target_prefix_scopes_to_one_provider_and_lists_providers() {
+        use crate::engine::provider::ProvidersProvider;
+
+        let mut e = engine();
+        e.add_provider(Box::new(TestProvider::new(
+            "desktop",
+            vec![match_fields_entry("firefox", "Firefox")],
+        )))
+        .unwrap();
+        e.add_provider(Box::new(TestProvider::with_prefixes(
+            "calc",
+            vec!["="],
+            vec![match_fields_entry("sum", "2 + 2 = 4")],
+        )))
+        .unwrap();
+        let target_prefix = e.target_prefix().to_string();
+        let snapshot = e.providers();
+        e.add_provider(Box::new(ProvidersProvider::new(snapshot, target_prefix)))
+            .unwrap();
+
+        let reply = e.query("\\calc 2 + 2");
+        assert_eq!(reply.pre.prefix.as_deref(), Some("\\calc "));
+        assert!(
+            reply
+                .scored
+                .iter()
+                .all(|s| s.entry.provider_id.as_deref() == Some("calc")),
+            "a targeted query only returns the targeted provider's entries"
+        );
+
+        let reply = e.query("\\");
+        assert_eq!(reply.pre.prefix.as_deref(), Some("\\"));
+        assert!(
+            reply.scored.iter().any(|s| s.entry.id == "provider-calc"),
+            "the bare prefix lists providers"
+        );
+        assert!(
+            reply
+                .scored
+                .iter()
+                .all(|s| s.entry.provider_id.as_deref() == Some("providers")),
+            "the listing prefix is exclusive"
         );
     }
 

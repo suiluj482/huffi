@@ -405,7 +405,7 @@ fn actions_provider_serves_configured_entries() {
         .find(|r| r.entry.provider_id.as_deref() == Some("actions"))
         .expect("a configured action for 'sleep'");
     assert_eq!(hit.entry.id, "suspend");
-    assert_eq!(hit.history_key.as_deref(), Some("actions.suspend"));
+    assert_eq!(hit.history_key.as_deref(), Some("actions-suspend"));
     match &hit.entry.action {
         Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["systemctl".to_string(), "suspend".to_string()]);
