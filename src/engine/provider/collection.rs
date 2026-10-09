@@ -7,9 +7,9 @@ use crate::engine::scoring::QueryGroup;
 
 use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
-    ActionsProvider, CalculatorProvider, DesktopEntryProvider, EntryMeta, HandleContext,
-    InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult, QueryContext,
-    RunnerProvider, UnicodeProvider, CliphistProvider,
+    ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider,
+    EntryMeta, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult,
+    QueryContext, RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -106,6 +106,7 @@ impl ProviderCollection {
         collection.add_provider(Box::new(UnicodeProvider::new()))?;
         collection.add_provider(Box::new(RunnerProvider::new()))?;
         collection.add_provider(Box::new(CliphistProvider::new()))?;
+        collection.add_provider(Box::new(AiProvider::new()))?;
         Ok(collection)
     }
 }
