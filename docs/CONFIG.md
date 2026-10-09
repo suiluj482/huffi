@@ -149,6 +149,35 @@ weight_name         = 1.0
 weight_shortcode    = 1.3
 weight_codepoint    = 0.6
 
+[engine.provider.builtin.ai]
+# Trigger prefix `?`: type a prompt under it and press Enter to submit. The
+# submit entry's action appends `trigger_suffix` to the query; once the query
+# ends with the suffix the provider makes a (blocking) OpenAI-compatible
+# /chat/completions request and shows the answer. Selecting the answer copies
+# its full text to the clipboard. Defaults to a local Ollama server. At
+# startup the provider checks the server is reachable and, when it lists its
+# models, that `model` below exists; otherwise it is disabled with a reason.
+
+[engine.provider.builtin.ai.extra]
+# Suffix appended to the query to trigger the request. Default: "?".
+trigger_suffix = "?"
+# OpenAI-compatible API root; `/chat/completions` is appended. Defaults to
+# Ollama; point at any other OpenAI-compatible server as needed.
+base_url       = "http://localhost:11434/v1"
+# Bearer token sent when non-empty. Ollama ignores it, so it may be left out.
+# Set it for servers that require authentication.
+# api_key      = "sk-..."
+# Model name sent in the request. Must be one the server offers; a `:tag`
+# is optional (`translategemma` matches `translategemma:latest`).
+model          = "translategemma"
+# System message steering the answer.
+system_prompt  = "Answer as briefly as possible, in a single line."
+temperature    = 0.7
+# Optional `max_tokens` cap; omit (or set to null) to leave it off.
+max_tokens     = 256
+# Whole-request timeout, in seconds.
+timeout_secs   = 30
+
 [engine.provider.builtin.actions]
 # The actions provider ships always active with no prefix, so configured
 # actions compete in every query like applications do, ranked by usage. Gate
