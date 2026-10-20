@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::engine::scoring::history::QueryHistory;
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
@@ -287,6 +288,21 @@ pub struct QueryContext<'a> {
     pub query: &'a str,
     /// The full original query as typed, including the prefix.
     pub original: &'a str,
+    /// The precomputed usage history for [`original`](Self::original),
+    /// shared by every provider answering this query and empty when the
+    /// query has no recorded history.
+    ///
+    /// Keys are looked up under the original query — the same lookup history
+    /// scoring performs — so a prefix-triggered provider sees the history of
+    /// the full typed text, not of its stripped `query`. Each entry carries
+    /// the decayed [`effective`](crate::engine::scoring::history::QueryHistoryEntry::effective)
+    /// score, its [`score`](crate::engine::scoring::history::QueryHistoryEntry::score)
+    /// normalized against the query's strongest key, and its sample count;
+    /// [`confidence`](crate::engine::scoring::history::QueryHistory::confidence)
+    /// says how much evidence backs the query as a whole. The final ranking
+    /// narrows this to the entries actually returned, so treat these numbers
+    /// as a query-level view rather than the engine's own blend.
+    pub history: &'a QueryHistory,
 }
 
 /// The context of a [`Provider::handle`] notification: which of the
@@ -335,7 +351,9 @@ pub struct HandleContext<'a> {
 ///   `prefix: None` and the full typed text — unless the global prefix is
 ///   listed in [`ProviderConfig::exclusive_prefixes`](config::ProviderConfig::exclusive_prefixes),
 ///   in which case such a provider is not called at all. [`QueryContext::original`]
-///   always holds the full query as typed, including the prefix.
+///   always holds the full query as typed, including the prefix, and
+///   [`QueryContext::history`] carries the precomputed usage history for
+///   that text so a provider can react to prior usage.
 /// - [`handle()`](Self::handle) — called when one of this provider's
 ///   entries is selected by the user, in addition to the entry's action.
 ///   The default implementation does nothing; overrides can update provider
@@ -425,6 +443,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert_eq!(entries.len(), 3);
     }
@@ -454,6 +473,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         };
         let a = provider.query(ctx);
         let b = provider.query(ctx);

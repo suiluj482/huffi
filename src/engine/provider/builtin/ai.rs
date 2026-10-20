@@ -367,12 +367,14 @@ fn parse_completion(value: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
+    use crate::engine::scoring::history::QueryHistory;
 
-    fn query(text: &str) -> QueryContext<'_> {
+    fn query<'a>(text: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
         QueryContext {
             prefix: Some("?"),
             query: text,
             original: text,
+            history,
         }
     }
 
@@ -414,7 +416,7 @@ mod tests {
 
     #[test]
     fn submit_entry_shows_the_suffix_as_title_and_submit_as_subtitle() {
-        let entries = AiProvider::new().query(query("hello"));
+        let entries = AiProvider::new().query(query("hello", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.title, "hello?");
         assert_eq!(entries[0].entry.subtitle.as_deref(), Some("Submit"));
@@ -433,7 +435,7 @@ mod tests {
     fn empty_prompt_offers_a_type_to_query_hint() {
         let mut provider = AiProvider::new();
         for text in ["", "   ", "?"] {
-            let entries = provider.query(query(text));
+            let entries = provider.query(query(text, &QueryHistory::EMPTY));
             assert_eq!(entries.len(), 1, "one hint entry for {text:?}");
             assert_eq!(entries[0].entry.id, "ai-hint");
             assert_eq!(entries[0].entry.title, "Type to query");
@@ -447,7 +449,7 @@ mod tests {
         let mut provider = AiProvider::new();
         provider.cache = Some(("hello".into(), "world".into()));
 
-        let entries = provider.query(query("hello?"));
+        let entries = provider.query(query("hello?", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.title, "world");
         assert_eq!(copy_value(&entries[0]), "world");

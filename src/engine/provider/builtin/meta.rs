@@ -197,6 +197,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::scoring::history::QueryHistory;
 
     fn provider(dir: &str) -> MetaProvider {
         let mut p = MetaProvider::new("/tmp/x.sock", dir, false);
@@ -218,6 +219,7 @@ mod tests {
                     prefix: None,
                     query: "",
                     original: "",
+                    history: &QueryHistory::EMPTY,
                 })
                 .is_empty(),
             "prefix_only gating is the collection's job, not the provider's query"
@@ -228,6 +230,7 @@ mod tests {
                     prefix: None,
                     query: "uptime",
                     original: "uptime",
+                    history: &QueryHistory::EMPTY,
                 })
                 .is_empty()
         );
@@ -240,6 +243,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         assert_eq!(entries.len(), 11);
         assert!(entries.iter().any(|e| e.entry.id == "meta-uptime"));
@@ -259,6 +263,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         for e in &entries {
             assert!(
@@ -282,6 +287,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         let memory = entries
             .iter()
@@ -318,6 +324,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         let kill = entries
             .iter()
@@ -341,6 +348,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         let open = entries
             .iter()
@@ -364,6 +372,7 @@ mod tests {
             prefix: Some("@"),
             query: "sock",
             original: "@sock",
+            history: &QueryHistory::EMPTY,
         });
         let socket = entries
             .iter()
@@ -393,6 +402,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         let dry = entries
             .iter()
@@ -416,6 +426,7 @@ mod tests {
             prefix: Some("@"),
             query: "",
             original: "@",
+            history: &QueryHistory::EMPTY,
         });
         let socket = entries
             .iter()

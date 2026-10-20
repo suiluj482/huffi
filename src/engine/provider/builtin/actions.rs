@@ -369,6 +369,7 @@ fn build(id: &str, cfg: &ActionEntry, weights: Weights) -> Entry {
 mod tests {
     use super::*;
     use crate::engine::provider::ExecMode;
+    use crate::engine::scoring::history::QueryHistory;
 
     /// The provider never reads `data_dir`, so the path is a placeholder.
     fn init(extra: Option<serde_json::Value>) -> (ActionsProvider, ProviderResult) {
@@ -402,6 +403,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert!(entries.is_empty());
     }
@@ -433,6 +435,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert_eq!(entries.len(), 2);
 
@@ -497,6 +500,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         match &entries[0].entry.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
@@ -530,6 +534,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         match &entries[0].entry.action {
             crate::engine::provider::Action::Exec { mode, cwd, .. } => {
@@ -637,6 +642,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         let row = &entries[0];
         assert_eq!(row.entry.details["level"], "80%");
@@ -710,6 +716,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert!(
             entries[0].history_key.is_none(),
@@ -732,6 +739,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert_eq!(entries[0].history_key.as_deref(), Some("legacy-key"));
     }
@@ -783,6 +791,7 @@ mod tests {
             prefix: None,
             query: "",
             original: "",
+            history: &QueryHistory::EMPTY,
         });
         assert_eq!(entries[0].entry.id, "snow");
         assert_eq!(entries[0].history_key.as_deref(), Some("actions-snow"));

@@ -142,6 +142,14 @@ The `QueryContext` fields:
 - `query` — the text after the prefix when a prefix matched, otherwise
   the full typed text.
 - `original` — the full query as typed, including the prefix.
+- `history` — the history recorded for the exact original query,
+  precomputed once per query: the keys with their decayed and normalized
+  scores, plus the query's confidence. Every provider answering a query
+  sees the same view; use it to react to prior usage (e.g. hide or
+  promote entries the user already launched for this text). It is looked
+  up under `original`, so a prefix-triggered provider still sees the
+  history recorded for the full typed query, not for its stripped
+  `query`.
 
 ```
 User types         prefix     query
@@ -297,6 +305,21 @@ A provider whose entry ids already begin with the provider id (like
 provider that returns a single entry named after the provider, like the
 calculator, can use the bare provider id. Don't invent a second namespace
 like `huffi-…`; the provider id is the namespace.
+
+Providers can read the history recorded for the current query from
+`ctx.history` — in both `query()` and `handle()` — to react to prior
+usage. The history is keyed on the original typed query (not the
+prefix-stripped one) and is the same for every provider answering that
+query. Each entry carries:
+
+- `effective` — the decayed score of the key,
+- `score` — that score normalized against the strongest key recorded for
+  this query, so the top key reads `1.0` and the others scale down,
+- `samples` — how many launches back the score is built from.
+
+`ctx.history.confidence()` scales from 0 (cold) toward 1 as the query's
+keys accumulate launches. The engine builds the history once per query,
+so iterating it is free of decay math.
 
 ### Query suggestions
 

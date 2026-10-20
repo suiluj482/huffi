@@ -74,6 +74,25 @@ This is the same trick used by frecency implementations like Mozilla's
 `moz_inputhistory` and various frecency-based fuzzy finders — O(1) per
 update, no background jobs, no unbounded history log.
 
+### One decay pass, two projections
+
+When a query runs, the engine decays every key recorded for the exact
+typed string **once**, producing the precomputed `QueryHistory` for the
+query, shared by the whole query:
+
+- the *provider view* normalizes each key's decayed score against the
+  strongest key for that query, so providers see relative strengths
+  (`score`, top key = 1.0) without doing any decay math themselves;
+- the *ranking view* (used in the confidence-weighted blend below)
+  recomputes the peak and confidence over only the keys that actually
+  appear in the result set, so history for keys a provider did not return
+  cannot dominate the ranking.
+
+Both projections come from the same decay pass; neither re-reads or
+re-decays the store. The precomputed history is reused when a selection
+is handled, so a provider's `handle()` sees exactly the history the
+matching `query()` saw.
+
 ## Confidence-weighted blending
 
 This is the key piece that avoids naive prefix backoff (see "Why not

@@ -92,6 +92,7 @@ impl Provider for ProvidersProvider {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
+    use crate::engine::scoring::history::QueryHistory;
 
     fn meta(id: &str, name: &str, prefixes: &[&str], enabled: bool) -> ProviderMeta {
         ProviderMeta {
@@ -127,6 +128,7 @@ mod tests {
             prefix: Some("\\"),
             query: "",
             original: "\\",
+            history: &QueryHistory::EMPTY,
         })
     }
 
