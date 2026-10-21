@@ -367,6 +367,7 @@ fn parse_completion(value: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
+    use crate::engine::provider::Generation;
     use crate::engine::scoring::history::QueryHistory;
 
     fn query<'a>(text: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
@@ -375,6 +376,7 @@ mod tests {
             query: text,
             original: text,
             history,
+            generation: Generation::default(),
         }
     }
 

@@ -313,6 +313,7 @@ fn save_cache(path: &Path, packages: &[PackageInfo]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::Generation;
     use crate::engine::scoring::history::QueryHistory;
 
     fn sample_json() -> &'static str {
@@ -510,6 +511,7 @@ mod tests {
                 query: "",
                 original: "",
                 history: &QueryHistory::EMPTY,
+                generation: Generation::default(),
             })
             .len(),
             1
@@ -520,6 +522,7 @@ mod tests {
                 query: "hello",
                 original: "hello",
                 history: &QueryHistory::EMPTY,
+                generation: Generation::default(),
             })
             .len(),
             1
@@ -541,6 +544,7 @@ mod tests {
             query: "hell",
             original: "!hell",
             history: &QueryHistory::EMPTY,
+            generation: Generation::default(),
         });
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.id, "nix-hello");

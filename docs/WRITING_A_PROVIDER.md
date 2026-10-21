@@ -150,6 +150,10 @@ The `QueryContext` fields:
   up under `original`, so a prefix-triggered provider still sees the
   history recorded for the full typed query, not for its stripped
   `query`.
+- `generation` — where you are in the app's lifetime: `generation.session`
+  bumps each time the launcher is revealed for a round of typing, and
+  `generation.query` bumps each time providers actually run (a keystroke
+  that missed the engine's cache). See "Caching per session" below.
 
 ```
 User types         prefix     query
@@ -169,6 +173,19 @@ is `None`, since it has nothing to offer for un-prefixed input. This is
 exactly what [`CalculatorProvider`] does — it returns `vec![]` at the top
 of `query()` when no prefix matched, staying performant and out of the way for normal app
 searching.
+
+### Caching per session
+
+Not every source belongs in `init()` — some, like the clipboard history,
+change between uses but are too slow to reload on every keystroke. For
+those, cache against `ctx.generation.session`: it bumps each time the
+launcher is revealed, so the first query of each open window reloads and
+every keystroke after that reuses the cached entries. The entries may go
+slightly stale while the window stays open — that is the accepted
+tradeoff. `CliphistProvider` is the reference pattern: remember the
+session you loaded for, reload when it changes. `ctx.generation.query`
+is available for finer-grained caching, but most providers only need the
+session counter.
 
 ### `handle(ctx)`
 

@@ -361,6 +361,7 @@ fn placeholder() -> Entry {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
+    use crate::engine::provider::Generation;
     use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::QueryHistory;
 
@@ -384,6 +385,7 @@ mod tests {
             query: text,
             original: text,
             history: &QueryHistory::EMPTY,
+            generation: Generation::default(),
         })
     }
 

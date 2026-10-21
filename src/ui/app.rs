@@ -354,6 +354,7 @@ impl Launcher {
     }
 
     pub fn show_with_query(self: &Rc<Self>, query: String) {
+        self.engine.lock().unwrap().begin_session();
         {
             let mut st = self.state.borrow_mut();
             st.query = query.clone();

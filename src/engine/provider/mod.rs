@@ -273,6 +273,25 @@ pub struct InitContext<'a> {
     pub extra: Option<serde_json::Value>,
 }
 
+/// Where in the app's lifetime a [`Provider::query`] call is happening.
+///
+/// Both counters start at 0 and only move forward, so providers can cache
+/// expensive data against the dimension that matches its freshness needs:
+///
+/// - `session` — bump [`begin_session`](crate::engine::Engine::begin_session)
+///   when the launcher is revealed for a round of typing. Cache against this
+///   to load once per session instead of on every keystroke.
+/// - `query` — bump each time providers actually run (a keystroke that
+///   missed the engine's query cache). Always the generation of the run
+///   currently in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Generation {
+    /// Bumped each time the launcher is revealed for a round of typing.
+    pub session: u64,
+    /// Bumped each time providers actually run.
+    pub query: u64,
+}
+
 /// The context of a single [`Provider::query`] invocation.
 ///
 /// Wrapped in a struct so future per-query inputs can be added without
@@ -303,6 +322,8 @@ pub struct QueryContext<'a> {
     /// narrows this to the entries actually returned, so treat these numbers
     /// as a query-level view rather than the engine's own blend.
     pub history: &'a QueryHistory,
+    /// Where in the app's lifetime this call is happening; see [`Generation`].
+    pub generation: Generation,
 }
 
 /// The context of a [`Provider::handle`] notification: which of the
@@ -444,6 +465,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
+            generation: Generation::default(),
         });
         assert_eq!(entries.len(), 3);
     }
@@ -474,6 +496,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
+            generation: Generation::default(),
         };
         let a = provider.query(ctx);
         let b = provider.query(ctx);

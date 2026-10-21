@@ -251,6 +251,7 @@ fn is_zsh_meta(meta: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::Generation;
     use crate::engine::provider::{Action, ExecMode, HandleContext, QueryContext};
     use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::QueryHistory;
@@ -261,6 +262,7 @@ mod tests {
             query,
             original: query,
             history,
+            generation: Generation::default(),
         }
     }
 

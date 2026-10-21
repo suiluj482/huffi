@@ -15,7 +15,7 @@ use std::path::Path;
 
 use crate::engine::config::{EngineConfig, ExternalConfig};
 use crate::engine::provider::{
-    EntryMeta, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
+    EntryMeta, Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
 };
 use crate::engine::scoring::history::{KeyedHistoryRecord, QueryHistory};
 use crate::engine::scoring::{Scored, Scorer};
@@ -48,6 +48,7 @@ pub struct Engine {
     dry_run: bool,
     external: ExternalConfig,
     cache: Option<QueryReply>,
+    generation: Generation,
 }
 
 impl Engine {
@@ -78,7 +79,23 @@ impl Engine {
             dry_run,
             external: config.external.clone(),
             cache: None,
+            generation: Generation::default(),
         })
+    }
+
+    /// Start a new [`Generation::session`]: the launcher has been revealed
+    /// for a round of typing, so providers caching against
+    /// `generation.session` reload on the next query.
+    ///
+    /// Drops the query cache so the session's first query always re-runs
+    /// providers — a prefilled query that repeats the previous session's
+    /// last string must still let providers observe the new session.
+    ///
+    /// The UI calls this each time it shows the window; the engine itself
+    /// never bumps the session counter.
+    pub fn begin_session(&mut self) {
+        self.generation.session += 1;
+        self.cache = None;
     }
 
     pub fn add_provider(&mut self, provider: Box<dyn Provider>) -> anyhow::Result<()> {
@@ -98,16 +115,20 @@ impl Engine {
     /// Repeating the same query resolves instantly without re-running
     /// providers or scoring. The cache holds one reply, keyed by the query as
     /// typed; any history mutation drops it so scores always reflect live
-    /// history.
+    /// history. Each run that misses the cache bumps
+    /// [`Generation::query`](crate::engine::provider::Generation::query).
     pub fn query(&mut self, query: &str) -> &QueryReply {
         if !self
             .cache
             .as_ref()
             .is_some_and(|c| c.pre.original_query == query)
         {
+            self.generation.query += 1;
             let pre = self.providers.preprocess_query(query);
             let history = self.scorer.history_for(query);
-            let groups = self.providers.grouped_entries(&pre, &history);
+            let groups = self
+                .providers
+                .grouped_entries(&pre, &history, self.generation);
             let scored = self.scorer.score(groups, &history);
             self.cache = Some(QueryReply {
                 pre,
@@ -140,7 +161,8 @@ impl Engine {
             hit.entry.action.perform(&self.external);
         }
         if let Some(provider_id) = &hit.entry.provider_id {
-            self.providers.handle(provider_id, entry_id, &pre, &history);
+            self.providers
+                .handle(provider_id, entry_id, &pre, &history, self.generation);
         }
         if let Some(key) = &hit.history_key {
             self.scorer.record_launch(query, key);
@@ -234,12 +256,13 @@ mod tests {
         )
     }
 
-    /// What a provider saw in `QueryContext::history`.
+    /// What a provider saw in `QueryContext`.
     #[derive(Debug, Clone, PartialEq)]
     struct HistoryView {
         keys: Vec<String>,
         confidence: f64,
         alpha_score: f64,
+        generation: Generation,
     }
 
     fn history_view(ctx: &QueryContext) -> HistoryView {
@@ -251,14 +274,21 @@ mod tests {
                 .get("alpha")
                 .map(|entry| entry.score)
                 .unwrap_or(0.0),
+            generation: ctx.generation,
         }
     }
 
-    fn no_history() -> HistoryView {
+    /// The view on the engine's first provider run: nothing recorded yet,
+    /// and `generation.query` already bumped for the run in progress.
+    fn cold_first_run() -> HistoryView {
         HistoryView {
             keys: Vec::new(),
             confidence: 0.0,
             alpha_score: 0.0,
+            generation: Generation {
+                session: 0,
+                query: 1,
+            },
         }
     }
 
@@ -316,14 +346,14 @@ mod tests {
         e.query("al");
         assert_eq!(
             *queried.lock().unwrap(),
-            vec![no_history()],
+            vec![cold_first_run()],
             "a cold query has no recorded history"
         );
 
         e.select("al", "alpha");
         assert_eq!(
             *handled.lock().unwrap(),
-            vec![no_history()],
+            vec![cold_first_run()],
             "handle runs before the selection is recorded in history"
         );
 
@@ -374,6 +404,61 @@ mod tests {
             "the provider sees history looked up under the original query, even though its own query text is stripped"
         );
         assert_eq!(view.alpha_score, 1.0);
+    }
+
+    #[test]
+    fn generation_tracks_sessions_and_provider_runs() {
+        let mut e = engine();
+        let (provider, queried, _) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        assert_eq!(e.generation, Generation::default(), "starts at 0/0");
+
+        e.query("al");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 0,
+                query: 1
+            },
+            "each provider run sees the bumped query generation"
+        );
+
+        e.query("al");
+        assert_eq!(
+            e.generation.query, 1,
+            "a repeated query is a cache hit, not a provider run"
+        );
+
+        e.query("b");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 0,
+                query: 2
+            },
+            "a new keystroke runs providers under the next generation"
+        );
+
+        e.begin_session();
+        assert_eq!(
+            e.generation,
+            Generation {
+                session: 1,
+                query: 2
+            },
+            "begin_session bumps only the session counter"
+        );
+
+        e.query("b");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 1,
+                query: 3
+            },
+            "the next run carries the new session"
+        );
     }
 
     #[test]
@@ -730,7 +815,9 @@ mod tests {
             let pre = engine.providers.preprocess_query(q);
             let history = engine.scorer.history_for(q);
             let t = Instant::now();
-            let groups = engine.providers.grouped_entries(&pre, &history);
+            let groups = engine
+                .providers
+                .grouped_entries(&pre, &history, engine.generation);
             let group_dur = t.elapsed();
             let t = Instant::now();
             let scored = engine.scorer.score(groups, &history);
