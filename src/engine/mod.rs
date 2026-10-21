@@ -15,13 +15,18 @@ use std::path::Path;
 
 use crate::engine::config::{EngineConfig, ExternalConfig};
 use crate::engine::provider::{
-    EntryMeta, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
+    EntryMeta, Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
 };
-use crate::engine::scoring::history::KeyedHistoryRecord;
+use crate::engine::scoring::history::{KeyedHistoryRecord, QueryHistory};
 use crate::engine::scoring::{Scored, Scorer};
 
-/// The result of a query: the resolved [`PreprocessedQuery`] and the full
-/// ranked result set.
+/// The result of a query: the resolved [`PreprocessedQuery`], the
+/// precomputed [`QueryHistory`] for it, and the full ranked result set.
+///
+/// Like [`pre`](Self::pre), the history is built once before providers run
+/// and reused everywhere the query is revisited — by providers in their
+/// `QueryContext`, by the scorer's final blend, and by [`Engine::select`]
+/// when it notifies a provider of a selection.
 ///
 /// [`Engine::query`] returns a read-only reference into the engine's
 /// single-slot cache, so querying copies nothing; the UI clones only the
@@ -29,6 +34,7 @@ use crate::engine::scoring::{Scored, Scorer};
 #[derive(Debug, Clone)]
 pub struct QueryReply {
     pub pre: PreprocessedQuery,
+    pub history: QueryHistory,
     pub scored: Vec<Scored<EntryMeta>>,
 }
 
@@ -42,6 +48,7 @@ pub struct Engine {
     dry_run: bool,
     external: ExternalConfig,
     cache: Option<QueryReply>,
+    generation: Generation,
 }
 
 impl Engine {
@@ -72,7 +79,23 @@ impl Engine {
             dry_run,
             external: config.external.clone(),
             cache: None,
+            generation: Generation::default(),
         })
+    }
+
+    /// Start a new [`Generation::session`]: the launcher has been revealed
+    /// for a round of typing, so providers caching against
+    /// `generation.session` reload on the next query.
+    ///
+    /// Drops the query cache so the session's first query always re-runs
+    /// providers — a prefilled query that repeats the previous session's
+    /// last string must still let providers observe the new session.
+    ///
+    /// The UI calls this each time it shows the window; the engine itself
+    /// never bumps the session counter.
+    pub fn begin_session(&mut self) {
+        self.generation.session += 1;
+        self.cache = None;
     }
 
     pub fn add_provider(&mut self, provider: Box<dyn Provider>) -> anyhow::Result<()> {
@@ -86,22 +109,32 @@ impl Engine {
     /// fuzzy-matched against: the prefix-stripped query for the provider whose
     /// prefix matched, the original query for everyone else. All groups are
     /// normalized together. History is always looked up with the original
-    /// query.
+    /// query, precomputed once, and the same [`QueryHistory`] flows into
+    /// every provider's `QueryContext` and into the final blend.
     ///
     /// Repeating the same query resolves instantly without re-running
     /// providers or scoring. The cache holds one reply, keyed by the query as
     /// typed; any history mutation drops it so scores always reflect live
-    /// history.
+    /// history. Each run that misses the cache bumps
+    /// [`Generation::query`](crate::engine::provider::Generation::query).
     pub fn query(&mut self, query: &str) -> &QueryReply {
         if !self
             .cache
             .as_ref()
             .is_some_and(|c| c.pre.original_query == query)
         {
+            self.generation.query += 1;
             let pre = self.providers.preprocess_query(query);
-            let groups = self.providers.grouped_entries(&pre);
-            let scored = self.scorer.score(groups, query);
-            self.cache = Some(QueryReply { pre, scored });
+            let history = self.scorer.history_for(query);
+            let groups = self
+                .providers
+                .grouped_entries(&pre, &history, self.generation);
+            let scored = self.scorer.score(groups, &history);
+            self.cache = Some(QueryReply {
+                pre,
+                history,
+                scored,
+            });
         }
         self.cache.as_ref().expect("query always fills the cache")
     }
@@ -114,10 +147,10 @@ impl Engine {
     /// Selection reuses the cached reply for the query, so it does not
     /// re-run providers or scoring; only the selected entry is copied out.
     pub fn select(&mut self, query: &str, entry_id: &str) {
-        let (pre, hit) = {
+        let (pre, history, hit) = {
             let reply = self.query(query);
             let hit = reply.scored.iter().find(|s| s.entry.id == entry_id);
-            (reply.pre.clone(), hit.cloned())
+            (reply.pre.clone(), reply.history.clone(), hit.cloned())
         };
         let Some(hit) = hit else {
             eprintln!("[engine] select: no entry '{entry_id}' for query '{query}'");
@@ -128,7 +161,8 @@ impl Engine {
             hit.entry.action.perform(&self.external);
         }
         if let Some(provider_id) = &hit.entry.provider_id {
-            self.providers.handle(provider_id, entry_id, &pre);
+            self.providers
+                .handle(provider_id, entry_id, &pre, &history, self.generation);
         }
         if let Some(key) = &hit.history_key {
             self.scorer.record_launch(query, key);
@@ -220,6 +254,211 @@ mod tests {
             }),
             handled,
         )
+    }
+
+    /// What a provider saw in `QueryContext`.
+    #[derive(Debug, Clone, PartialEq)]
+    struct HistoryView {
+        keys: Vec<String>,
+        confidence: f64,
+        alpha_score: f64,
+        generation: Generation,
+    }
+
+    fn history_view(ctx: &QueryContext) -> HistoryView {
+        HistoryView {
+            keys: ctx.history.keys().cloned().collect(),
+            confidence: ctx.history.confidence(),
+            alpha_score: ctx
+                .history
+                .get("alpha")
+                .map(|entry| entry.score)
+                .unwrap_or(0.0),
+            generation: ctx.generation,
+        }
+    }
+
+    /// The view on the engine's first provider run: nothing recorded yet,
+    /// and `generation.query` already bumped for the run in progress.
+    fn cold_first_run() -> HistoryView {
+        HistoryView {
+            keys: Vec::new(),
+            confidence: 0.0,
+            alpha_score: 0.0,
+            generation: Generation {
+                session: 0,
+                query: 1,
+            },
+        }
+    }
+
+    /// Captures the history view seen in the `query` and `handle` contexts.
+    struct HistoryCapturingProvider {
+        prefixes: Vec<&'static str>,
+        entries: Vec<Entry>,
+        queried: HistoryLog,
+        handled: HistoryLog,
+    }
+
+    impl Provider for HistoryCapturingProvider {
+        fn meta(&self) -> ProviderMeta {
+            ProviderMeta::builder("history-capture")
+                .prefixes(self.prefixes.iter().copied())
+                .build()
+        }
+        fn init(&mut self, _ctx: InitContext) -> ProviderResult {
+            ProviderResult::Ok
+        }
+        fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+            self.queried.lock().unwrap().push(history_view(&ctx));
+            self.entries.clone()
+        }
+        fn handle(&mut self, ctx: HandleContext) {
+            self.handled.lock().unwrap().push(history_view(&ctx.query));
+        }
+    }
+
+    type HistoryLog = Arc<Mutex<Vec<HistoryView>>>;
+
+    fn history_capturing_provider(
+        prefixes: Vec<&'static str>,
+    ) -> (Box<dyn Provider>, HistoryLog, HistoryLog) {
+        let queried = Arc::new(Mutex::new(Vec::new()));
+        let handled = Arc::new(Mutex::new(Vec::new()));
+        (
+            Box::new(HistoryCapturingProvider {
+                prefixes,
+                entries: vec![match_fields_entry("alpha", "alpha")],
+                queried: Arc::clone(&queried),
+                handled: Arc::clone(&handled),
+            }),
+            queried,
+            handled,
+        )
+    }
+
+    #[test]
+    fn providers_receive_history_for_the_original_query() {
+        let mut e = engine();
+        let (provider, queried, handled) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        e.query("al");
+        assert_eq!(
+            *queried.lock().unwrap(),
+            vec![cold_first_run()],
+            "a cold query has no recorded history"
+        );
+
+        e.select("al", "alpha");
+        assert_eq!(
+            *handled.lock().unwrap(),
+            vec![cold_first_run()],
+            "handle runs before the selection is recorded in history"
+        );
+
+        e.query("al");
+        {
+            let log = queried.lock().unwrap();
+            let view = log.last().unwrap();
+            assert_eq!(
+                view.keys,
+                vec!["alpha".to_string()],
+                "the key recorded by the selection is delivered to query"
+            );
+            assert!(
+                view.confidence > 0.0,
+                "the recorded launch raises confidence"
+            );
+            assert_eq!(view.alpha_score, 1.0, "the only recorded key is the peak");
+        }
+
+        let after_query = queried.lock().unwrap().last().unwrap().clone();
+        e.select("al", "alpha");
+        assert_eq!(
+            handled.lock().unwrap().last().unwrap(),
+            &after_query,
+            "handle receives the same history the query call saw"
+        );
+    }
+
+    #[test]
+    fn history_is_keyed_on_the_original_query_not_the_stripped_one() {
+        let mut e = engine();
+        let (provider, queried, _) = history_capturing_provider(vec!["=="]);
+        e.add_provider(provider).unwrap();
+
+        e.select("==al", "alpha");
+
+        assert!(
+            e.scorer.history_for("al").is_empty(),
+            "precondition: fan-out records only prefixes of `==al`, not the stripped text"
+        );
+
+        e.query("==al");
+        let log = queried.lock().unwrap();
+        let view = log.last().unwrap();
+        assert_eq!(
+            view.keys,
+            vec!["alpha".to_string()],
+            "the provider sees history looked up under the original query, even though its own query text is stripped"
+        );
+        assert_eq!(view.alpha_score, 1.0);
+    }
+
+    #[test]
+    fn generation_tracks_sessions_and_provider_runs() {
+        let mut e = engine();
+        let (provider, queried, _) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        assert_eq!(e.generation, Generation::default(), "starts at 0/0");
+
+        e.query("al");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 0,
+                query: 1
+            },
+            "each provider run sees the bumped query generation"
+        );
+
+        e.query("al");
+        assert_eq!(
+            e.generation.query, 1,
+            "a repeated query is a cache hit, not a provider run"
+        );
+
+        e.query("b");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 0,
+                query: 2
+            },
+            "a new keystroke runs providers under the next generation"
+        );
+
+        e.begin_session();
+        assert_eq!(
+            e.generation,
+            Generation {
+                session: 1,
+                query: 2
+            },
+            "begin_session bumps only the session counter"
+        );
+
+        e.query("b");
+        assert_eq!(
+            queried.lock().unwrap().last().unwrap().generation,
+            Generation {
+                session: 1,
+                query: 3
+            },
+            "the next run carries the new session"
+        );
     }
 
     #[test]
@@ -574,11 +813,14 @@ mod tests {
             let total = t.elapsed();
 
             let pre = engine.providers.preprocess_query(q);
+            let history = engine.scorer.history_for(q);
             let t = Instant::now();
-            let groups = engine.providers.grouped_entries(&pre);
+            let groups = engine
+                .providers
+                .grouped_entries(&pre, &history, engine.generation);
             let group_dur = t.elapsed();
             let t = Instant::now();
-            let scored = engine.scorer.score(groups, q);
+            let scored = engine.scorer.score(groups, &history);
             let score_dur = t.elapsed();
 
             assert_eq!(scored.len(), n);

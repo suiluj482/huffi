@@ -361,7 +361,9 @@ fn placeholder() -> Entry {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
+    use crate::engine::provider::Generation;
     use crate::engine::scoring::Rank;
+    use crate::engine::scoring::history::QueryHistory;
 
     /// Enumerating Unicode takes a moment, so it is done once for the module.
     fn characters() -> &'static Arc<Characters> {
@@ -382,6 +384,8 @@ mod tests {
             prefix: Some(PREFIX),
             query: text,
             original: text,
+            history: &QueryHistory::EMPTY,
+            generation: Generation::default(),
         })
     }
 

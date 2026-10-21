@@ -4,12 +4,13 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::engine::scoring::QueryGroup;
+use crate::engine::scoring::history::QueryHistory;
 
 use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
     ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider,
-    EntryMeta, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta, ProviderResult,
-    QueryContext, RunnerProvider, UnicodeProvider,
+    EntryMeta, Generation, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta,
+    ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -252,11 +253,14 @@ impl ProviderCollection {
     /// The provider-relative [`QueryContext`] for `meta`: prefix kept and text
     /// stripped when this provider owns the query's global prefix (declared it
     /// or is the query's target), otherwise prefix dropped and the full query
-    /// kept.
+    /// kept. `history` (the precomputed history for the original query) and
+    /// `generation` are the same for every provider answering the query.
     fn provider_query_context<'a>(
         meta: &ProviderMeta,
         pre: &'a PreprocessedQuery,
         target_prefix: &str,
+        history: &'a QueryHistory,
+        generation: Generation,
     ) -> QueryContext<'a> {
         let owns = pre
             .prefix
@@ -267,12 +271,16 @@ impl ProviderCollection {
                 prefix: pre.prefix.as_deref(),
                 query: &pre.query,
                 original: &pre.original_query,
+                history,
+                generation,
             }
         } else {
             QueryContext {
                 prefix: None,
                 query: &pre.original_query,
                 original: &pre.original_query,
+                history,
+                generation,
             }
         }
     }
@@ -288,10 +296,15 @@ impl ProviderCollection {
     ///
     /// Scoring itself is owned by [`crate::engine::Engine`]; export the raw
     /// groups here so the engine can hand them to the
-    /// [`Scorer`](crate::engine::scoring::Scorer).
+    /// [`Scorer`](crate::engine::scoring::Scorer). `history` is the
+    /// precomputed [`QueryHistory`] for the original query and `generation`
+    /// is the engine's current [`Generation`]; both are stamped into every
+    /// provider's [`QueryContext`].
     pub(crate) fn grouped_entries(
         &mut self,
         pre: &PreprocessedQuery,
+        history: &QueryHistory,
+        generation: Generation,
     ) -> Vec<QueryGroup<EntryMeta>> {
         let target_prefix = self.target_prefix.clone();
         self.providers
@@ -300,7 +313,8 @@ impl ProviderCollection {
                 if !matches_query(meta, &target_prefix, pre) {
                     return None;
                 }
-                let ctx = Self::provider_query_context(meta, pre, &target_prefix);
+                let ctx =
+                    Self::provider_query_context(meta, pre, &target_prefix, history, generation);
                 let mut entries = p.query(ctx);
                 for e in entries.iter_mut() {
                     e.entry.provider_id = Some(meta.id.clone());
@@ -316,9 +330,19 @@ impl ProviderCollection {
     /// Notify the provider that produced `entry_id` that the entry was
     /// selected. The [`QueryContext`] built for the provider is
     /// provider-relative: `prefix` is `Some` only when the provider owns the
-    /// query's global prefix (declared it or is the query's target). No-op
-    /// when the provider is no longer registered.
-    pub fn handle(&mut self, provider_id: &str, entry_id: &str, pre: &PreprocessedQuery) {
+    /// query's global prefix (declared it or is the query's target), and
+    /// `history` is the precomputed history for the original query, taken
+    /// before this selection is recorded, and `generation` is the engine's
+    /// current [`Generation`]. No-op when the provider is no longer
+    /// registered.
+    pub fn handle(
+        &mut self,
+        provider_id: &str,
+        entry_id: &str,
+        pre: &PreprocessedQuery,
+        history: &QueryHistory,
+        generation: Generation,
+    ) {
         let target_prefix = self.target_prefix.clone();
         for (provider, meta) in &mut self.providers {
             if meta.id != provider_id {
@@ -326,7 +350,7 @@ impl ProviderCollection {
             }
             provider.handle(HandleContext {
                 entry_id,
-                query: Self::provider_query_context(meta, pre, &target_prefix),
+                query: Self::provider_query_context(meta, pre, &target_prefix, history, generation),
             });
             break;
         }
@@ -560,7 +584,7 @@ mod tests {
         .unwrap();
 
         let pre = c.preprocess_query("\\desk fi");
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         assert_eq!(
             *calls.lock().unwrap(),
@@ -589,7 +613,7 @@ mod tests {
         assert!(pre.exclusive);
         assert_eq!(pre.query, "= 2 + 2", "the target's own `=` is left alone");
 
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
         assert_eq!(
             *calls.lock().unwrap(),
             vec![(
@@ -645,7 +669,13 @@ mod tests {
         .unwrap();
 
         let pre = c.preprocess_query("\\calc 2 + 2");
-        c.handle("calc", "calc-entry", &pre);
+        c.handle(
+            "calc",
+            "calc-entry",
+            &pre,
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
 
         assert_eq!(
             *handles.lock().unwrap(),
@@ -678,7 +708,7 @@ mod tests {
         let pre = c.preprocess_query("\\desk");
         assert_eq!(pre.prefix.as_deref(), Some("\\"));
         assert!(pre.exclusive);
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -706,7 +736,7 @@ mod tests {
         .unwrap();
 
         let pre = c.preprocess_query("== 2");
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         let short = log.iter().find(|(id, _, _)| id == "short").unwrap();
@@ -735,7 +765,7 @@ mod tests {
         .unwrap();
         let pre = c.preprocess_query("firefox");
         let entries: Vec<_> = c
-            .grouped_entries(&pre)
+            .grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default())
             .into_iter()
             .flat_map(|g| g.entries)
             .map(|s| s.entry)
@@ -800,8 +830,20 @@ mod tests {
         .unwrap();
 
         let pre = c.preprocess_query("");
-        c.handle("b", "b-entry", &pre);
-        c.handle("missing", "ignored", &pre);
+        c.handle(
+            "b",
+            "b-entry",
+            &pre,
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
+        c.handle(
+            "missing",
+            "ignored",
+            &pre,
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
 
         assert!(a_handles.lock().unwrap().is_empty());
         assert_eq!(
@@ -832,8 +874,20 @@ mod tests {
 
         let pre = c.preprocess_query("= fi");
         assert_eq!(pre.prefix.as_deref(), Some("="));
-        c.handle("calc", "calc-entry", &pre);
-        c.handle("desk", "desk-entry", &pre);
+        c.handle(
+            "calc",
+            "calc-entry",
+            &pre,
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
+        c.handle(
+            "desk",
+            "desk-entry",
+            &pre,
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
 
         assert_eq!(
             *prefixed.lock().unwrap(),
@@ -1078,13 +1132,21 @@ mod tests {
         }))
         .unwrap();
 
-        let _ = c.grouped_entries(&c.preprocess_query("firefox"));
+        let _ = c.grouped_entries(
+            &c.preprocess_query("firefox"),
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
         assert!(
             calls.lock().unwrap().is_empty(),
             "prefix_only provider must not be queried when its prefix is absent"
         );
 
-        let _ = c.grouped_entries(&c.preprocess_query(":: 2"));
+        let _ = c.grouped_entries(
+            &c.preprocess_query(":: 2"),
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
         assert_eq!(
             *calls.lock().unwrap(),
             vec![("prefixed".to_string(), Some("::".into()), " 2".into())],
@@ -1117,7 +1179,7 @@ mod tests {
 
         let pre = c.preprocess_query("= fi");
         assert_eq!(pre.prefix.as_deref(), Some("="));
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1146,7 +1208,7 @@ mod tests {
 
         let pre = c.preprocess_query("firefox");
         assert_eq!(pre.prefix, None);
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1177,7 +1239,11 @@ mod tests {
         )))
         .unwrap();
 
-        let _ = c.grouped_entries(&c.preprocess_query("= fi"));
+        let _ = c.grouped_entries(
+            &c.preprocess_query("= fi"),
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1203,7 +1269,7 @@ mod tests {
             pre.prefix, None,
             "no provider declares ~, so it never resolves as a global prefix"
         );
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1232,7 +1298,7 @@ mod tests {
 
         let pre = c.preprocess_query("== 2");
         assert_eq!(pre.prefix.as_deref(), Some("=="), "longest prefix wins");
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1255,7 +1321,11 @@ mod tests {
             .unwrap();
         }
 
-        let _ = c.grouped_entries(&c.preprocess_query("= fi"));
+        let _ = c.grouped_entries(
+            &c.preprocess_query("= fi"),
+            &QueryHistory::EMPTY,
+            Generation::default(),
+        );
 
         let log = calls.lock().unwrap();
         assert_eq!(
@@ -1296,7 +1366,7 @@ mod tests {
 
         let pre = c.preprocess_query("!firefox");
         assert_eq!(pre.prefix, None, "the only ! provider is disabled");
-        let _ = c.grouped_entries(&pre);
+        let _ = c.grouped_entries(&pre, &QueryHistory::EMPTY, Generation::default());
         assert_eq!(
             calls.lock().unwrap().len(),
             1,

@@ -29,10 +29,18 @@ impl Default for CliphistConfig {
 /// Triggered by the `|` prefix by default (configurable). Each entry copies
 /// its stored clipboard content back to the clipboard when selected.
 ///
-/// Clipboard history changes frequently, so entries are fetched fresh on each
-/// query rather than cached at init.
+/// Clipboard history changes frequently, so it is not cached at init, but
+/// spawning `cliphist list` on every keystroke is too slow — entries are
+/// fetched on the first query of each launcher session
+/// ([`Generation::session`](crate::engine::provider::Generation::session))
+/// and reused for the rest of the session, so they may be slightly stale
+/// while the launcher stays open.
 pub struct CliphistProvider {
     config: CliphistConfig,
+    /// Entries fetched for `loaded_session`, reused until the next session.
+    entries: Vec<Entry>,
+    /// The session `entries` was fetched for; `None` before the first query.
+    loaded_session: Option<u64>,
 }
 
 impl Default for CliphistProvider {
@@ -45,6 +53,8 @@ impl CliphistProvider {
     pub fn new() -> Self {
         Self {
             config: CliphistConfig::default(),
+            entries: Vec::new(),
+            loaded_session: None,
         }
     }
 }
@@ -72,8 +82,12 @@ impl Provider for CliphistProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        load_cliphist(self.config.max_entries)
+    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+        if self.loaded_session != Some(ctx.generation.session) {
+            self.entries = load_cliphist(self.config.max_entries);
+            self.loaded_session = Some(ctx.generation.session);
+        }
+        self.entries.clone()
     }
 }
 

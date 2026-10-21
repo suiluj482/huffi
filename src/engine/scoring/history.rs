@@ -62,6 +62,84 @@ pub struct KeyedHistoryRecord {
     pub record: HistoryRecord,
 }
 
+/// One recorded history key inside a [`QueryHistory`].
+#[derive(Debug, Clone)]
+pub struct QueryHistoryEntry {
+    /// The history key the record is stored under.
+    pub key: HistoryKey,
+    /// The decayed raw score, as of when the history was built.
+    pub effective: f64,
+    /// [`effective`](Self::effective) normalized against the history's
+    /// [`peak`](QueryHistory::peak), in `0.0..=1.0` (`0.0` when the peak is
+    /// zero).
+    pub score: f64,
+    /// The record's sample count `n` (launches and boost samples).
+    pub samples: u32,
+}
+
+/// The precomputed history for one query: every recorded key with its
+/// decayed score, plus the query-level confidence and peak.
+///
+/// Built once per query by [`HistoryStore::history_for`], which is the only
+/// place records are decayed. Two views project from the same precomputed
+/// history:
+///
+/// - Providers see it via `QueryContext::history`, where
+///   [`score`](QueryHistoryEntry::score) is normalized against the peak over
+///   **every** recorded key (the only view possible before results exist).
+/// - Final ranking ([`history_scoring`](HistoryStore::history_scoring))
+///   recomputes a peak and confidence over only the keys **present in the
+///   result set**, so unrelated records cannot inflate them.
+#[derive(Debug, Clone, Default)]
+pub struct QueryHistory {
+    entries: Vec<QueryHistoryEntry>,
+    confidence: f64,
+    peak: f64,
+}
+
+impl QueryHistory {
+    /// A [`QueryHistory`] with no recorded history.
+    pub const EMPTY: Self = Self {
+        entries: Vec::new(),
+        confidence: 0.0,
+        peak: 0.0,
+    };
+
+    /// Every recorded key, sorted for a stable order.
+    pub fn entries(&self) -> &[QueryHistoryEntry] {
+        &self.entries
+    }
+
+    /// Every recorded key, sorted for a stable order.
+    pub fn keys(&self) -> impl Iterator<Item = &HistoryKey> {
+        self.entries.iter().map(|e| &e.key)
+    }
+
+    /// The entry recorded under `key`, if any.
+    pub fn get(&self, key: &str) -> Option<&QueryHistoryEntry> {
+        self.entries
+            .binary_search_by(|e| e.key.as_str().cmp(key))
+            .ok()
+            .map(|i| &self.entries[i])
+    }
+
+    /// Query-level confidence in `0.0..=1.0`: `n / (n + k)` over every
+    /// recorded key, so it rises as the exact query accumulates evidence.
+    pub fn confidence(&self) -> f64 {
+        self.confidence
+    }
+
+    /// The highest [`effective`](QueryHistoryEntry::effective) score among
+    /// the recorded keys, the normalizer behind [`score`](QueryHistoryEntry::score).
+    pub fn peak(&self) -> f64 {
+        self.peak
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 pub struct HistoryStore {
     data: HistoryData,
     path: Option<PathBuf>,
@@ -172,74 +250,89 @@ impl HistoryStore {
         self.flush_to_disk();
     }
 
-    fn confidence(&self, history_keys: &PrefixHistory) -> f64 {
-        let n = history_keys
-            .values()
-            .map(|record| record.n as f64)
-            .sum::<f64>();
-        n / (n + self.confidence_k)
-    }
-
-    /// Peak effective score in a `history_keys` map.
-    fn max_effective(&self, history_keys: &PrefixHistory, now: f64) -> f64 {
-        history_keys
-            .values()
-            .map(|record| record.effective(now, self.lambda))
-            .fold(0.0f64, f64::max)
-    }
-
-    /// Effective score of `history_key` normalized against the `history_keys`
-    /// peak, reusing a previously computed `now` and `max_effective`.
+    /// The precomputed [`QueryHistory`] for the exact `query`, decayed at
+    /// the time of the call. Empty when the query has no recorded history.
     ///
-    /// Returns `0.0` when the peak is zero or the key is absent.
-    fn history_score(
-        &self,
-        history_keys: &PrefixHistory,
-        history_key: &str,
-        now: f64,
-        max_effective: f64,
-    ) -> f64 {
-        if max_effective <= 0.0 {
-            return 0.0;
+    /// Exact match only. [`record_launch`] also fans the key out to every
+    /// prefix of the launched query, but those records belong to the
+    /// prefixes, not to `query` itself. This is the only place records are
+    /// decayed: providers (`QueryContext::history`) and ranking
+    /// ([`history_scoring`]) both project from the returned history.
+    pub fn history_for(&self, query: &str) -> QueryHistory {
+        let Some(prefix_history) = self.data.get(query) else {
+            return QueryHistory::EMPTY;
+        };
+
+        let now = timestamp();
+        let mut entries: Vec<QueryHistoryEntry> = prefix_history
+            .iter()
+            .map(|(key, record)| QueryHistoryEntry {
+                key: key.clone(),
+                effective: record.effective(now, self.lambda),
+                score: 0.0,
+                samples: record.n,
+            })
+            .collect();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+        let peak = entries.iter().map(|e| e.effective).fold(0.0f64, f64::max);
+        let n: f64 = entries.iter().map(|e| e.samples as f64).sum();
+        let confidence = n / (n + self.confidence_k);
+        for entry in &mut entries {
+            entry.score = if peak > 0.0 {
+                entry.effective / peak
+            } else {
+                0.0
+            };
         }
-        history_keys
-            .get(history_key)
-            .map(|record| record.effective(now, self.lambda) / max_effective)
-            .unwrap_or(0.0)
+
+        QueryHistory {
+            entries,
+            confidence,
+            peak,
+        }
     }
 
+    /// Blend base scores with a precomputed [`QueryHistory`].
+    ///
+    /// The query-level [`confidence`](QueryHistory::confidence) and
+    /// [`peak`](QueryHistory::peak) look over the whole query; the final blend
+    /// narrows to the keys **present in the result set** so records left
+    /// behind by launch fan-out for entries the query does not surface
+    /// cannot inflate confidence or the normalizer.
     pub fn history_scoring<T>(
         &self,
-        query: &str,
+        history: &QueryHistory,
         base_scored: Vec<BaseScored<T>>,
     ) -> Vec<Scored<T>> {
-        let now = timestamp();
-        let empty = HashMap::new();
-        let history_keys = self.data.get(query).unwrap_or(&empty);
-
         // Only records for entries actually present in the result set may
         // influence confidence and normalization; launch fan-out leaves
         // records for apps that the current query does not surface.
-        let history_keys: PrefixHistory = base_scored
+        let present: HashMap<&str, &QueryHistoryEntry> = base_scored
             .iter()
-            .filter_map(|c| {
-                c.history_key.as_ref().and_then(|key| {
-                    history_keys
-                        .get(key)
-                        .map(|record| (key.clone(), record.clone()))
-                })
-            })
+            .filter_map(|c| c.history_key.as_deref().and_then(|key| history.get(key)))
+            .map(|e| (e.key.as_str(), e))
             .collect();
 
-        let confidence = self.confidence(&history_keys);
-        let max_effective = self.max_effective(&history_keys, now);
+        let n: f64 = present.values().map(|e| e.samples as f64).sum();
+        let confidence = n / (n + self.confidence_k);
+        let max_effective = present.values().map(|e| e.effective).fold(0.0f64, f64::max);
 
         base_scored
             .into_iter()
             .map(|c| {
                 let (history_score, combined) = match &c.history_key {
                     Some(key) => {
-                        let h = self.history_score(&history_keys, key, now, max_effective);
+                        let h = present
+                            .get(key.as_str())
+                            .map(|e| {
+                                if max_effective > 0.0 {
+                                    e.effective / max_effective
+                                } else {
+                                    0.0
+                                }
+                            })
+                            .unwrap_or(0.0);
                         let combined = confidence * h + (1.0 - confidence) * c.base_score;
                         (Some(h), combined)
                     }
@@ -290,17 +383,15 @@ mod tests {
     use super::*;
 
     fn score(history: &HistoryStore, query: &str, history_key: &str) -> f64 {
-        let now = timestamp();
-        let empty = HashMap::new();
-        let history_keys = history.data.get(query).unwrap_or(&empty);
-        let max_effective = history.max_effective(history_keys, now);
-        history.history_score(history_keys, history_key, now, max_effective)
+        history
+            .history_for(query)
+            .get(history_key)
+            .map(|entry| entry.score)
+            .unwrap_or(0.0)
     }
 
     fn confidence(history: &HistoryStore, query: &str) -> f64 {
-        let empty = HashMap::new();
-        let history_keys = history.data.get(query).unwrap_or(&empty);
-        history.confidence(history_keys)
+        history.history_for(query).confidence()
     }
 
     #[test]
@@ -405,6 +496,64 @@ mod tests {
     }
 
     #[test]
+    fn history_for_reports_recorded_history_for_the_exact_query() {
+        let mut history = HistoryStore::default();
+        assert!(history.history_for("fi").is_empty());
+
+        history.record_boost("fi", "gimp", 2.0, 3);
+        history.record_boost("fi", "Firefox", 1.0, 1);
+        let view = history.history_for("fi");
+
+        assert_eq!(
+            view.keys().cloned().collect::<Vec<_>>(),
+            vec!["Firefox".to_string(), "gimp".to_string()],
+            "keys are sorted for a stable order"
+        );
+        assert!(view.peak() > 0.0);
+        assert_eq!(
+            view.confidence(),
+            4.0 / (4.0 + history.confidence_k),
+            "confidence sums the sample counts of every recorded key"
+        );
+        assert_eq!(
+            view.get("gimp").unwrap().score,
+            1.0,
+            "the peak key normalizes to 1.0"
+        );
+        let firefox = view.get("Firefox").unwrap();
+        assert!(
+            firefox.score > 0.0 && firefox.score < 1.0,
+            "a weaker key normalizes into the peak's scale"
+        );
+        assert_eq!(firefox.samples, 1);
+
+        history.record_launch("fire", "Thunar");
+        assert_eq!(
+            history
+                .history_for("fire")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["Thunar".to_string()],
+            "a launch is recorded under the exact query it fanned out to"
+        );
+        assert_eq!(
+            history
+                .history_for("fi")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![
+                "Firefox".to_string(),
+                "Thunar".to_string(),
+                "gimp".to_string()
+            ],
+            "fan-out also records the key under every shorter prefix"
+        );
+        assert!(history.history_for("zzz").is_empty());
+    }
+
+    #[test]
     fn history_scoring_ignores_records_not_in_result_set() {
         let mut history = HistoryStore::default();
         for _ in 0..10 {
@@ -424,7 +573,7 @@ mod tests {
         }
 
         let scored = history.history_scoring(
-            "fi",
+            &history.history_for("fi"),
             vec![base("Gimp", 0.7, Some("Gimp")), base("Other", 0.6, None)],
         );
 
@@ -464,7 +613,7 @@ mod tests {
         }
 
         let scored = history.history_scoring(
-            "fi",
+            &history.history_for("fi"),
             vec![
                 base("Firefox", 0.8, Some("Firefox")),
                 base("Gimp", 0.7, Some("Gimp")),

@@ -251,14 +251,18 @@ fn is_zsh_meta(meta: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::Generation;
     use crate::engine::provider::{Action, ExecMode, HandleContext, QueryContext};
     use crate::engine::scoring::Rank;
+    use crate::engine::scoring::history::QueryHistory;
 
-    fn query_ctx(query: &str) -> QueryContext<'_> {
+    fn query_ctx<'a>(query: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
         QueryContext {
             prefix: Some(">"),
             query,
             original: query,
+            history,
+            generation: Generation::default(),
         }
     }
 
@@ -347,7 +351,7 @@ mod tests {
     #[test]
     fn empty_query_returns_only_the_corpus_newest_first() {
         let mut p = RunnerProvider::with_commands(vec!["ls".into(), "git status".into()]);
-        let entries = p.query(query_ctx(""));
+        let entries = p.query(query_ctx("", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.title, "ls");
         assert_eq!(entries[1].entry.title, "git status");
@@ -357,7 +361,7 @@ mod tests {
     #[test]
     fn non_empty_query_prepends_the_run_entry() {
         let mut p = RunnerProvider::with_commands(vec!["git status".into(), "ls".into()]);
-        let entries = p.query(query_ctx("git s"));
+        let entries = p.query(query_ctx("git s", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].entry.title, "git s");
         assert_eq!(entries[0].entry.id, "run:git s");
@@ -369,7 +373,7 @@ mod tests {
     #[test]
     fn corpus_entry_matching_the_query_exactly_is_skipped() {
         let mut p = RunnerProvider::with_commands(vec!["git status".into(), "ls".into()]);
-        let entries = p.query(query_ctx("git status"));
+        let entries = p.query(query_ctx("git status", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry.id, "run:git status");
         assert_eq!(entries[1].entry.id, "hist:ls");
@@ -378,10 +382,10 @@ mod tests {
     #[test]
     fn query_is_trimmed_before_matching_and_running() {
         let mut p = RunnerProvider::with_commands(vec!["ls".into()]);
-        let entries = p.query(query_ctx("  "));
+        let entries = p.query(query_ctx("  ", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 1, "blank query is an empty query");
 
-        let entries = p.query(query_ctx("  ls  "));
+        let entries = p.query(query_ctx("  ls  ", &QueryHistory::EMPTY));
         assert_eq!(
             entries.len(),
             1,
@@ -394,7 +398,7 @@ mod tests {
     #[test]
     fn entries_run_the_command_in_the_terminal_via_the_shell() {
         let mut p = RunnerProvider::with_commands(vec!["git status".into()]);
-        let entries = p.query(query_ctx("git s"));
+        let entries = p.query(query_ctx("git s", &QueryHistory::EMPTY));
         for e in &entries {
             match &e.entry.action {
                 Action::Exec { args, mode, .. } => {
@@ -471,7 +475,7 @@ mod tests {
         let mut p = RunnerProvider::new();
         p.handle(HandleContext {
             entry_id: "run:ls",
-            query: query_ctx("ls"),
+            query: query_ctx("ls", &QueryHistory::EMPTY),
         });
     }
 
@@ -494,7 +498,7 @@ mod tests {
         for needle in ["", "git", "git stat", "repo-42"] {
             let t = Instant::now();
             for _ in 0..iterations {
-                std::hint::black_box(p.query(query_ctx(needle)));
+                std::hint::black_box(p.query(query_ctx(needle, &QueryHistory::EMPTY)));
             }
             let prebuilt = t.elapsed() / iterations;
 

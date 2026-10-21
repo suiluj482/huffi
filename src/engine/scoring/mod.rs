@@ -5,7 +5,7 @@ pub mod history;
 pub use config::ScoringConfig;
 
 use base_scorer::BaseScorer;
-use history::{HistoryStore, KeyedHistoryRecord};
+use history::{HistoryStore, KeyedHistoryRecord, QueryHistory};
 
 #[derive(Debug, Clone)]
 pub struct MatchField {
@@ -83,11 +83,16 @@ impl Scorer {
     ///
     /// `groups` carries the base query per group (e.g. the prefix-stripped
     /// query for the provider whose prefix matched, the original query for
-    /// everyone else). `history_query` is used for history lookup and stays
-    /// the user's original input.
-    pub fn score<T>(&mut self, groups: Vec<QueryGroup<T>>, history_query: &str) -> Vec<Scored<T>> {
+    /// everyone else). `history` is the precomputed [`QueryHistory`]
+    /// for the original query — the same one providers received in their
+    /// `QueryContext` — and drives the history half of the blend.
+    pub fn score<T>(
+        &mut self,
+        groups: Vec<QueryGroup<T>>,
+        history: &QueryHistory,
+    ) -> Vec<Scored<T>> {
         let base_scored = self.base_scorer.base_scoring(groups);
-        let mut scored = self.history.history_scoring(history_query, base_scored);
+        let mut scored = self.history.history_scoring(history, base_scored);
         scored.sort_by(|a, b| {
             b.combined
                 .partial_cmp(&a.combined)
@@ -111,5 +116,12 @@ impl Scorer {
 
     pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
         self.history.list_entries(prefix)
+    }
+
+    /// The precomputed [`QueryHistory`] for `query` — the store's
+    /// decayed per-key scores plus query-level confidence and peak. See
+    /// [`HistoryStore::history_for`].
+    pub fn history_for(&self, query: &str) -> QueryHistory {
+        self.history.history_for(query)
     }
 }
