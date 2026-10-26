@@ -124,31 +124,26 @@ fn entries_from_list(text: &str, max: usize) -> Vec<Entry> {
         if max > 0 && count >= max {
             break;
         }
-        // cliphist list format: "<id>\t<content>"
+        // cliphist list format: "<id>\t<preview>". The preview has whitespace
+        // collapsed and is truncated by cliphist, and images are represented
+        // by a description such as "[[ binary data 2 MiB png 2736x2272 ]]".
+        // Only `cliphist decode <id>` yields the original bytes, so selection
+        // must decode by id rather than copy the preview.
         let mut parts = line.splitn(2, '\t');
-        let _id = parts.next().unwrap_or("");
-        let content = parts.next().unwrap_or("").trim_end_matches('\r');
-        if content.is_empty() {
+        let id = parts.next().unwrap_or("").trim();
+        let preview = parts.next().unwrap_or("").trim_end_matches('\r');
+        if id.is_empty() || preview.is_empty() {
             continue;
         }
-        // Create a short title - truncate to reasonable length
-        let title = if content.len() > 100 {
-            let mut end = 100;
-            // Try to cut at word boundary
-            while end > 50 && !content.is_char_boundary(end) {
-                end -= 1;
-            }
-            format!("{}...", &content[..end])
-        } else {
-            content.to_string()
-        };
 
-        // The full content is both what gets copied and what the engine
-        // fuzzy-matches; the title is only a truncation of it for display.
-        let entry = entry(format!("cliphist:{}", count), title)
+        // cliphist already truncates the preview to its configured width, so
+        // use it verbatim instead of shortening it again. It is what the
+        // engine fuzzy-matches; copying goes back to cliphist for the exact
+        // text or binary data.
+        let entry = entry(format!("cliphist:{id}"), preview)
             .icon_name("edit-paste-symbolic")
-            .clipboard(content)
-            .match_field(content);
+            .clipboard_command(vec!["cliphist".into(), "decode".into(), id.into()])
+            .match_field(preview);
 
         entries.push(entry);
         count += 1;
@@ -162,18 +157,21 @@ mod tests {
     use crate::engine::provider::Action;
     use crate::engine::scoring::Rank;
 
-    fn copy_value(row: &Entry) -> String {
-        let Action::Clipboard { value } = &row.entry.action else {
-            panic!("expected a clipboard action, got {:?}", row.entry.action);
+    fn copy_command(row: &Entry) -> Vec<String> {
+        let Action::ClipboardCommand { args } = &row.entry.action else {
+            panic!(
+                "expected a cliphist decode command, got {:?}",
+                row.entry.action
+            );
         };
-        value.clone()
+        args.clone()
     }
 
     fn match_text(row: &Entry) -> String {
         let Rank::MatchFields(fields) = &row.rank else {
             panic!("expected match fields, got {:?}", row.rank);
         };
-        assert_eq!(fields.len(), 1, "one field: the full content");
+        assert_eq!(fields.len(), 1, "one field: the preview");
         fields[0].text.clone()
     }
 
@@ -186,20 +184,36 @@ mod tests {
     }
 
     #[test]
-    fn clips_copy_their_full_content() {
+    fn selecting_an_entry_decodes_its_original_content() {
         let rows = entries_from_list("1\tcargo test\n", 0);
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].entry.id, "cliphist:1");
         assert_eq!(rows[0].entry.title, "cargo test");
-        assert_eq!(copy_value(&rows[0]), "cargo test");
+        assert_eq!(
+            copy_command(&rows[0]),
+            vec![
+                "cliphist".to_string(),
+                "decode".to_string(),
+                "1".to_string()
+            ]
+        );
     }
 
-    /// The engine fuzzy-matches the *full* content, not the truncated title,
-    /// so a long pasted command is still reachable by its tail.
+    /// Matching uses cliphist's preview; selecting sends the id back to
+    /// cliphist so the preview's collapsed whitespace and truncation never
+    /// reach the clipboard.
     #[test]
-    fn rows_carry_a_match_field_of_the_full_content() {
+    fn rows_carry_a_match_field_of_the_preview() {
         let rows = entries_from_list("1\tcargo build --release\n", 0);
         assert_eq!(match_text(&rows[0]), "cargo build --release");
-        assert_eq!(copy_value(&rows[0]), "cargo build --release");
+        assert_eq!(
+            copy_command(&rows[0]),
+            vec![
+                "cliphist".to_string(),
+                "decode".to_string(),
+                "1".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -211,20 +225,43 @@ mod tests {
 
     #[test]
     fn empty_lines_are_skipped() {
-        let rows = entries_from_list("1\t\n\t\n\thello\n", 0);
+        let rows = entries_from_list("1\t\n2\t\n3\thello\n", 0);
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].entry.id, "cliphist:3");
         assert_eq!(rows[0].entry.title, "hello");
     }
 
     #[test]
-    fn a_long_content_truncates_only_the_title() {
-        let long = "x".repeat(200);
-        let rows = entries_from_list(&format!("1\t{long}\n"), 0);
-        assert!(rows[0].entry.title.ends_with("..."));
-        assert!(rows[0].entry.title.len() < 200);
-        // Matched and copied text stay whole.
-        assert_eq!(match_text(&rows[0]), long);
-        assert_eq!(copy_value(&rows[0]), long);
+    fn the_title_is_cliphist_preview_verbatim() {
+        let preview = format!("{}…", "x".repeat(100));
+        let rows = entries_from_list(&format!("7\t{preview}\n"), 0);
+        assert_eq!(rows[0].entry.title, preview);
+        assert_eq!(match_text(&rows[0]), preview);
+        assert_eq!(
+            copy_command(&rows[0]),
+            vec![
+                "cliphist".to_string(),
+                "decode".to_string(),
+                "7".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn image_entries_decode_the_image_data() {
+        let preview = "[[ binary data 2 MiB png 2736x2272 ]]";
+        let rows = entries_from_list(&format!("42\t{preview}\n"), 0);
+        assert_eq!(rows[0].entry.id, "cliphist:42");
+        assert_eq!(rows[0].entry.title, preview);
+        assert_eq!(match_text(&rows[0]), preview);
+        assert_eq!(
+            copy_command(&rows[0]),
+            vec![
+                "cliphist".to_string(),
+                "decode".to_string(),
+                "42".to_string()
+            ]
+        );
     }
 
     #[test]
