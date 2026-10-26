@@ -52,6 +52,21 @@ programs.huffi = {
 };
 ```
 
+> [!TIP]
+> Optionally use the [Cachix](https://cachix.org) cache to avoid building from
+> source (faster):
+>
+> ```nix
+> nix.settings = {
+>   substituters = [
+>     "https://suiluj482.cachix.org"
+>   ];
+>   trusted-public-keys = [
+>     "suiluj482.cachix.org-1:XeMeXzHH4JMCVJ6N115eoFMdpHakQtLlGXGW1Ts5WSE="
+>   ];
+> };
+> ```
+
 ### From source
 
 ```console
