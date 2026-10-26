@@ -67,6 +67,19 @@ programs.huffi = {
 > };
 > ```
 
+### With Cargo
+
+With a Rust toolchain and the system libraries huffi links against (GTK4,
+gtk4-layer-shell, Wayland, and `pkg-config`), you can install straight from the
+repository:
+
+```console
+cargo install --git https://github.com/suiluj482/huffi
+```
+
+This builds in release mode and installs the binary to `~/.cargo/bin`. From a
+local clone, use `cargo install --path .` instead.
+
 ### From source
 
 ```console
