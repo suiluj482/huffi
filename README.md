@@ -52,6 +52,34 @@ programs.huffi = {
 };
 ```
 
+> [!TIP]
+> Optionally use the [Cachix](https://cachix.org) cache to avoid building from
+> source (faster):
+>
+> ```nix
+> nix.settings = {
+>   substituters = [
+>     "https://suiluj482.cachix.org"
+>   ];
+>   trusted-public-keys = [
+>     "suiluj482.cachix.org-1:XeMeXzHH4JMCVJ6N115eoFMdpHakQtLlGXGW1Ts5WSE="
+>   ];
+> };
+> ```
+
+### With Cargo
+
+With a Rust toolchain and the system libraries huffi links against (GTK4,
+gtk4-layer-shell, Wayland, and `pkg-config`), you can install straight from the
+repository:
+
+```console
+cargo install --git https://github.com/suiluj482/huffi
+```
+
+This builds in release mode and installs the binary to `~/.cargo/bin`. From a
+local clone, use `cargo install --path .` instead.
+
 ### From source
 
 ```console
