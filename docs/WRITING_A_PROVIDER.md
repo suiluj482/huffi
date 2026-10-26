@@ -225,6 +225,7 @@ entry("my-entry-id", "Display Name")
 | `.terminal_exec(args)` | `Vec<String>` | Shell command to run in a terminal |
 | `.terminal_hold(args)` | `Vec<String>` | Shell command to run in a terminal that stays open after it exits |
 | `.clipboard(value)` | `String` | Copy `value` to the clipboard on selection (configurable default wl-copy) |
+| `.clipboard_command(args)` | `Vec<String>` | Run `args` on selection and pipe its stdout into the clipboard tool's stdin, for exact or binary data |
 | `.cwd(path)` | path | Directory the exec action runs in, if it differs from the configured `working_dir` |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
@@ -390,6 +391,13 @@ When the user selects an entry, its `Action` is performed:
   open after the command exits so its output remains readable. Uses the
   `terminal_hold` wrapper from `[engine.external]` (default
   `kitty --hold --`), which should be set alongside `terminal`.
+- **`.clipboard(value)`** — passes `value` as the clipboard tool's argv,
+  which is convenient for short text.
+- **`.clipboard_command(args)`** — spawns `args` and streams its stdout
+  into the clipboard tool's stdin. Use this instead of `.clipboard` when
+  the payload is large or binary: it never puts the data in argv, and it
+  preserves the source bytes exactly. The cliphist provider uses it to run
+  `cliphist decode <id>` for its entries, including images.
 - **`.action_set_query(query)`** — nothing spawns: Enter replaces the query
   with `query` (resolved against the active prefix, like Tab) and the
   launcher **stays open**, so a selection can chain into the next one. The

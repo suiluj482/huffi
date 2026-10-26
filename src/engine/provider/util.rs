@@ -47,6 +47,11 @@ pub enum Action {
     /// Copy `value` to the clipboard on selection. The clipboard binary is
     /// resolved from config when the action is performed.
     Clipboard { value: String },
+    /// Run `args` on selection and pipe its stdout into the clipboard tool's
+    /// stdin. The clipboard binary is resolved from config when the action is
+    /// performed. Use this for content that is too large for argv or is not
+    /// text (e.g. a decoded image).
+    ClipboardCommand { args: Vec<String> },
     /// Replace the query with `suggestion` on selection and keep the
     /// launcher open — the Enter-triggered equivalent of tab-applying a
     /// suggestion. Nothing is spawned; the UI applies the suggestion, so
@@ -71,7 +76,9 @@ impl Action {
             Action::Clipboard { value } => {
                 vec![external.clipboard.clone(), value.clone()]
             }
-            Action::SetQuery { .. } | Action::NoOp => return None,
+            Action::ClipboardCommand { .. } | Action::SetQuery { .. } | Action::NoOp => {
+                return None;
+            }
         };
         (!args.is_empty()).then_some(args)
     }
@@ -96,6 +103,10 @@ impl Action {
     /// Perform the action, resolving external binaries (terminal wrapper,
     /// clipboard tool) from `external`.
     pub fn perform(&self, external: &ExternalConfig) {
+        if let Action::ClipboardCommand { args } = self {
+            perform_clipboard_command(args, external);
+            return;
+        }
         let Some(args) = self.argv(external) else {
             return;
         };
@@ -115,6 +126,45 @@ impl Action {
         if let Err(e) = cmd.spawn() {
             eprintln!("failed to launch {program}: {e}");
         }
+    }
+}
+
+/// Run `args` and stream its stdout into the configured clipboard tool.
+///
+/// Unlike [`Action::Clipboard`], this never puts the payload in argv: it
+/// works for arbitrarily large text and for binary data such as images. The
+/// clipboard tool reads the payload from stdin, which is the default when it
+/// is spawned without arguments.
+fn perform_clipboard_command(args: &[String], external: &ExternalConfig) {
+    let Some((program, rest)) = args.split_first() else {
+        return;
+    };
+    let mut source = Command::new(program);
+    source
+        .args(rest)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut source = match source.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("failed to launch {program}: {e}");
+            return;
+        }
+    };
+
+    let stdin = source.stdout.take().map_or_else(Stdio::null, Stdio::from);
+    let mut clipboard = Command::new(&external.clipboard);
+    clipboard
+        .stdin(stdin)
+        .process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Err(e) = clipboard.spawn() {
+        eprintln!("failed to launch {}: {e}", external.clipboard);
+        let _ = source.kill();
+        let _ = source.wait();
     }
 }
 
@@ -339,6 +389,15 @@ impl EntryBuilder {
         self.action = Some(Action::Clipboard {
             value: value.into(),
         });
+        self
+    }
+
+    /// Set the action to run `args` on selection and pipe its stdout into the
+    /// clipboard tool's stdin. The clipboard binary comes from config at
+    /// perform time. Use this for exact data that is too large for argv or is
+    /// not text, such as a clipboard-history entry or a decoded image.
+    pub fn clipboard_command(mut self, args: Vec<String>) -> Self {
+        self.action = Some(Action::ClipboardCommand { args });
         self
     }
 
@@ -705,6 +764,15 @@ mod tests {
             Some(vec!["wl-copy".to_string(), "x".to_string()])
         );
 
+        assert_eq!(
+            Action::ClipboardCommand {
+                args: vec!["cat".into()]
+            }
+            .argv(&external),
+            None,
+            "a clipboard command is spawned as a pipeline, not as one argv"
+        );
+
         assert_eq!(Action::NoOp.argv(&external), None);
         assert_eq!(
             Action::SetQuery {
@@ -723,6 +791,42 @@ mod tests {
             .argv(&external),
             None
         );
+    }
+
+    #[test]
+    fn clipboard_command_streams_stdout_into_the_clipboard_tool() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let dir =
+            std::env::temp_dir().join(format!("huffi-clipboard-command-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let out = dir.join("clipboard.txt");
+        let tool = dir.join("clipboard-tool");
+        std::fs::write(&tool, format!("#!/bin/sh\ncat > \"{}\"\n", out.display()))
+            .expect("write clipboard tool");
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod clipboard tool");
+
+        let external = ExternalConfig {
+            clipboard: tool.to_string_lossy().into_owned(),
+            ..ExternalConfig::default()
+        };
+        Action::ClipboardCommand {
+            args: vec!["printf".into(), "hello from cliphist".into()],
+        }
+        .perform(&external);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if std::fs::read_to_string(&out).is_ok_and(|s| s == "hello from cliphist") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "clipboard tool received no data");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
