@@ -1,3 +1,5 @@
+use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization};
+
 use super::config::ScoringConfig;
 use super::{BaseScored, MatchField, QueryGroup, Rank, Scoreable};
 
@@ -43,8 +45,18 @@ impl BaseScorer {
                 continue;
             }
 
-            let mut needle_buf = Vec::new();
-            let needle = nucleo::Utf32Str::new(&g.query, &mut needle_buf);
+            // The query is matched through a fuzzy [`Atom`] rather than the
+            // raw [`nucleo::Matcher`]: the matcher's `fuzzy_match` panics
+            // ("should have been caught by prefilter") for some case-mismatched
+            // needles the caller cannot predict, while an atom runs nucleo's
+            // own prefilter and returns `None` instead.
+            let needle = Atom::new(
+                &g.query,
+                CaseMatching::Ignore,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+                false,
+            );
 
             for s in g.entries {
                 match s.rank {
@@ -55,7 +67,7 @@ impl BaseScorer {
                         base_score: score as f64,
                     }),
                     Rank::MatchFields(fields) => {
-                        if let Some(r) = score_fields(&mut self.fuzzy_matcher, needle, &fields)
+                        if let Some(r) = score_fields(&mut self.fuzzy_matcher, &needle, &fields)
                             && r > 0.0
                         {
                             raw.push((
@@ -95,19 +107,15 @@ pub fn normalize<T>(raw: Vec<(Scoreable<T>, f64)>) -> Vec<BaseScored<T>> {
         .collect()
 }
 
-fn score(
-    fuzzy_matcher: &mut nucleo::Matcher,
-    needle: nucleo::Utf32Str<'_>,
-    field: &str,
-) -> Option<u16> {
+fn score(fuzzy_matcher: &mut nucleo::Matcher, needle: &Atom, field: &str) -> Option<u16> {
     let mut haystack_buf = Vec::new();
     let haystack = nucleo::Utf32Str::new(field, &mut haystack_buf);
-    fuzzy_matcher.fuzzy_indices(haystack, needle, &mut Vec::new())
+    needle.score(haystack, fuzzy_matcher)
 }
 
 fn score_fields(
     fuzzy_matcher: &mut nucleo::Matcher,
-    needle: nucleo::Utf32Str<'_>,
+    needle: &Atom,
     fields: &[MatchField],
 ) -> Option<f64> {
     if fields.is_empty() {
@@ -149,69 +157,94 @@ mod tests {
             .collect()
     }
 
+    /// The needle atom a query is matched through, mirroring the scorer.
+    fn atom(query: &str) -> Atom {
+        Atom::new(
+            query,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+            false,
+        )
+    }
+
     #[test]
     fn score_matches() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let fields_a = fields(&[("Firefox", 1.0)]);
         let fields_b = fields(&[("Gimp", 1.0)]);
-        assert!(score_fields(&mut fuzzy_matcher, needle, &fields_a).unwrap() > 0.0);
+        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields_a).unwrap() > 0.0);
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, needle, &fields_b),
+            score_fields(&mut fuzzy_matcher, &needle, &fields_b),
             Some(0.0)
         );
+    }
+
+    /// A needle whose casing differs from the haystack used to reach
+    /// `nucleo`'s raw matcher and panic with "should have been caught by
+    /// prefilter". Matching through an atom must return a score instead.
+    #[test]
+    fn case_mismatched_needle_does_not_panic() {
+        for (query, text) in [("Aa", "AAA"), ("aBc", "ABC"), ("FI", "fi"), ("fI", "Fi")] {
+            let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+            let needle = atom(query);
+            let fields = fields(&[(text, 1.0)]);
+            let scored = score_fields(&mut fuzzy_matcher, &needle, &fields);
+            assert!(
+                scored.unwrap_or(0.0) > 0.0,
+                "{query:?} should match {text:?}, got {scored:?}"
+            );
+        }
     }
 
     #[test]
     fn score_fields_matches_independent_fields() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let fields = fields(&[("Firefox", 1.0), ("Browse the Web", 0.5)]);
-        assert!(score_fields(&mut fuzzy_matcher, needle, &fields).is_some());
+        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields).is_some());
     }
 
     #[test]
     fn score_fields_returns_zero_when_no_field_matches() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("zzz", &mut pattern_buf);
+        let needle = atom("zzz");
         let fields = fields(&[("Firefox", 1.0), ("Browse the Web", 0.5)]);
-        assert_eq!(score_fields(&mut fuzzy_matcher, needle, &fields), Some(0.0));
+        assert_eq!(
+            score_fields(&mut fuzzy_matcher, &needle, &fields),
+            Some(0.0)
+        );
     }
 
     #[test]
     fn score_fields_weighted_average() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let fields_a = fields(&[("Firefox", 1.0), ("Unrelated", 1.0)]);
         let fields_b = fields(&[("Firefox", 1.0), ("Fireshot", 1.0)]);
-        let score_a = score_fields(&mut fuzzy_matcher, needle, &fields_a).unwrap();
-        let score_b = score_fields(&mut fuzzy_matcher, needle, &fields_b).unwrap();
+        let score_a = score_fields(&mut fuzzy_matcher, &needle, &fields_a).unwrap();
+        let score_b = score_fields(&mut fuzzy_matcher, &needle, &fields_b).unwrap();
         assert!(score_b > score_a);
     }
 
     #[test]
     fn score_fields_empty_returns_none() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let fields = fields(&[]);
-        assert!(score_fields(&mut fuzzy_matcher, needle, &fields).is_none());
+        assert!(score_fields(&mut fuzzy_matcher, &needle, &fields).is_none());
     }
 
     #[test]
     fn score_fields_skips_zero_weight_fields() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let with_zero = fields(&[("Firefox", 1.0), ("Infinite nonsense", 0.0)]);
         let without = fields(&[("Firefox", 1.0)]);
         assert_eq!(
-            score_fields(&mut fuzzy_matcher, needle, &with_zero),
-            score_fields(&mut fuzzy_matcher, needle, &without),
+            score_fields(&mut fuzzy_matcher, &needle, &with_zero),
+            score_fields(&mut fuzzy_matcher, &needle, &without),
             "a zero-weight field must not influence the score"
         );
     }
@@ -219,10 +252,9 @@ mod tests {
     #[test]
     fn score_fields_all_zero_returns_none() {
         let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
-        let mut pattern_buf = Vec::new();
-        let needle = nucleo::Utf32Str::new("fi", &mut pattern_buf);
+        let needle = atom("fi");
         let fields = fields(&[("Firefox", 0.0), ("Zzz", 0.0)]);
-        assert_eq!(score_fields(&mut fuzzy_matcher, needle, &fields), None);
+        assert_eq!(score_fields(&mut fuzzy_matcher, &needle, &fields), None);
     }
 
     fn scoreable<T>(entry: T, rank: Rank) -> Scoreable<T> {

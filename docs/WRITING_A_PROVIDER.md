@@ -316,6 +316,7 @@ and boost each other. Prefix the key with the provider id and a `-` separator.
 | `runner` | `runner-git status` |
 | `unicode` | `unicode-2192` |
 | `nix` | `nix-hello` |
+| `files` | `files-/home/me/src/lib.rs` |
 
 A provider whose entry ids already begin with the provider id (like
 `unicode-…`, `nix-…`, and `meta-…`) can use the id itself as the key. A

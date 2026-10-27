@@ -149,6 +149,33 @@ weight_name         = 1.0
 weight_shortcode    = 1.3
 weight_codepoint    = 0.6
 
+[engine.provider.builtin.files]
+# Trigger prefix `/`: because `/` also starts every path, everything before
+# the last `/` is an extended prefix — a path, local to the provider.
+# `/etc/ho` offers `/etc` itself plus its direct children, filtered to `ho`,
+# and a trailing `/` (`/etc/`) offers `/etc` with no filter. Each directory
+# and file is an entry: Tab descends into a directory (or completes a file's
+# path) and Enter opens a terminal in a directory or hands a file to
+# `open_command`.
+
+[engine.provider.builtin.files.extra]
+# Directory a bare `/` lists, and the base every typed path is relative to.
+# Default: "/", which makes the text under the prefix a literal absolute path.
+root            = "/"
+# Offer a `..` entry that walks to the parent directory.
+show_parent     = true
+# Include dotfiles in the listing.
+show_hidden     = true
+# Command handing a file entry to the desktop environment's default app.
+open_command    = "xdg-open"
+# Fuzzy-match weights: one field for an entry's full path, one for its name.
+weight_name     = 0.3
+weight_path     = 1.0
+# Rebuild entries from the paths in the usage history, so a file or directory
+# you opened before is offered again even when it is not in the current
+# listing.
+history_entries = true
+
 [engine.provider.builtin.ai]
 # Trigger prefix `?`: type a prompt under it and press Enter to submit. The
 # submit entry's action appends `trigger_suffix` to the query; once the query

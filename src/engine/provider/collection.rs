@@ -9,8 +9,8 @@ use crate::engine::scoring::history::QueryHistory;
 use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
     ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider,
-    EntryMeta, Generation, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta,
-    ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
+    EntryMeta, FilesProvider, Generation, HandleContext, InitContext, NixRunProvider, Provider,
+    ProviderMeta, ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
 };
 
 pub struct ProviderCollection {
@@ -107,6 +107,7 @@ impl ProviderCollection {
         collection.add_provider(Box::new(UnicodeProvider::new()))?;
         collection.add_provider(Box::new(RunnerProvider::new()))?;
         collection.add_provider(Box::new(CliphistProvider::new()))?;
+        collection.add_provider(Box::new(FilesProvider::new()))?;
         collection.add_provider(Box::new(AiProvider::new()))?;
         Ok(collection)
     }
