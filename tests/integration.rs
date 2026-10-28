@@ -553,3 +553,94 @@ fn files_provider_lists_and_descends() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Open-with variants end to end: a suffix filters opener variants, the
+/// plain entry drops out while it is typed, and a selected variant is
+/// remembered so it comes back on the unsuffixed query.
+#[test]
+fn files_provider_offers_open_with_variants() {
+    use huffi::engine::config::EngineConfig;
+    use huffi::engine::provider::config::ProviderOverride;
+
+    let root = PathBuf::from(format!(
+        "/tmp/huffi-files-openers-int-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "hi").unwrap();
+
+    let mut config = EngineConfig::default();
+    config.provider.builtin.insert(
+        "files".to_string(),
+        ProviderOverride {
+            extra: Some(serde_json::json!({
+                "root": root,
+                "openers": [{ "name": "code", "command": ["code"] }],
+            })),
+            ..Default::default()
+        },
+    );
+    let data_dir = root.join("data");
+    let mut engine = Engine::new_with_config(&data_dir, true, &config).expect("engine failed");
+
+    let files_titles = |engine: &mut Engine| -> Vec<String> {
+        engine
+            .query("/note.txt")
+            .scored
+            .iter()
+            .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
+            .map(|s| s.entry.title.clone())
+            .collect()
+    };
+
+    // Without the suffix only the plain file is offered.
+    let titles = files_titles(&mut engine);
+    assert!(titles.contains(&"note.txt".to_string()), "got {titles:?}");
+    assert!(!titles.contains(&"note.txt (code)".to_string()));
+
+    // With the suffix only the variant matches; the plain entry is filtered
+    // out by the engine's fuzzy matching.
+    let reply = engine.query("/note.txt @co");
+    let titles: Vec<&str> = reply
+        .scored
+        .iter()
+        .filter(|s| s.entry.provider_id.as_deref() == Some("files"))
+        .map(|s| s.entry.title.as_str())
+        .collect();
+    assert!(titles.contains(&"note.txt (code)"), "got {titles:?}");
+    assert!(!titles.contains(&"note.txt"), "got {titles:?}");
+    let variant = reply
+        .scored
+        .iter()
+        .find(|s| {
+            s.entry.provider_id.as_deref() == Some("files") && s.entry.title == "note.txt (code)"
+        })
+        .expect("the code variant")
+        .clone();
+    assert_eq!(
+        variant.history_key,
+        Some(format!("files-{}@code", root.join("note.txt").display()))
+    );
+    engine.select("/note.txt @co", &variant.entry.id);
+
+    // The space is optional: the same variant matches without one.
+    let reply = engine.query("/note.txt@cod");
+    assert!(
+        reply
+            .scored
+            .iter()
+            .any(|s| s.entry.title == "note.txt (code)"),
+        "the suffix works without a space too"
+    );
+
+    // The launch fanned out to `/note.txt`, so the remembered variant is
+    // offered again without typing the suffix.
+    let titles = files_titles(&mut engine);
+    assert!(
+        titles.contains(&"note.txt (code)".to_string()),
+        "got {titles:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

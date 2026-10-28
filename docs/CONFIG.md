@@ -168,6 +168,12 @@ show_parent     = true
 show_hidden     = true
 # Command handing a file entry to the desktop environment's default app.
 open_command    = "xdg-open"
+# Symbol separating a path from an opener suffix. Typing `/etc/ho @code`
+# lists `/etc` filtered to `ho` and adds a `code` variant for every listed
+# path the opener applies to; suffixed history entries also show without the
+# symbol, so a used opener is one keystroke away. An empty string turns the
+# feature off. Default: "@".
+suffix          = "@"
 # Fuzzy-match weights: one field for an entry's full path, one for its name.
 weight_name     = 0.3
 weight_path     = 1.0
@@ -175,6 +181,28 @@ weight_path     = 1.0
 # you opened before is offered again even when it is not in the current
 # listing.
 history_entries = true
+
+# Extra "open with" programs. Each listed path gets a suffixed variant per
+# applicable opener. `name` is the suffix text and the opener's identity in
+# entry ids and history keys; it defaults to the basename of `command[0]`.
+# The target path is appended as the last command item. `targets` lists what
+# the opener applies to; empty means every file:
+#   "rs", "toml"      file extensions (case-insensitive, dot optional)
+#   "*"               every file
+#   "inode/directory" every directory
+# Targets mix freely, e.g. ["rs", "inode/directory"] for Rust files plus all
+# directories. Other MIME-shaped tokens (`text/*`) are reserved for later MIME
+# matching and do not match yet.
+#
+# [[engine.provider.builtin.files.extra.openers]]
+# name    = "code"
+# command = ["code", "--goto"]
+# targets = ["rs", "toml"]
+
+# [[engine.provider.builtin.files.extra.openers]]
+# name    = "files"
+# command = ["thunar"]
+# targets = ["inode/directory"]
 
 [engine.provider.builtin.ai]
 # Trigger prefix `?`: type a prompt under it and press Enter to submit. The

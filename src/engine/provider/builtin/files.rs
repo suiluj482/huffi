@@ -21,7 +21,24 @@
 //! directory completes to `<path>/` so the listing follows it, a file
 //! completes to its whole path. Selecting an entry with `Enter` opens a terminal
 //! *in* a directory (the entry's `cwd` makes the shell start there, no inner
-//! `cd`), or hands a file to `xdg-open` (`open` on macOS).
+//! `cd`), or hands a file to `xdg-open`.
+//!
+//! # Open-with variants
+//!
+//! The configured [`suffix`](FilesConfig::suffix) (default `@`) extends the
+//! listing rather than replacing it: `/etc/ho @code` lists `/etc` filtered to
+//! `ho` and gives every listed path — and, per
+//! [`targets`](Opener::targets), those of its openers that apply — an extra
+//! variant that opens it with that [`Opener`]. Variants carry the
+//! opener id in their id (`files:/etc/hosts@code`), history key, suggestion,
+//! and both match fields, so the engine's fuzzy matching filters them by the
+//! suffix on its own: plain entries no longer match once `@` is typed.
+//!
+//! Variants for current paths are only generated while the suffix is typed,
+//! because their suffixed fields would otherwise also match plain queries
+//! and flood the listing. History variants always show: launching
+//! `/etc/hosts@code` records `files-/etc/hosts@code` under every prefix of
+//! the query, so `/etc/ho` later offers the same opener one keystroke away.
 //!
 //! # Entries from history keys
 //!
@@ -31,12 +48,15 @@
 //! for `/etc/` and `/` alike, with no engine-side lookup. On each query the
 //! provider takes the keys under the original query and keeps the `files-`
 //! namespace — keys from other providers share the same history and are
-//! ignored.
+//! ignored. A key's suffix is resolved against the configured openers; an
+//! unknown one stays path text, so paths that contain the suffix symbol keep
+//! working.
 //!
-//! Current and history paths are merged into one deduplicated list (the
-//! current listing wins) before any entry is built, so a path is never offered
-//! twice. Each surviving path that still exists on disk becomes an entry — a
-//! deleted file in history is stale, not an entry.
+//! Current and history targets — a path, optionally paired with an opener —
+//! are merged into one deduplicated list (the current listing wins) before
+//! any entry is built, so nothing is offered twice. Each surviving target
+//! that still exists on disk becomes an entry; a deleted file in history is
+//! stale, not an entry.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -57,6 +77,12 @@ const PREFIX: &str = "/";
 /// provider.
 const HISTORY_PREFIX: &str = "files";
 
+/// [`Opener::targets`] token selecting directories.
+const DIRECTORY_TARGET: &str = "inode/directory";
+
+/// [`Opener::targets`] token selecting every file.
+const FILE_TARGET: &str = "*";
+
 /// Per-provider tuning knobs. When provided via
 /// `[engine.provider.builtin.files.extra]`, the fields are parsed from the
 /// arbitrary extra config, mirroring [`super::DesktopConfig`].
@@ -75,6 +101,14 @@ pub struct FilesConfig {
     /// Command handing a file entry to the desktop environment's default
     /// app. Defaults to `xdg-open`.
     pub open_command: String,
+    /// Symbol that separates a path from an opener suffix: `/etc/ho @code`
+    /// lists `/etc` filtered to `ho` and offers each entry's `code` variant.
+    /// Defaults to `@`; an empty string turns opener variants off.
+    pub suffix: String,
+    /// Extra programs every listed path can be opened with. Each yields a
+    /// suffixed variant of the path's entry, usable while the suffix is
+    /// typed.
+    pub openers: Vec<Opener>,
     /// Fuzzy-match weight of an entry's full path. Defaults above the name
     /// weight: for paths, the whole path is the more distinguishing text.
     pub weight_path: f32,
@@ -84,6 +118,67 @@ pub struct FilesConfig {
     pub history_entries: bool,
 }
 
+/// A configured "open with" program for [`FilesConfig::openers`].
+///
+/// The opener's [`id`](Self::id) is what appears after the suffix in the
+/// query, entry id, and history key, so it should be stable and short.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct Opener {
+    /// Suffix text and identity of this opener. Defaults to the basename of
+    /// the first command item (`/usr/bin/code` → `code`).
+    pub name: String,
+    /// Program and arguments; the target path is appended as the last
+    /// argument.
+    pub command: Vec<String>,
+    /// What this opener applies to: `inode/directory` matches directories,
+    /// `*` every file, and any other token without a `/` is a file extension
+    /// (case-insensitive, leading dot optional). Empty means every file.
+    /// Tokens containing a `/` other than `inode/directory` are reserved for
+    /// MIME matching and never match yet.
+    pub targets: Vec<String>,
+}
+
+impl Opener {
+    /// The opener's identity: [`name`](Self::name), or the basename of the
+    /// program when no name is configured.
+    fn id(&self) -> &str {
+        if !self.name.is_empty() {
+            return &self.name;
+        }
+        self.command
+            .first()
+            .map(|program| program.rsplit('/').next().unwrap_or(program))
+            .unwrap_or_default()
+    }
+
+    /// Whether this opener applies to `path`, given whether it is a
+    /// directory. An empty target list means every file; the directory token
+    /// only ever matches directories, `*` only files, and extension tokens
+    /// only files carrying that extension.
+    fn applies_to(&self, path: &Path, is_dir: bool) -> bool {
+        if self.targets.is_empty() {
+            return !is_dir;
+        }
+        self.targets.iter().any(|target| match target.as_str() {
+            DIRECTORY_TARGET => is_dir,
+            FILE_TARGET => !is_dir,
+            other if other.contains('/') => false,
+            extension => {
+                !is_dir
+                    && path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|actual| {
+                            extension
+                                .trim_start_matches('.')
+                                .eq_ignore_ascii_case(actual)
+                        })
+            }
+        })
+    }
+}
+
 impl Default for FilesConfig {
     fn default() -> Self {
         Self {
@@ -91,6 +186,8 @@ impl Default for FilesConfig {
             show_parent: true,
             show_hidden: true,
             open_command: "xdg-open".into(),
+            suffix: "@".into(),
+            openers: Vec::new(),
             weight_path: 1.0,
             weight_name: 0.3,
             history_entries: true,
@@ -150,6 +247,43 @@ impl FilesProvider {
         }
     }
 
+    /// The configured opener suffix symbol; empty when variants are off.
+    fn suffix_symbol(&self) -> &str {
+        &self.config.suffix
+    }
+
+    /// The suffix appended for `opener`: the configured symbol plus its id,
+    /// e.g. `@code`.
+    fn suffix(&self, opener: &str) -> String {
+        format!("{}{opener}", self.suffix_symbol())
+    }
+
+    /// `text` with `opener`'s suffix appended when an opener is given,
+    /// unchanged otherwise. The conditional suffix pattern lives here so
+    /// entry ids, history keys, and `Tab` suggestions read as one expression.
+    fn suffixed(&self, text: impl Into<String>, opener: Option<&str>) -> String {
+        let mut text = text.into();
+        if let Some(opener) = opener {
+            text.push_str(&self.suffix(opener));
+        }
+        text
+    }
+
+    /// Split `query` into the listing query and the opener suffix at the
+    /// last configured suffix symbol. `/etc/ho @code` lists from `/etc/ho `
+    /// and suffixes with `code`. With the symbol disabled or absent there is
+    /// no suffix and `query` is returned unchanged.
+    fn split_suffix<'q>(&self, query: &'q str) -> (&'q str, Option<&'q str>) {
+        let symbol = self.suffix_symbol();
+        if symbol.is_empty() {
+            return (query, None);
+        }
+        match query.rsplit_once(symbol) {
+            Some((query, suffix)) => (query, Some(suffix)),
+            None => (query, None),
+        }
+    }
+
     /// The direct children of `dir`, sorted by name: the cached list when
     /// `dir` is the directory last read, otherwise a fresh scan (also
     /// stored), so filtering inside it re-filters instead of rescanning.
@@ -170,12 +304,12 @@ impl FilesProvider {
     /// The current paths behind a query on `dir`: the extended prefix
     /// itself (it is an entry when it exists) followed by its direct
     /// children, with hidden ones dropped when [`show_hidden`](FilesConfig::show_hidden)
-    /// is off. Paths — not entries — because dedup runs on plain paths
-    /// before any entry is built.
-    fn current_paths(&self, dir: &Path, children: &[PathBuf]) -> Vec<PathBuf> {
+    /// is off. Paths — not entries — because dedup runs on targets before
+    /// any entry is built.
+    fn current_paths(&mut self, dir: &Path) -> Vec<PathBuf> {
         let mut paths = vec![dir.to_path_buf()];
         paths.extend(
-            children
+            self.children(dir)
                 .iter()
                 .filter(|child| self.config.show_hidden || !title(child).starts_with('.'))
                 .cloned(),
@@ -183,59 +317,139 @@ impl FilesProvider {
         paths
     }
 
-    /// The remembered paths for `ctx`: the entries of the history under the
-    /// original query that live in the `files-` namespace, decoded back to
-    /// paths in history order. History from other providers shares the same
+    /// The current targets behind a query: every current path as itself,
+    /// plus — when the query carries a suffix — one variant per applicable
+    /// opener for that path. Variants are only generated once the suffix is
+    /// typed because their suffixed match fields would otherwise also match
+    /// plain queries and flood the listing.
+    fn current_targets(&mut self, query: &str, with_openers: bool) -> Vec<Target> {
+        let dir = self.extended_prefix(query);
+        let mut targets = Vec::new();
+        for path in self.current_paths(&dir) {
+            let is_dir = std::fs::metadata(&path).ok().map(|meta| meta.is_dir());
+            targets.push(Target {
+                path: path.clone(),
+                opener: None,
+            });
+            let Some(is_dir) = is_dir else { continue };
+            if !with_openers {
+                continue;
+            }
+            for (index, opener) in self.config.openers.iter().enumerate() {
+                if opener.applies_to(&path, is_dir) {
+                    targets.push(Target {
+                        path: path.clone(),
+                        opener: Some(index),
+                    });
+                }
+            }
+        }
+        targets
+    }
+
+    /// The remembered targets for `ctx`: the entries of the history under
+    /// the original query that live in the `files-` namespace, decoded back
+    /// to path + opener pairs in history order. A suffix that does not name
+    /// a configured opener is left as path text, so paths containing the
+    /// symbol keep working. History from other providers shares the same
     /// `ctx.history` and is skipped here.
-    fn history_paths(&self, ctx: &QueryContext) -> Vec<PathBuf> {
+    fn history_targets(&self, ctx: &QueryContext) -> Vec<Target> {
         if !self.config.history_entries {
             return Vec::new();
         }
         let namespace = format!("{HISTORY_PREFIX}-");
+        let symbol = self.suffix_symbol();
         ctx.history
             .keys()
-            .filter_map(|key| Some(PathBuf::from(key.strip_prefix(&namespace)?)))
+            .filter_map(|key| {
+                let rest = key.strip_prefix(&namespace)?;
+                if !symbol.is_empty()
+                    && let Some((path, id)) = rest.rsplit_once(symbol)
+                    && let Some(index) = self
+                        .config
+                        .openers
+                        .iter()
+                        .position(|opener| opener.id() == id)
+                {
+                    return Some(Target {
+                        path: PathBuf::from(path),
+                        opener: Some(index),
+                    });
+                }
+                Some(Target {
+                    path: PathBuf::from(rest),
+                    opener: None,
+                })
+            })
             .collect()
     }
 
-    /// The entry for a path that exists on disk. The single construction
+    /// The entry for a target that exists on disk. The single construction
     /// point every entry goes through — the extended prefix itself, a
     /// listing child, a remembered history path — so an entry's shape is
-    /// decided by what the path *is*, not by where it came from. The
-    /// directory/file difference is only a branch per diverging field:
-    /// - A directory suggests its path *plus a separator* so `Tab` descends
-    ///   into it, and `Enter` opens a terminal in it: the
-    ///   [`cwd`](EntryBuilder::cwd) is what places the spawn *in* the
-    ///   directory; the argv only names a program to run there — the user's
-    ///   shell, started bare.
-    /// - A file suggests its path as is, and `Enter` hands it to the
-    ///   configured [`open_command`](FilesConfig::open_command), spawned in
-    ///   the file's directory.
-    fn path_entry(&self, path: &Path) -> Option<Entry> {
+    /// decided by what the path *is* (and, with an opener, how it is opened),
+    /// not by where it came from.
+    ///
+    /// Without an opener the directory/file difference is only a branch per
+    /// diverging field: a directory suggests its path *plus a separator* so
+    /// `Tab` descends into it and `Enter` opens a terminal in it (the
+    /// [`cwd`](EntryBuilder::cwd) places the spawn *in* the directory); a
+    /// file suggests its path as is and `Enter` hands it to the configured
+    /// [`open_command`](FilesConfig::open_command).
+    ///
+    /// With an opener the entry is a suffixed variant: id, history key,
+    /// suggestion, and both match fields carry the opener id, and `Enter`
+    /// appends the path to the opener's command.
+    fn path_entry(&self, target: &Target) -> Option<Entry> {
+        let path = target.path.as_path();
+        let opener = target.opener.map(|index| &self.config.openers[index]);
         let metadata = std::fs::metadata(path).ok()?;
         let is_dir = metadata.is_dir();
         let name = title(path);
         let display = path.display().to_string();
         let relative = relative_to(&self.config.root, path);
 
-        let builder = entry(entry_id(path), name.clone())
-            .subtitle(display.clone())
-            .icon_name(if is_dir { "folder" } else { file_icon(&name) })
-            .set_query_keeping_prefix(if is_dir {
-                format!("{relative}/")
-            } else {
-                relative
-            })
-            .history_key(format!("{HISTORY_PREFIX}-{}", display));
-
-        let builder = if is_dir {
-            builder.terminal_exec(vec![]).cwd(path.to_path_buf())
-        } else {
-            builder
-                .exec(vec![self.config.open_command.clone(), display])
-                .cwd(path.parent().unwrap_or(path).to_path_buf())
+        let opener_id = opener.map(Opener::id);
+        let id = self.suffixed(entry_id(path), opener_id);
+        let entry_title = match opener {
+            None => name.clone(),
+            Some(opener) => format!("{name} ({})", opener.id()),
         };
-        Some(builder.match_fields(self.match_fields(&name, path)))
+        let icon = match opener {
+            None if is_dir => "folder",
+            None => file_icon(&name),
+            Some(_) => "application-x-executable",
+        };
+        let suggestion = if is_dir && opener.is_none() {
+            format!("{relative}/")
+        } else {
+            self.suffixed(relative, opener_id)
+        };
+        let history_key = self.suffixed(format!("{HISTORY_PREFIX}-{display}"), opener_id);
+
+        let builder = entry(id, entry_title)
+            .subtitle(display.clone())
+            .icon_name(icon)
+            .set_query_keeping_prefix(suggestion)
+            .history_key(history_key);
+
+        let builder = match opener {
+            Some(opener) => {
+                let mut command = opener.command.clone();
+                command.push(display);
+                let cwd = if is_dir {
+                    path.to_path_buf()
+                } else {
+                    path.parent().unwrap_or(path).to_path_buf()
+                };
+                builder.exec(command).cwd(cwd)
+            }
+            None if is_dir => builder.terminal_exec(vec![]).cwd(path.to_path_buf()),
+            None => builder
+                .exec(vec![self.config.open_command.clone(), display])
+                .cwd(path.parent().unwrap_or(path).to_path_buf()),
+        };
+        Some(builder.match_fields(self.match_fields(&name, path, opener_id)))
     }
 
     /// The `..` entry: a directory entry for `parent`, titled `..` and
@@ -253,15 +467,23 @@ impl FilesProvider {
 
     /// The match fields of an entry, the full path weighted above the name
     /// by default: for a path the whole path is the more distinguishing
-    /// text.
-    fn match_fields(&self, name: &str, path: &Path) -> Vec<MatchField> {
+    /// text. A suffixed variant appends the configured symbol and opener id
+    /// to both fields, so `"/etc/ho @code"` fuzzy-matches `hosts @code`
+    /// while plain entries fall out of the results on their own. The space
+    /// before the symbol is deliberate: the engine matches spaces literally,
+    /// so it lets both `hosts @code` and `hosts@code` match the same field.
+    fn match_fields(&self, name: &str, path: &Path, opener: Option<&str>) -> Vec<MatchField> {
+        let field = |text: &str| match opener {
+            Some(opener) => format!("{text} {}", self.suffix(opener)),
+            None => text.to_string(),
+        };
         vec![
             MatchField {
-                text: path.display().to_string(),
+                text: field(&path.display().to_string()),
                 weight: self.config.weight_path,
             },
             MatchField {
-                text: name.to_string(),
+                text: field(name),
                 weight: self.config.weight_name,
             },
         ]
@@ -290,25 +512,36 @@ fn title(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Merge path sources into one ordered list with duplicates removed: only
-/// the first occurrence of a path is kept, so with the sources passed
-/// current-first the live listing wins over remembered history and no path
-/// is ever offered twice.
+/// One entry candidate: a path, optionally opened with a configured opener.
+/// Dedup runs on these before any entry is built, so a path and its opener
+/// variants are distinct while a variant from the listing and the same
+/// variant from history are not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Target {
+    path: PathBuf,
+    /// Index into [`FilesConfig::openers`]; `None` is the plain entry.
+    opener: Option<usize>,
+}
+
+/// Merge target sources into one ordered list with duplicates removed: only
+/// the first occurrence of a `(path, opener)` pair is kept, so with the
+/// sources passed current-first the live listing wins over remembered
+/// history and no entry is ever offered twice.
 ///
-/// Deduplicating *paths* before building any entry keeps the decision cheap
-/// and the construction single-pass: an already-covered path is never
-/// stat'ed, and every surviving path is turned into exactly one entry.
-fn dedup_paths(sources: &[&[PathBuf]]) -> Vec<PathBuf> {
+/// Deduplicating targets before building any entry keeps the decision cheap
+/// and the construction single-pass: an already-covered target is never
+/// stat'ed, and every surviving target is turned into exactly one entry.
+fn dedup_targets(sources: &[&[Target]]) -> Vec<Target> {
     let mut seen = HashSet::new();
-    let mut paths = Vec::new();
+    let mut targets = Vec::new();
     for source in sources {
-        for path in *source {
-            if seen.insert(path.clone()) {
-                paths.push(path.clone());
+        for target in *source {
+            if seen.insert((target.path.clone(), target.opener)) {
+                targets.push(target.clone());
             }
         }
     }
-    paths
+    targets
 }
 
 /// A themed icon name guessed from a file's name. Generic — no MIME lookup,
@@ -347,32 +580,40 @@ impl Provider for FilesProvider {
                 self.config.root.display()
             ));
         }
+        // An opener needs a program to run; anything else cannot produce a
+        // working variant. Duplicate ids are dropped so `(path, opener)` and
+        // the ids/history keys they produce stay unique.
+        let mut seen = HashSet::new();
+        self.config
+            .openers
+            .retain(|opener| !opener.command.is_empty() && seen.insert(opener.id().to_string()));
         ProviderResult::Ok
     }
 
     fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        // The extended prefix: everything before the last `/`, read as a
-        // path local to this provider. The last component (when present) is
-        // only a filter.
-        let dir = self.extended_prefix(ctx.query);
+        // The suffix marks opener variants, never path text: `/etc/ho @code`
+        // lists from `/etc/ho ` and suffixes with `code`.
+        let (query, suffix) = self.split_suffix(ctx.query);
 
-        // Current entries: the extended prefix itself and its direct
-        // children, read from disk (or the cache).
-        let children = self.children(&dir);
-        let current = self.current_paths(&dir, &children);
+        // Current targets: the extended prefix itself and its direct
+        // children, plus their opener variants when a suffix is typed.
+        let current = self.current_targets(query, suffix.is_some());
 
-        // History entries: remembered paths from the `files-` namespace,
-        // complementing whatever the current listing just produced.
-        let history = self.history_paths(&ctx);
+        // History targets: remembered path + opener pairs from the `files-`
+        // namespace, complementing the current listing. Suffixed history
+        // entries show without `@` too, so a used opener is one keystroke
+        // away.
+        let history = self.history_targets(&ctx);
 
-        // One dedup pass over the paths — current first, so the listing
-        // wins — then a single construction pass: each surviving path that
-        // still exists becomes exactly one entry.
-        let mut entries: Vec<Entry> = dedup_paths(&[&current, &history])
+        // One dedup pass over the targets — current first, so the listing
+        // wins over history — then a single construction pass: each
+        // surviving target that still exists becomes exactly one entry.
+        let mut entries: Vec<Entry> = dedup_targets(&[&current, &history])
             .iter()
-            .filter_map(|path| self.path_entry(path))
+            .filter_map(|target| self.path_entry(target))
             .collect();
 
+        let dir = self.extended_prefix(query);
         if self.config.show_parent
             && let Some(parent) = dir.parent()
         {
@@ -848,5 +1089,284 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn opener(name: &str, command: &[&str], targets: &[&str]) -> Opener {
+        Opener {
+            name: name.to_string(),
+            command: command.iter().map(|item| item.to_string()).collect(),
+            targets: targets.iter().map(|item| item.to_string()).collect(),
+        }
+    }
+
+    /// Opener variants extend the listing but are only generated while the
+    /// suffix is typed; a plain query still yields the path's normal entry.
+    #[test]
+    fn opener_variants_are_only_generated_with_a_suffix() {
+        let root = temp_dir("variants");
+        std::fs::write(root.join("hosts"), "x").unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("code", &["code"], &[])];
+        let variant_id = format!("{}@code", id(&root.join("hosts")));
+
+        let plain = p.query(ctx("hosts", "/hosts", &QueryHistory::EMPTY));
+        assert!(ids(&plain).contains(&id(&root.join("hosts"))));
+        assert!(!ids(&plain).contains(&variant_id));
+
+        let suffixed = p.query(ctx("hosts@co", "/hosts@co", &QueryHistory::EMPTY));
+        let variant = suffixed
+            .iter()
+            .find(|entry| entry.entry.id == variant_id)
+            .expect("the code variant of hosts");
+        assert_eq!(variant.entry.title, "hosts (code)");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Extension targets select files only; `*` and the directory token opt
+    /// an opener in for every file and for directory paths (including the
+    /// listed directory itself).
+    #[test]
+    fn opener_variants_respect_targets() {
+        let root = temp_dir("variants-filter");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+        std::fs::write(root.join("hosts"), "x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![
+            opener("code", &["code"], &[".txt"]),
+            opener("fm", &["thunar"], &[FILE_TARGET, DIRECTORY_TARGET]),
+        ];
+        let entries = p.query(ctx("@", "/@", &QueryHistory::EMPTY));
+        let entries = ids(&entries);
+        let variant = |path: PathBuf, opener: &str| format!("{}@{opener}", id(&path));
+
+        assert!(entries.contains(&variant(root.join("note.txt"), "code")));
+        assert!(entries.contains(&variant(root.join("note.txt"), "fm")));
+        assert!(entries.contains(&variant(root.join("hosts"), "fm")));
+        assert!(entries.contains(&variant(root.join("sub"), "fm")));
+        assert!(entries.contains(&variant(root.clone(), "fm")));
+        assert!(!entries.contains(&variant(root.join("hosts"), "code")));
+        assert!(!entries.contains(&variant(root.join("sub"), "code")));
+        assert!(
+            !entries.contains(&variant(root.clone(), "code")),
+            "directories need the inode/directory target"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A directory-only opener never applies to files, including the files
+    /// in the same listing.
+    #[test]
+    fn opener_variants_can_target_directories_only() {
+        let root = temp_dir("variants-dirs-only");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("fm", &["thunar"], &[DIRECTORY_TARGET])];
+        let entries = ids(&p.query(ctx("@", "/@", &QueryHistory::EMPTY)));
+        let variant = |path: PathBuf| format!("{}@fm", id(&path));
+
+        assert!(entries.contains(&variant(root.clone())));
+        assert!(entries.contains(&variant(root.join("sub"))));
+        assert!(!entries.contains(&variant(root.join("note.txt"))));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// An empty target list means every file and no directory; MIME-shaped
+    /// tokens are reserved and do not match yet.
+    #[test]
+    fn empty_targets_mean_every_file() {
+        let root = temp_dir("variants-default");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![
+            opener("default", &["code"], &[]),
+            opener("mime", &["viewer"], &["text/*"]),
+        ];
+        let entries = ids(&p.query(ctx("@", "/@", &QueryHistory::EMPTY)));
+
+        assert!(entries.contains(&format!("{}@default", id(&root.join("note.txt")))));
+        assert!(!entries.contains(&format!("{}@default", id(&root.join("sub")))));
+        assert!(!entries.contains(&format!("{}@default", id(&root))));
+        assert!(
+            entries.iter().all(|entry| !entry.ends_with("@mime")),
+            "unimplemented MIME targets do not match"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A variant carries the opener id in id, history key, suggestion, and
+    /// both match fields, and appends the target to the opener's command.
+    #[test]
+    fn opener_entries_carry_the_suffix_in_every_field() {
+        let root = temp_dir("variant-shape");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+        let path = root.join("note.txt");
+        let display = path.display().to_string();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("editor", &["code", "-n"], &[])];
+        let entries = p.query(ctx("note.txt@edi", "/note.txt@edi", &QueryHistory::EMPTY));
+        let entry = entries
+            .iter()
+            .find(|entry| entry.entry.id == format!("{}@editor", id(&path)))
+            .expect("the editor variant");
+
+        assert_eq!(entry.history_key, Some(format!("files-{display}@editor")));
+        let suggestion = entry.entry.set_query.as_ref().expect("a suggestion");
+        assert_eq!(
+            suggestion.resolve(Some(PREFIX)),
+            "/note.txt@editor",
+            "tab re-types the suffixed path"
+        );
+        match &entry.entry.action {
+            Action::Exec { args, mode, cwd } => {
+                assert_eq!(*mode, ExecMode::Direct);
+                assert_eq!(
+                    args,
+                    &vec!["code".to_string(), "-n".into(), display.clone()]
+                );
+                assert_eq!(cwd.as_deref(), Some(root.as_path()));
+            }
+            other => panic!("expected a direct exec, got {other:?}"),
+        }
+        match &entry.rank {
+            Rank::MatchFields(fields) => {
+                let texts: Vec<&str> = fields.iter().map(|field| field.text.as_str()).collect();
+                assert_eq!(
+                    texts,
+                    vec![format!("{display} @editor"), "note.txt @editor".to_string()]
+                );
+            }
+            other => panic!("expected match fields, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Suffixed history entries show even on a plain query, and dedup with
+    /// the current variant once the suffix is typed.
+    #[test]
+    fn history_variants_show_without_the_suffix() {
+        let root = temp_dir("history-variant");
+        let path = root.join("note.txt");
+        std::fs::write(&path, "x").unwrap();
+        let key = format!("{HISTORY_PREFIX}-{}@code", path.display());
+        let store = store_with([key]);
+        let history = store.history_for("");
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("code", &["code"], &[])];
+        let variant_id = format!("{}@code", id(&path));
+
+        let plain_query = p.query(ctx("", "/", &history));
+        assert!(ids(&plain_query).contains(&variant_id));
+
+        let suffixed = p.query(ctx("note.txt@code", "/note.txt@code", &history));
+        assert_eq!(
+            ids(&suffixed)
+                .iter()
+                .filter(|entry_id| **entry_id == variant_id)
+                .count(),
+            1,
+            "history does not duplicate the current variant"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// An unrecognized history suffix is path text, so paths containing the
+    /// symbol still reconstruct.
+    #[test]
+    fn unknown_history_suffix_stays_path_text() {
+        let root = temp_dir("literal-suffix");
+        let path = root.join("note.txt@nope");
+        std::fs::write(&path, "x").unwrap();
+        let store = store_with([format!("{HISTORY_PREFIX}-{}", path.display())]);
+        let history = store.history_for("");
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("code", &["code"], &[])];
+        assert!(ids(&p.query(ctx("", "/", &history))).contains(&id(&path)));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The suffix symbol is configurable; the default `@` stops splitting.
+    #[test]
+    fn the_suffix_symbol_is_configurable() {
+        let root = temp_dir("suffix-symbol");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.suffix = ":".into();
+        p.config.openers = vec![opener("code", &["code"], &[])];
+        let variant_id = format!("{}@code", id(&root.join("note.txt")));
+        assert!(
+            !ids(&p.query(ctx("note.txt@code", "/note.txt@code", &QueryHistory::EMPTY)))
+                .contains(&variant_id)
+        );
+        let variant_id = format!("{}:code", id(&root.join("note.txt")));
+        assert!(
+            ids(&p.query(ctx("note.txt:code", "/note.txt:code", &QueryHistory::EMPTY)))
+                .contains(&variant_id)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A space before the suffix is just filter text: `/etc/ho @code` still
+    /// yields the `code` variants.
+    #[test]
+    fn opener_variants_work_after_a_space() {
+        let root = temp_dir("variants-space");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("code", &["code"], &[])];
+        let entries = p.query(ctx("note.txt @co", "/note.txt @co", &QueryHistory::EMPTY));
+        assert!(ids(&entries).contains(&format!("{}@code", id(&root.join("note.txt")))));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Openers without a command cannot run and duplicate ids would collide
+    /// in ids and history keys, so both are dropped at init. An unnamed
+    /// opener takes its program's basename.
+    #[test]
+    fn init_normalizes_openers() {
+        let root = temp_dir("opener-init");
+        let mut p = FilesProvider::new();
+        assert!(matches!(
+            p.init(InitContext {
+                data_dir: Path::new("/tmp"),
+                extra: Some(serde_json::json!({
+                    "root": root,
+                    "suffix": ":",
+                    "openers": [
+                        { "name": "code", "command": ["code"] },
+                        { "name": "code", "command": ["other"] },
+                        { "command": ["/usr/bin/firefox"], "targets": ["inode/directory"] },
+                        { "name": "broken", "command": [] }
+                    ],
+                })),
+            }),
+            ProviderResult::Ok
+        ));
+        assert_eq!(p.config.suffix, ":");
+        let ids: Vec<&str> = p.config.openers.iter().map(Opener::id).collect();
+        assert_eq!(ids, vec!["code", "firefox"]);
+        assert_eq!(p.config.openers[1].command, vec!["/usr/bin/firefox"]);
+        assert_eq!(p.config.openers[1].targets, vec!["inode/directory"]);
+        std::fs::remove_dir_all(&root).ok();
     }
 }
