@@ -207,15 +207,21 @@ history_entries = true
 # sniffing); unknown extensions count as application/octet-stream. The "*"
 # forms are media-range-style matching syntax, not registered MIME types.
 #
+# A variant's icon defaults to `application-x-executable`. Set `icon` to a
+# freedesktop icon theme name, or `icon_path` to an explicit PNG/SVG file;
+# `icon_path` wins when both are set.
+#
 # [[engine.provider.builtin.files.extra.openers]]
 # name    = "code"
 # command = ["code", "--goto"]
 # targets = ["rs", "toml"]
+# icon    = "vscode"
 
 # [[engine.provider.builtin.files.extra.openers]]
 # name    = "files"
 # command = ["thunar"]
 # targets = ["inode/directory"]
+# icon    = "system-file-manager"
 
 [engine.provider.builtin.ai]
 # Trigger prefix `?`: type a prompt under it and press Enter to submit. The

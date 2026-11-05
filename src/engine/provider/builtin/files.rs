@@ -37,7 +37,11 @@
 //! variant that opens it with that [`Opener`]. Variants carry the
 //! opener id in their id (`files:/etc/hosts@code`), history key, suggestion,
 //! and both match fields, so the engine's fuzzy matching filters them by the
-//! suffix on its own: plain entries no longer match once `@` is typed.
+//! suffix on its own: plain entries no longer match once `@` is typed. A
+//! variant uses its opener's [`icon`](Opener::icon) or
+//! [`icon_path`](Opener::icon_path) when configured, falling back to
+//! `application-x-executable`; plain entries keep their folder or file-type
+//! icon.
 //!
 //! Variants for current paths are only generated while the suffix is typed,
 //! because their suffixed fields would otherwise also match plain queries
@@ -74,7 +78,7 @@ use mime_guess::Mime;
 use serde::Deserialize;
 
 use crate::engine::provider::{
-    Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
+    Entry, Icon, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
 use crate::engine::scoring::MatchField;
@@ -141,6 +145,12 @@ pub struct Opener {
     /// Program and arguments; the target path is appended as the last
     /// argument.
     pub command: Vec<String>,
+    /// Freedesktop icon theme name for this opener's variants, e.g.
+    /// `"vscode"`. Defaults to `"application-x-executable"`.
+    pub icon: Option<String>,
+    /// Explicit icon file path (PNG or SVG) for this opener's variants. Takes
+    /// precedence over [`icon`](Self::icon).
+    pub icon_path: Option<String>,
     /// What this opener applies to. Tokens:
     /// - `inode/directory` or `inode/*`: directories
     /// - `*` or `*/*`: every file
@@ -165,6 +175,16 @@ impl Opener {
             .first()
             .map(|program| program.rsplit('/').next().unwrap_or(program))
             .unwrap_or_default()
+    }
+
+    /// The icon for this opener's variants. An explicit path wins over a
+    /// theme name; `None` lets the caller use its fallback.
+    fn variant_icon(&self) -> Option<Icon> {
+        if let Some(path) = &self.icon_path {
+            Some(Icon::Path(path.into()))
+        } else {
+            self.icon.clone().map(Icon::Name)
+        }
     }
 
     /// Whether this opener applies to `path`, given whether it is a
@@ -425,9 +445,11 @@ impl FilesProvider {
             Some(opener) => format!("{name} ({})", opener.id()),
         };
         let icon = match opener {
-            None if is_dir => "folder",
-            None => file_icon(&name),
-            Some(_) => "application-x-executable",
+            Some(opener) => opener
+                .variant_icon()
+                .unwrap_or_else(|| Icon::Name("application-x-executable".into())),
+            None if is_dir => Icon::Name("folder".into()),
+            None => Icon::Name(file_icon(&name).into()),
         };
         let suggestion = if is_dir && opener.is_none() {
             format!("{relative}/")
@@ -438,7 +460,7 @@ impl FilesProvider {
 
         let builder = entry(id, entry_title)
             .subtitle(display.clone())
-            .icon_name(icon)
+            .icon(icon)
             .set_query_keeping_prefix(suggestion)
             .history_key(history_key);
 
@@ -1211,6 +1233,11 @@ mod tests {
                     "show_hidden": false,
                     "show_parent": false,
                     "weight_path": 0.5,
+                    "openers": [{
+                        "name": "code",
+                        "command": ["code"],
+                        "icon": "vscode",
+                    }],
                 })),
             }),
             ProviderResult::Ok
@@ -1219,6 +1246,7 @@ mod tests {
         assert!(!p.config.show_hidden);
         assert!(!p.config.show_parent);
         assert_eq!(p.config.weight_path, 0.5);
+        assert_eq!(p.config.openers[0].icon.as_deref(), Some("vscode"));
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -1241,6 +1269,8 @@ mod tests {
         Opener {
             name: name.to_string(),
             command: command.iter().map(|item| item.to_string()).collect(),
+            icon: None,
+            icon_path: None,
             targets: targets.iter().map(|item| item.to_string()).collect(),
         }
     }
@@ -1401,6 +1431,54 @@ mod tests {
 
         assert!(entries.contains(&format!("{}@text", id(&root.join("note.txt")))));
         assert!(!entries.contains(&format!("{}@text", id(&root.join("logo.png")))));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Opener variants can carry their own icon, with an explicit path taking
+    /// precedence over a theme name. Unconfigured openers keep the fallback.
+    #[test]
+    fn opener_variants_use_configured_icons() {
+        let root = temp_dir("variant-icons");
+        let path = root.join("note.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let mut themed = opener("themed", &["viewer"], &[]);
+        themed.icon = Some("text-editor".into());
+
+        let mut pathed = opener("pathed", &["viewer"], &[]);
+        pathed.icon = Some("ignored".into());
+        pathed.icon_path = Some("/tmp/opener.svg".into());
+
+        let fallback = opener("fallback", &["viewer"], &[]);
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![themed, pathed, fallback];
+        let entries = p.query(ctx("@", "/@", &QueryHistory::EMPTY));
+        let icon = |opener: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.entry.id == format!("{}@{opener}", id(&path)))
+                .and_then(|entry| entry.entry.icon.clone())
+        };
+
+        assert_eq!(icon("themed"), Some(Icon::Name("text-editor".into())));
+        assert_eq!(
+            icon("pathed"),
+            Some(Icon::Path(PathBuf::from("/tmp/opener.svg")))
+        );
+        assert_eq!(
+            icon("fallback"),
+            Some(Icon::Name("application-x-executable".into()))
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.entry.id == id(&path))
+                .and_then(|entry| entry.entry.icon.clone()),
+            Some(Icon::Name("text-x-generic".into())),
+            "plain entries keep their file-type icon"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
