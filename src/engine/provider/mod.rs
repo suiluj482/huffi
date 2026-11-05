@@ -15,7 +15,7 @@
 //! | [`ProvidersProvider`] | `\` prefix | registered providers — list them, then `\<id> ` to scope to one |
 //! | [`NixRunProvider`] | `!` prefix | `nix run nixpkgs#<name>` — nixpkgs packages from `nix search` |
 //! | [`UnicodeProvider`] | `:` prefix | `unicode_names2`, `emojis` — characters by name, shortcode, or code point |
-//! | [`FilesProvider`] | `/` prefix | the filesystem — a directory's children, with history-driven rows |
+//! | [`FilesProvider`] | `/` for live listing; history always | the filesystem — a directory's children, with history-driven rows |
 //! | [`AiProvider`] | `?` prefix | OpenAI-compatible chat completion (defaults to local Ollama) — type a prompt, append the trigger suffix to send |
 
 pub mod builtin;

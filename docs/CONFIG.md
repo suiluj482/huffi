@@ -150,13 +150,18 @@ weight_shortcode    = 1.3
 weight_codepoint    = 0.6
 
 [engine.provider.builtin.files]
-# Trigger prefix `/`: because `/` also starts every path, everything before
-# the last `/` is an extended prefix — a path, local to the provider.
-# `/etc/ho` offers `/etc` itself plus its direct children, filtered to `ho`,
-# and a trailing `/` (`/etc/`) offers `/etc` with no filter. Each directory
-# and file is an entry: Tab descends into a directory (or completes a file's
-# path) and Enter opens a terminal in a directory or hands a file to
-# `open_command`.
+# Trigger prefix `/` opens the live directory browser. Because `/` also starts
+# every path, everything before the last `/` is an extended prefix — a path,
+# local to the provider. `/etc/ho` offers `/etc` itself plus its direct
+# children, filtered to `ho`, and a trailing `/` (`/etc/`) offers `/etc` with
+# no filter. Each directory and file is an entry: Tab descends into a
+# directory (or completes a file's path) and Enter opens a terminal in a
+# directory or hands a file to `open_command`.
+#
+# The live listing only exists while `/` (or a `\files ` target) owns the
+# query. Remembered paths answer every query by default, so `hosts` without a
+# prefix can still offer a previously used `/etc/hosts`. Set the generic
+# `prefix_only = true` override to keep every files entry behind `/`.
 
 [engine.provider.builtin.files.extra]
 # Directory a bare `/` lists, and the base every typed path is relative to.
@@ -181,7 +186,8 @@ weight_path     = 1.0
 # you opened or completed with Tab before is offered again even when it is not
 # in the current listing. The lookup is unscoped by the typed query: a path
 # remembered under any prefix is reconstructed and then filtered by normal
-# fuzzy matching.
+# fuzzy matching. These entries are available without `/`; the live listing
+# remains prefix-only.
 history_entries = true
 
 # Extra "open with" programs. Each listed path gets a suffixed variant per

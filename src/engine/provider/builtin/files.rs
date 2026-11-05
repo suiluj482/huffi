@@ -1,8 +1,9 @@
 //! Browse the filesystem from the launcher.
 //!
-//! Triggered by the `/` prefix. Because `/` is also the start of every path,
-//! the text under the prefix *is* path-shaped. Everything before the last
-//! `/` is the **extended prefix** — a path, local to this provider:
+//! The `/` prefix opens the live directory browser. Because `/` is also the
+//! start of every path, the text under the prefix *is* path-shaped. Everything
+//! before the last `/` is the **extended prefix** — a path, local to this
+//! provider:
 //!
 //! - `/etc/ho` → extended prefix `/etc` — the current entries are that path
 //!   itself and its direct children, and `ho` filters them.
@@ -16,12 +17,16 @@
 //! offers `hosts` as a direct child without a special case — the full typed
 //! text is always a child of its extended prefix.
 //!
-//! Every entry is either a directory or a file, and each offers a
+//! Every current entry is either a directory or a file, and each offers a
 //! keeping-prefix [`Tab`](super::super::QuerySuggestion) suggestion: a
 //! directory completes to `<path>/` so the listing follows it, a file
 //! completes to its whole path. Selecting an entry with `Enter` opens a terminal
 //! *in* a directory (the entry's `cwd` makes the shell start there, no inner
 //! `cd`), or hands a file to `xdg-open`.
+//!
+//! Only the live listing is tied to the prefix. Remembered paths (below)
+//! answer every query, so typing `hosts` without `/` can still surface a
+//! previously used `/etc/hosts`.
 //!
 //! # Open-with variants
 //!
@@ -196,12 +201,13 @@ impl Default for FilesConfig {
     }
 }
 
-/// Browses the filesystem, one directory per query, with history-driven entries.
+/// Browses the filesystem under `/`, with history-driven entries available
+/// everywhere.
 ///
-/// Triggered by the `/` prefix and only queried under it. The listing is a
-/// single `read_dir` of the resolved directory; the last directory read is
-/// cached so that filtering inside it (typing, then deleting a character)
-/// re-filters instead of rescanning.
+/// The live listing is a single `read_dir` of the resolved directory; the last
+/// directory read is cached so that filtering inside it (typing, then deleting
+/// a character) re-filters instead of rescanning. Queries that do not own the
+/// provider's prefix get remembered paths only.
 pub struct FilesProvider {
     config: FilesConfig,
     /// The last directory read and its children, reused for the next query
@@ -590,11 +596,9 @@ fn file_icon(name: &str) -> &'static str {
 
 impl Provider for FilesProvider {
     fn meta(&self) -> ProviderMeta {
-        // Trigger prefix: `/etc` lists `/etc`.
-        ProviderMeta::builder("files")
-            .prefix(PREFIX)
-            .prefix_only(true)
-            .build()
+        // `/` opens the live listing, but history entries answer every query.
+        // `ctx.prefix` tells `query` which of the two it is serving.
+        ProviderMeta::builder("files").prefix(PREFIX).build()
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {
@@ -624,9 +628,17 @@ impl Provider for FilesProvider {
         // lists from `/etc/ho ` and suffixes with `code`.
         let (query, suffix) = self.split_suffix(ctx.query);
 
-        // Current targets: the extended prefix itself and its direct
-        // children, plus their opener variants when a suffix is typed.
-        let current = self.current_targets(query, suffix.is_some());
+        // Only the provider's own prefix (or a `\files ` target) browses the
+        // filesystem. Unprefixed queries are history-only: the current listing
+        // is not global.
+        let browsing = ctx.prefix.is_some();
+        let current = if browsing {
+            // The extended prefix itself and its direct children, plus their
+            // opener variants when a suffix is typed.
+            self.current_targets(query, suffix.is_some())
+        } else {
+            Vec::new()
+        };
 
         // History targets: remembered path + opener pairs from the `files-`
         // namespace, complementing the current listing. Suffixed history
@@ -642,14 +654,14 @@ impl Provider for FilesProvider {
             .filter_map(|target| self.path_entry(target))
             .collect();
 
-        let dir = self.extended_prefix(query);
-        if self.config.show_parent
-            && let Some(parent) = dir.parent()
-        {
-            entries.push(self.parent_entry(
-                parent,
-                format!("{}/", relative_to(&self.config.root, parent)),
-            ));
+        if browsing && self.config.show_parent {
+            let dir = self.extended_prefix(query);
+            if let Some(parent) = dir.parent() {
+                entries.push(self.parent_entry(
+                    parent,
+                    format!("{}/", relative_to(&self.config.root, parent)),
+                ));
+            }
         }
 
         entries
@@ -680,6 +692,22 @@ mod tests {
     ) -> QueryContext<'a> {
         QueryContext {
             prefix: Some(PREFIX),
+            query,
+            original,
+            history,
+            known_history,
+            generation: Generation::default(),
+        }
+    }
+
+    fn global_ctx_with_known<'a>(
+        query: &'a str,
+        original: &'a str,
+        history: &'a QueryHistory,
+        known_history: &'a KnownHistory,
+    ) -> QueryContext<'a> {
+        QueryContext {
+            prefix: None,
             query,
             original,
             history,
@@ -729,11 +757,14 @@ mod tests {
     }
 
     #[test]
-    fn meta_triggers_on_slash_prefix_only() {
+    fn meta_triggers_on_slash_without_requiring_it() {
         let meta = FilesProvider::new().meta();
         assert_eq!(meta.id, "files");
         assert_eq!(meta.prefixes, vec!["/".to_string()]);
-        assert!(meta.prefix_only);
+        assert!(
+            !meta.prefix_only,
+            "history entries answer unprefixed queries"
+        );
         assert!(meta.enabled);
     }
 
@@ -1078,6 +1109,40 @@ mod tests {
             ids(&entries).contains(&id(&remembered)),
             "the globally known path is reconstructed under an unrelated query"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Unprefixed queries see remembered paths only. The live listing, the
+    /// extended prefix itself, and the `..` entry stay behind the provider's
+    /// prefix.
+    #[test]
+    fn unprefixed_queries_return_only_history() {
+        let root = temp_dir("unprefixed-history");
+        let current = root.join("current.txt");
+        let remembered = root.join("remembered.txt");
+        std::fs::write(&current, "x").unwrap();
+        std::fs::write(&remembered, "x").unwrap();
+
+        let store = store_with([format!("{HISTORY_PREFIX}-{}", remembered.display())]);
+        let history = store.history_for("remembered");
+
+        let mut p = provider_at(&root);
+        let entries = p.query(global_ctx_with_known(
+            "remembered",
+            "remembered",
+            &history,
+            store.known_history(),
+        ));
+        let entry_ids = ids(&entries);
+        assert_eq!(
+            entry_ids,
+            vec![id(&remembered)],
+            "only the remembered path is global"
+        );
+        assert!(!entry_ids.contains(&id(&current)));
+        assert!(!entry_ids.contains(&id(&root)));
+        assert!(entries.iter().all(|entry| entry.entry.title != ".."));
 
         std::fs::remove_dir_all(&root).ok();
     }
