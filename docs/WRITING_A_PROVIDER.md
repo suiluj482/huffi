@@ -146,10 +146,14 @@ The `QueryContext` fields:
   precomputed once per query: the keys with their decayed and normalized
   scores, plus the query's confidence. Every provider answering a query
   sees the same view; use it to react to prior usage (e.g. hide or
-  promote entries the user already launched for this text). It is looked
-  up under `original`, so a prefix-triggered provider still sees the
-  history recorded for the full typed query, not for its stripped
-  `query`.
+  promote entries the user already used for this text). It is looked up
+  under `original`, so a prefix-triggered provider still sees the history
+  recorded for the full typed query, not for its stripped `query`.
+- `known_history` — every key ever used, independent of the typed query.
+  Use it to reconstruct entries the current listing does not contain (the
+  files provider does this); use `history` when the decision depends on
+  the current text. Both Enter and accepting a Tab suggestion count as a
+  use. It carries only keys, no scores, and is cached by the engine.
 - `generation` — where you are in the app's lifetime: `generation.session`
   bumps each time the launcher is revealed for a round of typing, and
   `generation.query` bumps each time providers actually run (a keystroke
@@ -294,9 +298,10 @@ empty-query baseline of `0.8`.
 
 ### History tracking
 
-If an entry has a `history_key`, the engine records launches and boosts
-against that key. Over time the ranking becomes personalised — frequently
-launched entries rise for their typed prefix.
+If an entry has a `history_key`, the engine records uses and boosts against
+that key. Enter and accepting a `Tab` suggestion both count as uses, so over
+time the ranking becomes personalised — frequently used entries rise for
+their typed prefix.
 
 Entries **without** a `history_key` still appear in results but are
 invisible to the history model: they can't be boosted, deleted, or learned
@@ -317,6 +322,7 @@ and boost each other. Prefix the key with the provider id and a `-` separator.
 | `runner` | `runner-git status` |
 | `unicode` | `unicode-2192` |
 | `nix` | `nix-hello` |
+| `files` | `files-/home/me/src/lib.rs` |
 
 A provider whose entry ids already begin with the provider id (like
 `unicode-…`, `nix-…`, and `meta-…`) can use the id itself as the key. A
@@ -333,18 +339,35 @@ query. Each entry carries:
 - `effective` — the decayed score of the key,
 - `score` — that score normalized against the strongest key recorded for
   this query, so the top key reads `1.0` and the others scale down,
-- `samples` — how many launches back the score is built from.
+- `samples` — how many recorded uses back the score is built from.
 
 `ctx.history.confidence()` scales from 0 (cold) toward 1 as the query's
-keys accumulate launches. The engine builds the history once per query,
+keys accumulate uses. The engine builds the history once per query,
 so iterating it is free of decay math.
+
+`ctx.known_history` is the complementary **unscoped** view: every key
+ever used, whatever query it was used under, with no scores. Recorded
+uses fan out to every prefix of the typed query — including the empty
+one — so this is the store's global key index, cached and rebuilt only
+when history changes. It answers "has this key ever been used?";
+`ctx.history` answers "how relevant is this key to what I just typed?".
+Keep the two separate: a provider that reconstructs entries from
+`known_history` should still let the engine's ranking use the scoped
+`history`.
 
 ### Query suggestions
 
 Setting `.set_query(query)` gives the entry a query suggestion. When it is the
 currently selected entry and the user presses `Tab`, the UI replaces the
-input with the suggestion and re-runs the search. Pressing `Tab` on an entry 
+input with the suggestion and re-runs the search. Pressing `Tab` on an entry
 without `set_query` does nothing.
+
+Applying a suggestion also records the entry's `history_key` as a launch
+under the query the user tabbed from. That is deliberate: repeated
+completions are evidence that this row is useful for that text, so they can
+raise its rank just like pressing Enter. The entry's action is not performed
+and `Provider::handle` is not called. If the entry has no `history_key`, the
+completion changes the query but records nothing.
 
 The suggestion doesn't have to be a completion of what the user typed — it
 can be a completely different query. This is useful for chaining entries

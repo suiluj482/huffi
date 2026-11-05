@@ -126,9 +126,11 @@ impl Engine {
             self.generation.query += 1;
             let pre = self.providers.preprocess_query(query);
             let history = self.scorer.history_for(query);
-            let groups = self
-                .providers
-                .grouped_entries(&pre, &history, self.generation);
+            let groups = {
+                let known_history = self.scorer.known_history();
+                self.providers
+                    .grouped_entries(&pre, &history, known_history, self.generation)
+            };
             let scored = self.scorer.score(groups, &history);
             self.cache = Some(QueryReply {
                 pre,
@@ -161,12 +163,32 @@ impl Engine {
             hit.entry.action.perform(&self.external);
         }
         if let Some(provider_id) = &hit.entry.provider_id {
-            self.providers
-                .handle(provider_id, entry_id, &pre, &history, self.generation);
+            let known_history = self.scorer.known_history();
+            self.providers.handle(
+                provider_id,
+                entry_id,
+                &pre,
+                &history,
+                known_history,
+                self.generation,
+            );
         }
         if let Some(key) = &hit.history_key {
             self.scorer.record_launch(query, key);
         }
+    }
+
+    /// Record a history key as used without performing an action or notifying
+    /// its provider.
+    ///
+    /// The UI calls this when it applies a Tab suggestion, passing the key of
+    /// the row that supplied it. The use is recorded under `query`, the text
+    /// the suggestion was chosen from, so accepting the same completion
+    /// repeatedly raises its rank there — and at that query's prefixes through
+    /// fan-out — exactly like pressing Enter.
+    pub fn record_suggestion(&mut self, query: &str, history_key: &str) {
+        self.cache = None;
+        self.scorer.record_launch(query, history_key);
     }
 
     /// Boost a history key's ranking using the scorer's configured boost weight.
@@ -260,6 +282,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct HistoryView {
         keys: Vec<String>,
+        known_keys: Vec<String>,
         confidence: f64,
         alpha_score: f64,
         generation: Generation,
@@ -268,6 +291,7 @@ mod tests {
     fn history_view(ctx: &QueryContext) -> HistoryView {
         HistoryView {
             keys: ctx.history.keys().cloned().collect(),
+            known_keys: ctx.known_history.keys().cloned().collect(),
             confidence: ctx.history.confidence(),
             alpha_score: ctx
                 .history
@@ -283,6 +307,7 @@ mod tests {
     fn cold_first_run() -> HistoryView {
         HistoryView {
             keys: Vec::new(),
+            known_keys: Vec::new(),
             confidence: 0.0,
             alpha_score: 0.0,
             generation: Generation {
@@ -404,6 +429,63 @@ mod tests {
             "the provider sees history looked up under the original query, even though its own query text is stripped"
         );
         assert_eq!(view.alpha_score, 1.0);
+    }
+
+    #[test]
+    fn providers_receive_scoped_and_unscoped_history_separately() {
+        let mut e = engine();
+        let (provider, queried, _) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        e.select("al", "alpha");
+        e.query("beta");
+
+        let log = queried.lock().unwrap();
+        let view = log.last().unwrap();
+        assert!(
+            view.keys.is_empty(),
+            "history scoped to `beta` must stay empty"
+        );
+        assert_eq!(
+            view.known_keys,
+            vec!["alpha".to_string()],
+            "the unscoped view still knows every used key"
+        );
+    }
+
+    #[test]
+    fn applying_a_suggestion_records_history_without_selecting() {
+        let mut e = engine();
+        let (provider, queried, handled) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        e.query("al");
+        assert!(
+            queried.lock().unwrap().last().unwrap().keys.is_empty(),
+            "a cold query has no recorded history"
+        );
+
+        e.record_suggestion("al", "alpha");
+
+        assert!(
+            handled.lock().unwrap().is_empty(),
+            "completion must not run the selection handler"
+        );
+        assert!(
+            !e.scorer.history_for("a").is_empty(),
+            "completion fans out to the query's prefixes like a launch"
+        );
+
+        e.query("al");
+        let log = queried.lock().unwrap();
+        let view = log.last().unwrap();
+        assert_eq!(view.keys, vec!["alpha".to_string()]);
+        assert!(view.confidence > 0.0, "completion counts as evidence");
+        assert_eq!(
+            view.known_keys,
+            vec!["alpha".to_string()],
+            "a completed key enters the unscoped view"
+        );
     }
 
     #[test]
@@ -815,9 +897,12 @@ mod tests {
             let pre = engine.providers.preprocess_query(q);
             let history = engine.scorer.history_for(q);
             let t = Instant::now();
-            let groups = engine
-                .providers
-                .grouped_entries(&pre, &history, engine.generation);
+            let groups = {
+                let known_history = engine.scorer.known_history();
+                engine
+                    .providers
+                    .grouped_entries(&pre, &history, known_history, engine.generation)
+            };
             let group_dur = t.elapsed();
             let t = Instant::now();
             let scored = engine.scorer.score(groups, &history);

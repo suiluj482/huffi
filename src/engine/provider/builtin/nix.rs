@@ -314,7 +314,7 @@ fn save_cache(path: &Path, packages: &[PackageInfo]) {
 mod tests {
     use super::*;
     use crate::engine::provider::Generation;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
     fn sample_json() -> &'static str {
         r#"{
@@ -511,6 +511,7 @@ mod tests {
                 query: "",
                 original: "",
                 history: &QueryHistory::EMPTY,
+                known_history: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -522,6 +523,7 @@ mod tests {
                 query: "hello",
                 original: "hello",
                 history: &QueryHistory::EMPTY,
+                known_history: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -544,6 +546,7 @@ mod tests {
             query: "hell",
             original: "!hell",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 1);

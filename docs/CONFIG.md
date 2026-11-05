@@ -149,6 +149,80 @@ weight_name         = 1.0
 weight_shortcode    = 1.3
 weight_codepoint    = 0.6
 
+[engine.provider.builtin.files]
+# Trigger prefix `/` opens the live directory browser. Because `/` also starts
+# every path, everything before the last `/` is an extended prefix — a path,
+# local to the provider. `/etc/ho` offers `/etc` itself plus its direct
+# children, filtered to `ho`, and a trailing `/` (`/etc/`) offers `/etc` with
+# no filter. Each directory and file is an entry: Tab descends into a
+# directory (or completes a file's path) and Enter opens a terminal in a
+# directory or hands a file to `open_command`.
+#
+# The live listing only exists while `/` (or a `\files ` target) owns the
+# query. Remembered paths answer every query by default, so `hosts` without a
+# prefix can still offer a previously used `/etc/hosts`. Set the generic
+# `prefix_only = true` override to keep every files entry behind `/`.
+
+[engine.provider.builtin.files.extra]
+# Directory a bare `/` lists, and the base every typed path is relative to.
+# Default: "/", which makes the text under the prefix a literal absolute path.
+root            = "/"
+# Offer a `..` entry that walks to the parent directory.
+show_parent     = true
+# Include dotfiles in the listing.
+show_hidden     = true
+# Command handing a file entry to the desktop environment's default app.
+open_command    = "xdg-open"
+# Symbol separating a path from an opener suffix. Typing `/etc/ho @code`
+# lists `/etc` filtered to `ho` and adds a `code` variant for every listed
+# path the opener applies to; suffixed history entries also show without the
+# symbol, so a used opener is one keystroke away. An empty string turns the
+# feature off. Default: "@".
+suffix          = "@"
+# Fuzzy-match weights: one field for an entry's full path, one for its name.
+weight_name     = 0.3
+weight_path     = 1.0
+# Rebuild entries from the paths in the usage history, so a file or directory
+# you opened or completed with Tab before is offered again even when it is not
+# in the current listing. The lookup is unscoped by the typed query: a path
+# remembered under any prefix is reconstructed and then filtered by normal
+# fuzzy matching. These entries are available without `/`; the live listing
+# remains prefix-only.
+history_entries = true
+
+# Extra "open with" programs. Each listed path gets a suffixed variant per
+# applicable opener. `name` is the suffix text and the opener's identity in
+# entry ids and history keys; it defaults to the basename of `command[0]`.
+# The target path is appended as the last command item. `targets` lists what
+# the opener applies to; empty means every file:
+#   "rs", "toml"      file extensions (case-insensitive, dot optional)
+#   "*"               every file
+#   "*/*"             every file (media-range form of "*")
+#   "inode/directory" every directory
+#   "inode/*"         every directory (media-range wildcard)
+#   "text/*"          files whose extension guesses a text/… MIME type
+#   "application/pdf" files whose extension guesses that exact MIME type
+# Targets mix freely, e.g. ["text/*", "inode/directory"] for text files plus
+# all directories. MIME types are guessed from the extension only (no content
+# sniffing); unknown extensions count as application/octet-stream. The "*"
+# forms are media-range-style matching syntax, not registered MIME types.
+#
+# A variant's icon defaults to `application-x-executable`. Set `icon` to a
+# freedesktop icon theme name, or `icon_path` to an explicit PNG/SVG file;
+# `icon_path` wins when both are set.
+#
+# [[engine.provider.builtin.files.extra.openers]]
+# name    = "code"
+# command = ["code", "--goto"]
+# targets = ["rs", "toml"]
+# icon    = "vscode"
+
+# [[engine.provider.builtin.files.extra.openers]]
+# name    = "files"
+# command = ["thunar"]
+# targets = ["inode/directory"]
+# icon    = "system-file-manager"
+
 [engine.provider.builtin.ai]
 # Trigger prefix `?`: type a prompt under it and press Enter to submit. The
 # submit entry's action appends `trigger_suffix` to the query; once the query

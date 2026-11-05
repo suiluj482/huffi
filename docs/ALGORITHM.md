@@ -40,12 +40,17 @@ Node("fi")
 The root node (`""`) is the degenerate case: pure global frequency, no
 conditioning on typed text. This is what a launcher like rofi gives you
 today — huffi treats it as the *least* informative node, not the primary
-signal.
+signal. The root also doubles as an unscoped **key index** for providers
+that reconstruct entries from history (the files provider): because every
+recorded use fans out to the empty prefix, its keys say *what has ever been
+used*. Enter and accepting a `Tab` suggestion are both recorded as uses.
+That projection carries no scores and never feeds ranking; ranking keeps
+using the scoped node for the exact typed string.
 
 ### Fan-out on write
 
-When you type `fire` and launch Firefox, **every prefix** of what you typed
-gets updated, not just the exact string:
+When you type `fire` and launch Firefox — or accept its `Tab` suggestion —
+**every prefix** of what you typed gets updated, not just the exact string:
 
 ```
 "f", "fi", "fir", "fire"  → all get a Firefox score bump

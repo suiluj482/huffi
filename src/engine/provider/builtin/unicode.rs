@@ -363,7 +363,7 @@ mod tests {
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
     use crate::engine::scoring::Rank;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
     /// Enumerating Unicode takes a moment, so it is done once for the module.
     fn characters() -> &'static Arc<Characters> {
@@ -385,6 +385,7 @@ mod tests {
             query: text,
             original: text,
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         })
     }
