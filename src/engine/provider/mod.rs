@@ -323,18 +323,19 @@ pub struct QueryContext<'a> {
     /// narrows this to the entries actually returned, so treat these numbers
     /// as a query-level view rather than the engine's own blend.
     pub history: &'a QueryHistory,
-    /// Every key ever launched, unscoped by the typed query.
+    /// Every key ever used, unscoped by the typed query.
     ///
     /// Unlike [`history`](Self::history), this is not looked up under
     /// [`original`](Self::original): it is the same global key list for every
     /// query. The store caches it, so iterating it costs no decay math or map
     /// scan. Use it to reconstruct entries the current query does not surface
-    /// but which the user has launched before; use [`history`](Self::history)
-    /// when the decision depends on the typed text (ranking, filtering by
-    /// current relevance).
+    /// but which the user has used before; use [`history`](Self::history) when
+    /// the decision depends on the typed text (ranking, filtering by current
+    /// relevance).
     ///
-    /// It carries no scores: it answers "has this key ever been launched?",
-    /// not "how strongly is it associated with this query?".
+    /// Both pressing Enter and accepting a Tab suggestion count as a use. It
+    /// carries no scores: it answers "has this key ever been used?", not "how
+    /// strongly is it associated with this query?".
     pub known_history: &'a KnownHistory,
     /// Where in the app's lifetime this call is happening; see [`Generation`].
     pub generation: Generation,
@@ -389,7 +390,7 @@ pub struct HandleContext<'a> {
 ///   always holds the full query as typed, including the prefix,
 ///   [`QueryContext::history`] carries the precomputed usage history for
 ///   that text, and [`QueryContext::known_history`] carries the unscoped
-///   list of every launched key.
+///   list of every used key.
 /// - [`handle()`](Self::handle) — called when one of this provider's
 ///   entries is selected by the user, in addition to the entry's action.
 ///   The default implementation does nothing; overrides can update provider

@@ -43,14 +43,14 @@
 //! # Entries from history keys
 //!
 //! **History entries** are rebuilt from the usage history as well as from the
-//! current listing. The store records a launch under *every* prefix of the
+//! current listing. The store records a use under *every* prefix of the
 //! query, including the empty one, so `ctx.known_history` is an unscoped
-//! global key list: a path launched at `/etc/ho` is reachable from `/`,
-//! `/etc/`, or any unrelated query alike. On each query the provider takes
-//! every key and keeps the `files-` namespace — keys from other providers
-//! share the same history and are ignored. A key's suffix is resolved against
-//! the configured openers; an unknown one stays path text, so paths that
-//! contain the suffix symbol keep working.
+//! global key list: a path launched or completed at `/etc/ho` is reachable
+//! from `/`, `/etc/`, or any unrelated query alike. On each query the
+//! provider takes every key and keeps the `files-` namespace — keys from
+//! other providers share the same history and are ignored. A key's suffix is
+//! resolved against the configured openers; an unknown one stays path text, so
+//! paths that contain the suffix symbol keep working.
 //!
 //! Using the unscoped list is deliberate: the current query only decides
 //! which of those entries survive fuzzy matching, not which paths are
@@ -350,8 +350,8 @@ impl FilesProvider {
 
     /// The remembered targets for `ctx`: every globally known key in the
     /// `files-` namespace, decoded back to path + opener pairs. The list is
-    /// unscoped by the typed query, so a path launched under one query is
-    /// still reconstructed under an unrelated one; ranking stays on
+    /// unscoped by the typed query, so a path used under one query is still
+    /// reconstructed under an unrelated one; ranking stays on
     /// `ctx.history`. A suffix that does not name a configured opener is
     /// left as path text, so paths containing the symbol keep working. Keys
     /// from other providers share the same `ctx.known_history` and are
@@ -1046,8 +1046,8 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// History reconstruction is unscoped: a path launched under an
-    /// unrelated query still comes back, even when `ctx.history` for the
+    /// History reconstruction is unscoped: a path used under an unrelated
+    /// query still comes back, even when `ctx.history` for the
     /// typed query is empty. Ranking keeps using the scoped view.
     #[test]
     fn history_reconstructs_entries_outside_the_typed_prefix() {

@@ -681,20 +681,49 @@ impl Launcher {
             return;
         }
         let local = selected % self.page_size;
-        let suggestion = {
+        let (suggestion, history_key, query) = {
             let st = self.state.borrow();
             // The active prefix carries a target's separator (`"\calc "`), so a
             // keeping-prefix suggestion lands under it (`\calc 42`) rather than
             // in the malformed `\calc42`. Resolved here rather than per row per
             // keystroke, because only this one row is ever applied.
             let prefix = st.active_pre.as_ref().and_then(|pre| pre.prefix.as_deref());
-            st.entries
-                .get(local)
-                .and_then(|row| row.set_query.as_ref().map(|s| s.resolve(prefix)))
+            let row = st.entries.get(local);
+            // The rows belong to the last applied query, which can be older
+            // than the text in the entry while a fetch is in flight.
+            let query = st
+                .active_pre
+                .as_ref()
+                .map(|pre| pre.original_query.clone())
+                .unwrap_or_else(|| st.query.clone());
+            (
+                row.and_then(|row| row.set_query.as_ref().map(|s| s.resolve(prefix))),
+                row.and_then(|row| row.history_key.clone()),
+                query,
+            )
         };
-        if let Some(suggestion) = suggestion {
-            self.set_query(suggestion);
+        let Some(suggestion) = suggestion else {
+            return;
+        };
+        if let Some(history_key) = history_key {
+            // Tab is a positive signal just like Enter: record the row under
+            // the query it was chosen from before the suggested query replaces
+            // it. The action and `Provider::handle` stay untouched — this is
+            // completion, not selection.
+            tasks::run_blocking(
+                {
+                    let engine = Arc::clone(&self.engine);
+                    move || {
+                        engine
+                            .lock()
+                            .unwrap()
+                            .record_suggestion(&query, &history_key)
+                    }
+                },
+                |_| {},
+            );
         }
+        self.set_query(suggestion);
     }
 
     fn row_pressed(self: &Rc<Self>, index: usize) {

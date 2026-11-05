@@ -125,7 +125,7 @@ impl Scorer {
         self.history.history_for(query)
     }
 
-    /// The unscoped view of every key ever launched, cached by the store.
+    /// The unscoped view of every key ever used, cached by the store.
     /// Providers use it to reconstruct entries; ranking uses
     /// [`history_for`](Self::history_for) instead.
     pub fn known_history(&self) -> &KnownHistory {

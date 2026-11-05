@@ -73,7 +73,7 @@ pub struct QueryHistoryEntry {
     /// [`peak`](QueryHistory::peak), in `0.0..=1.0` (`0.0` when the peak is
     /// zero).
     pub score: f64,
-    /// The record's sample count `n` (launches and boost samples).
+    /// The record's sample count `n` (recorded uses and boost samples).
     pub samples: u32,
 }
 
@@ -140,14 +140,15 @@ impl QueryHistory {
     }
 }
 
-/// Every key ever launched, independent of the query it was launched under.
+/// Every key ever used, independent of the query it was used under.
 ///
-/// [`record_launch`](HistoryStore::record_launch) fans a launch out to every
-/// prefix of the launched query, including the empty prefix. The empty-prefix
-/// bucket is therefore a global index of launched keys: no per-query lookup
-/// or decay pass is needed to ask "which keys have been used at all?" This is
-/// the view providers use to reconstruct entries that the current listing
-/// does not contain (see `QueryContext::known_history`).
+/// [`record_launch`](HistoryStore::record_launch) fans a recorded use out to
+/// every prefix of the query, including the empty prefix. Enter and accepting
+/// a Tab suggestion both record through it. The empty-prefix bucket is
+/// therefore a global index of used keys: no per-query lookup or decay pass is
+/// needed to ask "which keys have been used at all?" This is the view
+/// providers use to reconstruct entries that the current listing does not
+/// contain (see `QueryContext::known_history`).
 ///
 /// It deliberately carries no scores and is not prefix-scoped. Ranking still
 /// uses the scoped [`QueryHistory`] from [`HistoryStore::history_for`].
@@ -157,7 +158,7 @@ pub struct KnownHistory {
 }
 
 impl KnownHistory {
-    /// A [`KnownHistory`] with no recorded launches.
+    /// A [`KnownHistory`] with no recorded uses.
     pub const EMPTY: Self = Self { keys: Vec::new() };
 
     /// Every known key, sorted for a stable order.
@@ -228,7 +229,7 @@ impl HistoryStore {
         })
     }
 
-    /// The unscoped view of every key ever launched. Cached, so reading it is
+    /// The unscoped view of every key ever used. Cached, so reading it is
     /// free; it is rebuilt only when history changes.
     pub fn known_history(&self) -> &KnownHistory {
         &self.known
@@ -270,6 +271,9 @@ impl HistoryStore {
         })
     }
 
+    /// Record a use of `history_key` under `query`. A real launch and an
+    /// accepted Tab suggestion are both uses, so both call this. The record
+    /// fans out to every prefix of `query`.
     pub fn record_launch(&mut self, query: &str, history_key: &str) {
         let now = timestamp();
         for prefix in Self::prefixes(query) {
@@ -311,8 +315,8 @@ impl HistoryStore {
     /// the time of the call. Empty when the query has no recorded history.
     ///
     /// Exact match only. [`record_launch`] also fans the key out to every
-    /// prefix of the launched query, but those records belong to the
-    /// prefixes, not to `query` itself. This is the only place records are
+    /// prefix of the used query, but those records belong to the prefixes,
+    /// not to `query` itself. This is the only place records are
     /// decayed: providers (`QueryContext::history`) and ranking
     /// ([`history_scoring`]) both project from the returned history.
     pub fn history_for(&self, query: &str) -> QueryHistory {

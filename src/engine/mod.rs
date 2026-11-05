@@ -178,6 +178,19 @@ impl Engine {
         }
     }
 
+    /// Record a history key as used without performing an action or notifying
+    /// its provider.
+    ///
+    /// The UI calls this when it applies a Tab suggestion, passing the key of
+    /// the row that supplied it. The use is recorded under `query`, the text
+    /// the suggestion was chosen from, so accepting the same completion
+    /// repeatedly raises its rank there — and at that query's prefixes through
+    /// fan-out — exactly like pressing Enter.
+    pub fn record_suggestion(&mut self, query: &str, history_key: &str) {
+        self.cache = None;
+        self.scorer.record_launch(query, history_key);
+    }
+
     /// Boost a history key's ranking using the scorer's configured boost weight.
     pub fn boost(&mut self, query: &str, history_key: &str) {
         self.cache = None;
@@ -436,7 +449,42 @@ mod tests {
         assert_eq!(
             view.known_keys,
             vec!["alpha".to_string()],
-            "the unscoped view still knows every launched key"
+            "the unscoped view still knows every used key"
+        );
+    }
+
+    #[test]
+    fn applying_a_suggestion_records_history_without_selecting() {
+        let mut e = engine();
+        let (provider, queried, handled) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        e.query("al");
+        assert!(
+            queried.lock().unwrap().last().unwrap().keys.is_empty(),
+            "a cold query has no recorded history"
+        );
+
+        e.record_suggestion("al", "alpha");
+
+        assert!(
+            handled.lock().unwrap().is_empty(),
+            "completion must not run the selection handler"
+        );
+        assert!(
+            !e.scorer.history_for("a").is_empty(),
+            "completion fans out to the query's prefixes like a launch"
+        );
+
+        e.query("al");
+        let log = queried.lock().unwrap();
+        let view = log.last().unwrap();
+        assert_eq!(view.keys, vec!["alpha".to_string()]);
+        assert!(view.confidence > 0.0, "completion counts as evidence");
+        assert_eq!(
+            view.known_keys,
+            vec!["alpha".to_string()],
+            "a completed key enters the unscoped view"
         );
     }
 
