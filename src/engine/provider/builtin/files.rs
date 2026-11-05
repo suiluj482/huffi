@@ -61,6 +61,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use mime_guess::Mime;
 use serde::Deserialize;
 
 use crate::engine::provider::{
@@ -131,11 +132,16 @@ pub struct Opener {
     /// Program and arguments; the target path is appended as the last
     /// argument.
     pub command: Vec<String>,
-    /// What this opener applies to: `inode/directory` matches directories,
-    /// `*` every file, and any other token without a `/` is a file extension
-    /// (case-insensitive, leading dot optional). Empty means every file.
-    /// Tokens containing a `/` other than `inode/directory` are reserved for
-    /// MIME matching and never match yet.
+    /// What this opener applies to. Tokens:
+    /// - `inode/directory` or `inode/*`: directories
+    /// - `*` or `*/*`: every file
+    /// - `text/*` or `application/pdf`: files by MIME type guessed from the
+    ///   extension
+    /// - anything else: a file extension, case-insensitive, leading dot
+    ///   optional
+    ///
+    /// Empty means every file. MIME types are extension guesses, not content
+    /// sniffing: unknown extensions count as `application/octet-stream`.
     pub targets: Vec<String>,
 }
 
@@ -153,28 +159,19 @@ impl Opener {
     }
 
     /// Whether this opener applies to `path`, given whether it is a
-    /// directory. An empty target list means every file; the directory token
-    /// only ever matches directories, `*` only files, and extension tokens
-    /// only files carrying that extension.
+    /// directory. An empty target list means every file; an exact directory
+    /// token only matches directories, `*` only files, a media-range or MIME
+    /// token matches by the type guessed from the extension, and any other
+    /// token is an extension.
     fn applies_to(&self, path: &Path, is_dir: bool) -> bool {
         if self.targets.is_empty() {
             return !is_dir;
         }
         self.targets.iter().any(|target| match target.as_str() {
-            DIRECTORY_TARGET => is_dir,
+            target if target.eq_ignore_ascii_case(DIRECTORY_TARGET) => is_dir,
             FILE_TARGET => !is_dir,
-            other if other.contains('/') => false,
-            extension => {
-                !is_dir
-                    && path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|actual| {
-                            extension
-                                .trim_start_matches('.')
-                                .eq_ignore_ascii_case(actual)
-                        })
-            }
+            target if target.contains('/') => mime_matches(target, path, is_dir),
+            extension => !is_dir && extension_matches(extension, path),
         })
     }
 }
@@ -510,6 +507,32 @@ fn title(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Whether `wanted` — an exact MIME type or a media-range wildcard — matches
+/// the type guessed for `path`. Directories count as `inode/directory`, so
+/// `inode/directory` and `inode/*` match them. Types and subtypes compare
+/// case-insensitively, and `*` in either position is a wildcard, so `*/*`
+/// matches every file.
+fn mime_matches(wanted: &str, path: &Path, is_dir: bool) -> bool {
+    let Ok(wanted) = wanted.parse::<Mime>() else {
+        return false;
+    };
+    if is_dir {
+        return wanted.type_() == "inode"
+            && (wanted.subtype() == "directory" || wanted.subtype() == "*");
+    }
+    let actual = mime_guess::from_path(path).first_or_octet_stream();
+    (wanted.type_() == "*" || wanted.type_() == actual.type_().as_str())
+        && (wanted.subtype() == "*" || wanted.subtype() == actual.subtype().as_str())
+}
+
+/// Whether `wanted` — with or without a leading dot — is `path`'s extension,
+/// compared case-insensitively.
+fn extension_matches(wanted: &str, path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|actual| wanted.trim_start_matches('.').eq_ignore_ascii_case(actual))
 }
 
 /// One entry candidate: a path, optionally opened with a configured opener.
@@ -1178,8 +1201,8 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// An empty target list means every file and no directory; MIME-shaped
-    /// tokens are reserved and do not match yet.
+    /// An empty target list means every file and no directory; unknown MIME
+    /// targets never match.
     #[test]
     fn empty_targets_mean_every_file() {
         let root = temp_dir("variants-default");
@@ -1189,7 +1212,7 @@ mod tests {
         let mut p = provider_at(&root);
         p.config.openers = vec![
             opener("default", &["code"], &[]),
-            opener("mime", &["viewer"], &["text/*"]),
+            opener("unknown", &["viewer"], &["application/x-nope"]),
         ];
         let entries = ids(&p.query(ctx("@", "/@", &QueryHistory::EMPTY)));
 
@@ -1197,9 +1220,64 @@ mod tests {
         assert!(!entries.contains(&format!("{}@default", id(&root.join("sub")))));
         assert!(!entries.contains(&format!("{}@default", id(&root))));
         assert!(
-            entries.iter().all(|entry| !entry.ends_with("@mime")),
-            "unimplemented MIME targets do not match"
+            entries.iter().all(|entry| !entry.ends_with("@unknown")),
+            "unknown MIME targets do not match"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// MIME targets match the type guessed from the extension, case
+    /// insensitively, and exact types do not spill over to other files.
+    #[test]
+    fn mime_targets_match_guessed_types() {
+        let text = opener("text", &["viewer"], &["text/*"]);
+        let png = opener("png", &["viewer"], &["image/png"]);
+        let upper = opener("upper", &["viewer"], &["IMAGE/PNG"]);
+        let unknown = opener("unknown", &["viewer"], &["application/x-nope"]);
+
+        assert!(text.applies_to(Path::new("note.txt"), false));
+        assert!(!text.applies_to(Path::new("logo.png"), false));
+        assert!(png.applies_to(Path::new("logo.png"), false));
+        assert!(!png.applies_to(Path::new("note.txt"), false));
+        assert!(upper.applies_to(Path::new("logo.png"), false));
+        assert!(!unknown.applies_to(Path::new("note.txt"), false));
+
+        // No extension is no guess: only the octet-stream fallback matches.
+        let octet = opener("octet", &["viewer"], &["application/octet-stream"]);
+        assert!(!text.applies_to(Path::new("README"), false));
+        assert!(octet.applies_to(Path::new("README"), false));
+    }
+
+    /// Media-range wildcards cover every file or every directory, but not
+    /// the other kind.
+    #[test]
+    fn mime_wildcards_cover_files_and_directories() {
+        let files = opener("files", &["viewer"], &["*/*"]);
+        let directories = opener("directories", &["fm"], &["inode/*"]);
+        let upper = opener("upper", &["fm"], &["INODE/DIRECTORY"]);
+
+        assert!(files.applies_to(Path::new("note.txt"), false));
+        assert!(files.applies_to(Path::new("logo.png"), false));
+        assert!(!files.applies_to(Path::new("sub"), true));
+        assert!(directories.applies_to(Path::new("sub"), true));
+        assert!(!directories.applies_to(Path::new("note.txt"), false));
+        assert!(upper.applies_to(Path::new("sub"), true));
+    }
+
+    /// MIME targets feed the same variant machinery as extension targets.
+    #[test]
+    fn mime_targets_extend_the_listing() {
+        let root = temp_dir("variants-mime");
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+        std::fs::write(root.join("logo.png"), "x").unwrap();
+
+        let mut p = provider_at(&root);
+        p.config.openers = vec![opener("text", &["viewer"], &["text/*"])];
+        let entries = ids(&p.query(ctx("@", "/@", &QueryHistory::EMPTY)));
+
+        assert!(entries.contains(&format!("{}@text", id(&root.join("note.txt")))));
+        assert!(!entries.contains(&format!("{}@text", id(&root.join("logo.png")))));
 
         std::fs::remove_dir_all(&root).ok();
     }

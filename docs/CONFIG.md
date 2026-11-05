@@ -189,10 +189,15 @@ history_entries = true
 # the opener applies to; empty means every file:
 #   "rs", "toml"      file extensions (case-insensitive, dot optional)
 #   "*"               every file
+#   "*/*"             every file (media-range form of "*")
 #   "inode/directory" every directory
-# Targets mix freely, e.g. ["rs", "inode/directory"] for Rust files plus all
-# directories. Other MIME-shaped tokens (`text/*`) are reserved for later MIME
-# matching and do not match yet.
+#   "inode/*"         every directory (media-range wildcard)
+#   "text/*"          files whose extension guesses a text/… MIME type
+#   "application/pdf" files whose extension guesses that exact MIME type
+# Targets mix freely, e.g. ["text/*", "inode/directory"] for text files plus
+# all directories. MIME types are guessed from the extension only (no content
+# sniffing); unknown extensions count as application/octet-stream. The "*"
+# forms are media-range-style matching syntax, not registered MIME types.
 #
 # [[engine.provider.builtin.files.extra.openers]]
 # name    = "code"
