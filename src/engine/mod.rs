@@ -126,9 +126,11 @@ impl Engine {
             self.generation.query += 1;
             let pre = self.providers.preprocess_query(query);
             let history = self.scorer.history_for(query);
-            let groups = self
-                .providers
-                .grouped_entries(&pre, &history, self.generation);
+            let groups = {
+                let known_history = self.scorer.known_history();
+                self.providers
+                    .grouped_entries(&pre, &history, known_history, self.generation)
+            };
             let scored = self.scorer.score(groups, &history);
             self.cache = Some(QueryReply {
                 pre,
@@ -161,8 +163,15 @@ impl Engine {
             hit.entry.action.perform(&self.external);
         }
         if let Some(provider_id) = &hit.entry.provider_id {
-            self.providers
-                .handle(provider_id, entry_id, &pre, &history, self.generation);
+            let known_history = self.scorer.known_history();
+            self.providers.handle(
+                provider_id,
+                entry_id,
+                &pre,
+                &history,
+                known_history,
+                self.generation,
+            );
         }
         if let Some(key) = &hit.history_key {
             self.scorer.record_launch(query, key);
@@ -260,6 +269,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct HistoryView {
         keys: Vec<String>,
+        known_keys: Vec<String>,
         confidence: f64,
         alpha_score: f64,
         generation: Generation,
@@ -268,6 +278,7 @@ mod tests {
     fn history_view(ctx: &QueryContext) -> HistoryView {
         HistoryView {
             keys: ctx.history.keys().cloned().collect(),
+            known_keys: ctx.known_history.keys().cloned().collect(),
             confidence: ctx.history.confidence(),
             alpha_score: ctx
                 .history
@@ -283,6 +294,7 @@ mod tests {
     fn cold_first_run() -> HistoryView {
         HistoryView {
             keys: Vec::new(),
+            known_keys: Vec::new(),
             confidence: 0.0,
             alpha_score: 0.0,
             generation: Generation {
@@ -404,6 +416,28 @@ mod tests {
             "the provider sees history looked up under the original query, even though its own query text is stripped"
         );
         assert_eq!(view.alpha_score, 1.0);
+    }
+
+    #[test]
+    fn providers_receive_scoped_and_unscoped_history_separately() {
+        let mut e = engine();
+        let (provider, queried, _) = history_capturing_provider(vec![]);
+        e.add_provider(provider).unwrap();
+
+        e.select("al", "alpha");
+        e.query("beta");
+
+        let log = queried.lock().unwrap();
+        let view = log.last().unwrap();
+        assert!(
+            view.keys.is_empty(),
+            "history scoped to `beta` must stay empty"
+        );
+        assert_eq!(
+            view.known_keys,
+            vec!["alpha".to_string()],
+            "the unscoped view still knows every launched key"
+        );
     }
 
     #[test]
@@ -815,9 +849,12 @@ mod tests {
             let pre = engine.providers.preprocess_query(q);
             let history = engine.scorer.history_for(q);
             let t = Instant::now();
-            let groups = engine
-                .providers
-                .grouped_entries(&pre, &history, engine.generation);
+            let groups = {
+                let known_history = engine.scorer.known_history();
+                engine
+                    .providers
+                    .grouped_entries(&pre, &history, known_history, engine.generation)
+            };
             let group_dur = t.elapsed();
             let t = Instant::now();
             let scored = engine.scorer.score(groups, &history);

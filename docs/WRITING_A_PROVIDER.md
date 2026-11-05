@@ -150,6 +150,11 @@ The `QueryContext` fields:
   up under `original`, so a prefix-triggered provider still sees the
   history recorded for the full typed query, not for its stripped
   `query`.
+- `known_history` — every key ever launched, independent of the typed
+  query. Use it to reconstruct entries the current listing does not
+  contain (the files provider does this); use `history` when the decision
+  depends on the current text. It carries only keys, no scores, and is
+  cached by the engine.
 - `generation` — where you are in the app's lifetime: `generation.session`
   bumps each time the launcher is revealed for a round of typing, and
   `generation.query` bumps each time providers actually run (a keystroke
@@ -338,6 +343,16 @@ query. Each entry carries:
 `ctx.history.confidence()` scales from 0 (cold) toward 1 as the query's
 keys accumulate launches. The engine builds the history once per query,
 so iterating it is free of decay math.
+
+`ctx.known_history` is the complementary **unscoped** view: every key
+ever launched, whatever query it was launched under, with no scores.
+Launch history fans out to every prefix of the typed query — including
+the empty one — so this is the store's global key index, cached and
+rebuilt only when history changes. It answers "has this key ever been
+used?"; `ctx.history` answers "how relevant is this key to what I just
+typed?". Keep the two separate: a provider that reconstructs entries
+from `known_history` should still let the engine's ranking use the
+scoped `history`.
 
 ### Query suggestions
 

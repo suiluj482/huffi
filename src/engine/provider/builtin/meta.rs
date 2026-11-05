@@ -198,7 +198,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
     use crate::engine::provider::Generation;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
     fn provider(dir: &str) -> MetaProvider {
         let mut p = MetaProvider::new("/tmp/x.sock", dir, false);
@@ -221,6 +221,7 @@ mod tests {
                     query: "",
                     original: "",
                     history: &QueryHistory::EMPTY,
+                    known_history: &KnownHistory::EMPTY,
                     generation: Generation::default(),
                 })
                 .is_empty(),
@@ -233,6 +234,7 @@ mod tests {
                     query: "uptime",
                     original: "uptime",
                     history: &QueryHistory::EMPTY,
+                    known_history: &KnownHistory::EMPTY,
                     generation: Generation::default(),
                 })
                 .is_empty()
@@ -247,6 +249,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 11);
@@ -268,6 +271,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         for e in &entries {
@@ -293,6 +297,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let memory = entries
@@ -331,6 +336,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let kill = entries
@@ -356,6 +362,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let open = entries
@@ -381,6 +388,7 @@ mod tests {
             query: "sock",
             original: "@sock",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let socket = entries
@@ -412,6 +420,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let dry = entries
@@ -437,6 +446,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let socket = entries

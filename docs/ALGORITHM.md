@@ -40,7 +40,11 @@ Node("fi")
 The root node (`""`) is the degenerate case: pure global frequency, no
 conditioning on typed text. This is what a launcher like rofi gives you
 today — huffi treats it as the *least* informative node, not the primary
-signal.
+signal. The root also doubles as an unscoped **key index** for providers
+that reconstruct entries from history (the files provider): because every
+launch fans out to the empty prefix, its keys say *what has ever been
+launched*. That projection carries no scores and never feeds ranking;
+ranking keeps using the scoped node for the exact typed string.
 
 ### Fan-out on write
 

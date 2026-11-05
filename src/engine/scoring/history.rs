@@ -140,8 +140,49 @@ impl QueryHistory {
     }
 }
 
+/// Every key ever launched, independent of the query it was launched under.
+///
+/// [`record_launch`](HistoryStore::record_launch) fans a launch out to every
+/// prefix of the launched query, including the empty prefix. The empty-prefix
+/// bucket is therefore a global index of launched keys: no per-query lookup
+/// or decay pass is needed to ask "which keys have been used at all?" This is
+/// the view providers use to reconstruct entries that the current listing
+/// does not contain (see `QueryContext::known_history`).
+///
+/// It deliberately carries no scores and is not prefix-scoped. Ranking still
+/// uses the scoped [`QueryHistory`] from [`HistoryStore::history_for`].
+#[derive(Debug, Clone, Default)]
+pub struct KnownHistory {
+    keys: Vec<HistoryKey>,
+}
+
+impl KnownHistory {
+    /// A [`KnownHistory`] with no recorded launches.
+    pub const EMPTY: Self = Self { keys: Vec::new() };
+
+    /// Every known key, sorted for a stable order.
+    pub fn keys(&self) -> impl Iterator<Item = &HistoryKey> {
+        self.keys.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    fn from_data(data: &HistoryData) -> Self {
+        let mut keys: Vec<HistoryKey> = data
+            .get("")
+            .map(|prefix_history| prefix_history.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        Self { keys }
+    }
+}
+
 pub struct HistoryStore {
     data: HistoryData,
+    /// Cached unscoped key list, rebuilt on load and every history write.
+    known: KnownHistory,
     path: Option<PathBuf>,
     lambda: f64,
     confidence_k: f64,
@@ -152,6 +193,7 @@ impl Default for HistoryStore {
         let scoring = ScoringConfig::default();
         Self {
             data: HashMap::new(),
+            known: KnownHistory::EMPTY,
             path: None,
             lambda: half_life_lambda(scoring.half_life_days),
             confidence_k: scoring.confidence_k,
@@ -176,12 +218,24 @@ impl HistoryStore {
         } else {
             HashMap::new()
         };
+        let known = KnownHistory::from_data(&data);
         Ok(HistoryStore {
             data,
+            known,
             path: if dry_run { None } else { Some(path) },
             lambda: half_life_lambda(scoring.half_life_days),
             confidence_k: scoring.confidence_k,
         })
+    }
+
+    /// The unscoped view of every key ever launched. Cached, so reading it is
+    /// free; it is rebuilt only when history changes.
+    pub fn known_history(&self) -> &KnownHistory {
+        &self.known
+    }
+
+    fn rebuild_known(&mut self) {
+        self.known = KnownHistory::from_data(&self.data);
     }
 
     fn flush_to_disk(&self) {
@@ -226,6 +280,7 @@ impl HistoryStore {
                 .or_insert_with(|| HistoryRecord::new(now))
                 .record_launch(now, self.lambda);
         }
+        self.rebuild_known();
         self.flush_to_disk();
     }
 
@@ -237,6 +292,7 @@ impl HistoryStore {
             .entry(history_key.to_string())
             .or_insert_with(|| HistoryRecord::new(now))
             .record_boost(now, weight, samples, self.lambda);
+        self.rebuild_known();
         self.flush_to_disk();
     }
 
@@ -247,6 +303,7 @@ impl HistoryStore {
                 self.data.remove(query);
             }
         }
+        self.rebuild_known();
         self.flush_to_disk();
     }
 
@@ -551,6 +608,46 @@ mod tests {
             "fan-out also records the key under every shorter prefix"
         );
         assert!(history.history_for("zzz").is_empty());
+    }
+
+    #[test]
+    fn known_history_is_the_unscoped_global_key_list() {
+        let mut history = HistoryStore::default();
+        assert!(history.known_history().is_empty());
+
+        history.record_launch("/etc/ho", "files-/etc/hosts");
+        history.record_launch("fire", "desktop-firefox");
+
+        assert_eq!(
+            history.known_history().keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "desktop-firefox".to_string(),
+                "files-/etc/hosts".to_string()
+            ],
+            "launches are visible regardless of the query they fanned out from"
+        );
+        assert!(
+            history.history_for("notes").is_empty(),
+            "precondition: the global list is not the scoped view"
+        );
+    }
+
+    #[test]
+    fn known_history_survives_a_scoped_delete() {
+        let mut history = HistoryStore::default();
+        history.record_launch("fi", "Firefox");
+        history.delete("fi", "Firefox");
+
+        assert!(
+            history.known_history().keys().any(|key| key == "Firefox"),
+            "delete currently clears only the exact bucket; global cleanup is deferred to the boost/delete-scope work"
+        );
+
+        history.delete("", "Firefox");
+        assert!(
+            !history.known_history().keys().any(|key| key == "Firefox"),
+            "deleting the global bucket removes the key from the unscoped view"
+        );
     }
 
     #[test]

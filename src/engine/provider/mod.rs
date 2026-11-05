@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::engine::scoring::history::QueryHistory;
+use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 use crate::engine::scoring::{Scoreable, Scored};
 
 pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
@@ -323,6 +323,19 @@ pub struct QueryContext<'a> {
     /// narrows this to the entries actually returned, so treat these numbers
     /// as a query-level view rather than the engine's own blend.
     pub history: &'a QueryHistory,
+    /// Every key ever launched, unscoped by the typed query.
+    ///
+    /// Unlike [`history`](Self::history), this is not looked up under
+    /// [`original`](Self::original): it is the same global key list for every
+    /// query. The store caches it, so iterating it costs no decay math or map
+    /// scan. Use it to reconstruct entries the current query does not surface
+    /// but which the user has launched before; use [`history`](Self::history)
+    /// when the decision depends on the typed text (ranking, filtering by
+    /// current relevance).
+    ///
+    /// It carries no scores: it answers "has this key ever been launched?",
+    /// not "how strongly is it associated with this query?".
+    pub known_history: &'a KnownHistory,
     /// Where in the app's lifetime this call is happening; see [`Generation`].
     pub generation: Generation,
 }
@@ -373,9 +386,10 @@ pub struct HandleContext<'a> {
 ///   `prefix: None` and the full typed text — unless the global prefix is
 ///   listed in [`ProviderConfig::exclusive_prefixes`](config::ProviderConfig::exclusive_prefixes),
 ///   in which case such a provider is not called at all. [`QueryContext::original`]
-///   always holds the full query as typed, including the prefix, and
+///   always holds the full query as typed, including the prefix,
 ///   [`QueryContext::history`] carries the precomputed usage history for
-///   that text so a provider can react to prior usage.
+///   that text, and [`QueryContext::known_history`] carries the unscoped
+///   list of every launched key.
 /// - [`handle()`](Self::handle) — called when one of this provider's
 ///   entries is selected by the user, in addition to the entry's action.
 ///   The default implementation does nothing; overrides can update provider
@@ -467,6 +481,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 3);
@@ -498,6 +513,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         };
         let a = provider.query(ctx);

@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
     fn meta(id: &str, name: &str, prefixes: &[&str], enabled: bool) -> ProviderMeta {
         ProviderMeta {
@@ -130,6 +130,7 @@ mod tests {
             query: "",
             original: "\\",
             history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         })
     }

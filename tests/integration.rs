@@ -538,6 +538,18 @@ fn files_provider_lists_and_descends() {
         "the remembered file is rebuilt from its history key"
     );
 
+    // Reconstruction is unscoped: `/note` shares no prefix with the launch
+    // under `/sub/n`, so only the global history view can have remembered it.
+    let reply = engine.query("/note");
+    assert!(
+        reply
+            .scored
+            .iter()
+            .any(|s| s.entry.provider_id.as_deref() == Some("files")
+                && s.entry.title == "note.txt"),
+        "the remembered file is rebuilt even under an unrelated query"
+    );
+
     // A deleted file is stale, not a row: it stops being reconstructed. A new
     // query string is used so this is a cache miss, not the previous reply.
     std::fs::remove_file(root.join("sub").join("note.txt")).unwrap();

@@ -179,7 +179,8 @@ weight_name     = 0.3
 weight_path     = 1.0
 # Rebuild entries from the paths in the usage history, so a file or directory
 # you opened before is offered again even when it is not in the current
-# listing.
+# listing. The lookup is unscoped by the typed query: a path remembered under
+# any prefix is reconstructed and then filtered by normal fuzzy matching.
 history_entries = true
 
 # Extra "open with" programs. Each listed path gets a suffixed variant per

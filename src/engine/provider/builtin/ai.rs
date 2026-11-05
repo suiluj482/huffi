@@ -368,7 +368,12 @@ mod tests {
     use super::*;
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
+
+    fn no_known_history() -> &'static KnownHistory {
+        static EMPTY: KnownHistory = KnownHistory::EMPTY;
+        &EMPTY
+    }
 
     fn query<'a>(text: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
         QueryContext {
@@ -376,6 +381,7 @@ mod tests {
             query: text,
             original: text,
             history,
+            known_history: no_known_history(),
             generation: Generation::default(),
         }
     }

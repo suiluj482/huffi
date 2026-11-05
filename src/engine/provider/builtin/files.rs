@@ -43,14 +43,18 @@
 //! # Entries from history keys
 //!
 //! **History entries** are rebuilt from the usage history as well as from the
-//! current listing: the store records a launch under *every* prefix of the
-//! query, so a path launched at `/etc/ho` is reachable from `ctx.history`
-//! for `/etc/` and `/` alike, with no engine-side lookup. On each query the
-//! provider takes the keys under the original query and keeps the `files-`
-//! namespace — keys from other providers share the same history and are
-//! ignored. A key's suffix is resolved against the configured openers; an
-//! unknown one stays path text, so paths that contain the suffix symbol keep
-//! working.
+//! current listing. The store records a launch under *every* prefix of the
+//! query, including the empty one, so `ctx.known_history` is an unscoped
+//! global key list: a path launched at `/etc/ho` is reachable from `/`,
+//! `/etc/`, or any unrelated query alike. On each query the provider takes
+//! every key and keeps the `files-` namespace — keys from other providers
+//! share the same history and are ignored. A key's suffix is resolved against
+//! the configured openers; an unknown one stays path text, so paths that
+//! contain the suffix symbol keep working.
+//!
+//! Using the unscoped list is deliberate: the current query only decides
+//! which of those entries survive fuzzy matching, not which paths are
+//! remembered. `ctx.history` remains the prefix-scoped view for ranking.
 //!
 //! Current and history targets — a path, optionally paired with an opener —
 //! are merged into one deduplicated list (the current listing wins) before
@@ -344,19 +348,21 @@ impl FilesProvider {
         targets
     }
 
-    /// The remembered targets for `ctx`: the entries of the history under
-    /// the original query that live in the `files-` namespace, decoded back
-    /// to path + opener pairs in history order. A suffix that does not name
-    /// a configured opener is left as path text, so paths containing the
-    /// symbol keep working. History from other providers shares the same
-    /// `ctx.history` and is skipped here.
+    /// The remembered targets for `ctx`: every globally known key in the
+    /// `files-` namespace, decoded back to path + opener pairs. The list is
+    /// unscoped by the typed query, so a path launched under one query is
+    /// still reconstructed under an unrelated one; ranking stays on
+    /// `ctx.history`. A suffix that does not name a configured opener is
+    /// left as path text, so paths containing the symbol keep working. Keys
+    /// from other providers share the same `ctx.known_history` and are
+    /// skipped here.
     fn history_targets(&self, ctx: &QueryContext) -> Vec<Target> {
         if !self.config.history_entries {
             return Vec::new();
         }
         let namespace = format!("{HISTORY_PREFIX}-");
         let symbol = self.suffix_symbol();
-        ctx.history
+        ctx.known_history
             .keys()
             .filter_map(|key| {
                 let rest = key.strip_prefix(&namespace)?;
@@ -655,22 +661,38 @@ mod tests {
     use super::*;
     use crate::engine::provider::{Action, ExecMode, Generation};
     use crate::engine::scoring::Rank;
-    use crate::engine::scoring::history::{HistoryStore, QueryHistory};
+    use crate::engine::scoring::history::{HistoryStore, KnownHistory, QueryHistory};
 
     fn ctx<'a>(query: &'a str, original: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
+        ctx_with_known(query, original, history, no_known_history())
+    }
+
+    fn no_known_history() -> &'static KnownHistory {
+        static EMPTY: KnownHistory = KnownHistory::EMPTY;
+        &EMPTY
+    }
+
+    fn ctx_with_known<'a>(
+        query: &'a str,
+        original: &'a str,
+        history: &'a QueryHistory,
+        known_history: &'a KnownHistory,
+    ) -> QueryContext<'a> {
         QueryContext {
             prefix: Some(PREFIX),
             query,
             original,
             history,
+            known_history,
             generation: Generation::default(),
         }
     }
 
     /// A real [`HistoryStore`] with `keys` recorded under the empty query, so
-    /// [`history_for`](HistoryStore::history_for) hands back exactly those
-    /// keys — the same view a provider sees. This exercises the store's own
-    /// key format rather than a hand-built `QueryHistory`.
+    /// both [`history_for`](HistoryStore::history_for) and
+    /// [`known_history`](HistoryStore::known_history) hand back exactly those
+    /// keys. This exercises the store's own key format and global index
+    /// rather than a hand-built view.
     fn store_with(keys: impl IntoIterator<Item = String>) -> HistoryStore {
         let mut store = HistoryStore::default();
         for key in keys {
@@ -1005,7 +1027,7 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx("", "/", &history));
+        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
         let entry_ids = ids(&entries);
         assert!(entry_ids.contains(&id(&remembered.join("old.txt"))));
         assert!(
@@ -1024,6 +1046,42 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// History reconstruction is unscoped: a path launched under an
+    /// unrelated query still comes back, even when `ctx.history` for the
+    /// typed query is empty. Ranking keeps using the scoped view.
+    #[test]
+    fn history_reconstructs_entries_outside_the_typed_prefix() {
+        let root = temp_dir("global-history");
+        let remembered = root.join("deep").join("note.txt");
+        std::fs::create_dir_all(remembered.parent().unwrap()).unwrap();
+        std::fs::write(&remembered, "x").unwrap();
+
+        let mut store = HistoryStore::default();
+        store.record_launch(
+            "/unrelated/prefix",
+            &format!("{HISTORY_PREFIX}-{}", remembered.display()),
+        );
+        let history = store.history_for("/note");
+        assert!(
+            history.is_empty(),
+            "precondition: /note has no scoped history"
+        );
+
+        let mut p = provider_at(&root);
+        let entries = p.query(ctx_with_known(
+            "note",
+            "/note",
+            &history,
+            store.known_history(),
+        ));
+        assert!(
+            ids(&entries).contains(&id(&remembered)),
+            "the globally known path is reconstructed under an unrelated query"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// Keys from other providers share the same query history and must be
     /// ignored: only the `files-` namespace is reconstructed.
     #[test]
@@ -1037,7 +1095,7 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx("", "/", &history));
+        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
         assert!(entries.iter().all(|r| r.entry.title != "firefox.desktop"));
 
         std::fs::remove_dir_all(&root).ok();
@@ -1058,7 +1116,7 @@ mod tests {
 
         let mut p = provider_at(&root);
         p.config.history_entries = false;
-        let entries = p.query(ctx("", "/", &history));
+        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
         assert!(!ids(&entries).contains(&id(&remembered.join("old.txt"))));
 
         std::fs::remove_dir_all(&root).ok();
@@ -1346,10 +1404,15 @@ mod tests {
         p.config.openers = vec![opener("code", &["code"], &[])];
         let variant_id = format!("{}@code", id(&path));
 
-        let plain_query = p.query(ctx("", "/", &history));
+        let plain_query = p.query(ctx_with_known("", "/", &history, store.known_history()));
         assert!(ids(&plain_query).contains(&variant_id));
 
-        let suffixed = p.query(ctx("note.txt@code", "/note.txt@code", &history));
+        let suffixed = p.query(ctx_with_known(
+            "note.txt@code",
+            "/note.txt@code",
+            &history,
+            store.known_history(),
+        ));
         assert_eq!(
             ids(&suffixed)
                 .iter()
@@ -1374,7 +1437,10 @@ mod tests {
 
         let mut p = provider_at(&root);
         p.config.openers = vec![opener("code", &["code"], &[])];
-        assert!(ids(&p.query(ctx("", "/", &history))).contains(&id(&path)));
+        assert!(
+            ids(&p.query(ctx_with_known("", "/", &history, store.known_history())))
+                .contains(&id(&path))
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

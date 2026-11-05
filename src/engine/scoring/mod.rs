@@ -5,7 +5,7 @@ pub mod history;
 pub use config::ScoringConfig;
 
 use base_scorer::BaseScorer;
-use history::{HistoryStore, KeyedHistoryRecord, QueryHistory};
+use history::{HistoryStore, KeyedHistoryRecord, KnownHistory, QueryHistory};
 
 #[derive(Debug, Clone)]
 pub struct MatchField {
@@ -123,5 +123,12 @@ impl Scorer {
     /// [`HistoryStore::history_for`].
     pub fn history_for(&self, query: &str) -> QueryHistory {
         self.history.history_for(query)
+    }
+
+    /// The unscoped view of every key ever launched, cached by the store.
+    /// Providers use it to reconstruct entries; ranking uses
+    /// [`history_for`](Self::history_for) instead.
+    pub fn known_history(&self) -> &KnownHistory {
+        self.history.known_history()
     }
 }

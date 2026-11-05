@@ -254,7 +254,12 @@ mod tests {
     use crate::engine::provider::Generation;
     use crate::engine::provider::{Action, ExecMode, HandleContext, QueryContext};
     use crate::engine::scoring::Rank;
-    use crate::engine::scoring::history::QueryHistory;
+    use crate::engine::scoring::history::{KnownHistory, QueryHistory};
+
+    fn no_known_history() -> &'static KnownHistory {
+        static EMPTY: KnownHistory = KnownHistory::EMPTY;
+        &EMPTY
+    }
 
     fn query_ctx<'a>(query: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
         QueryContext {
@@ -262,6 +267,7 @@ mod tests {
             query,
             original: query,
             history,
+            known_history: no_known_history(),
             generation: Generation::default(),
         }
     }
