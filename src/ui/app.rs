@@ -18,13 +18,11 @@ use gtk4::{
     Overlay, PropagationPhase, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use huffi::engine::Engine;
-use huffi::engine::QueryReply;
 use huffi::engine::provider::{
     Icon, PreprocessedQuery, ProviderMeta, QuerySuggestion, is_detail_key, matches_prefix,
     matches_query,
 };
-use huffi::engine::scoring::EntryAnnotation;
+use huffi::engine::{Engine, QueryHit};
 
 use crate::ui::control::{self, ControlRequest};
 use crate::ui::{tasks, theme};
@@ -99,17 +97,16 @@ struct Row {
 }
 
 impl Row {
-    /// Cut one scored position out of a reply, copying only what the row
-    /// template renders.
-    fn from_scored(reply: &QueryReply, scored: &EntryAnnotation) -> Self {
-        let entry = reply.entry(scored);
+    /// Copy the parts of one resolved hit that the row template renders.
+    fn from_hit(hit: QueryHit<'_>) -> Self {
+        let entry = hit.entry();
         let action_set_query = entry.action.query_suggestion().cloned();
         Self {
             entry_id: entry.id.clone(),
-            provider_id: Some(reply.provider_id(scored).to_string()),
+            provider_id: Some(hit.provider_id().to_string()),
             history_key: entry.history_key.clone(),
-            base_score: scored.base_score,
-            history_score: scored.history_score,
+            base_score: hit.base_score(),
+            history_score: hit.history_score(),
             title: entry.title.clone(),
             subtitle: entry.subtitle.clone(),
             comment: entry.comment.clone(),
@@ -847,13 +844,12 @@ impl Launcher {
         page_size: usize,
     ) -> (PreprocessedQuery, Vec<Row>, usize) {
         let reply = engine.query(query);
-        let total = reply.scored.len();
+        let total = reply.len();
         let entries = reply
-            .scored
             .iter()
             .skip(offset)
             .take(page_size)
-            .map(|scored| Row::from_scored(reply, scored))
+            .map(Row::from_hit)
             .collect();
         (reply.pre.clone(), entries, total)
     }

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use huffi::engine::Engine;
 use huffi::engine::provider::{Entry, MetaProvider, TestProvider, entry};
 use huffi::engine::scoring::MatchField;
+use huffi::engine::{Engine, QueryHit};
 
 static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -33,6 +33,16 @@ impl std::ops::Deref for Hit {
     }
 }
 
+impl From<QueryHit<'_>> for Hit {
+    fn from(hit: QueryHit<'_>) -> Self {
+        Self {
+            entry: hit.entry().clone(),
+            combined: hit.combined(),
+            provider_id: hit.provider_id().to_string(),
+        }
+    }
+}
+
 impl TestEngine {
     fn new() -> Self {
         let id = DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -55,21 +65,12 @@ impl TestEngine {
         }
     }
 
-    /// Run a query and resolve the ranked annotations into rows, so assertions
-    /// can read entry fields and scores without touching the index-based
-    /// representation.
+    /// Run a query and copy the resolved hits into owned rows, so assertions
+    /// can read entry fields and scores after the reply borrow ends.
     fn query(&mut self, query: &str) -> (Option<String>, Vec<Hit>, usize) {
         let reply = self.engine.query(query);
-        let total = reply.scored.len();
-        let hits = reply
-            .scored
-            .iter()
-            .map(|a| Hit {
-                entry: reply.entry(a).clone(),
-                combined: a.combined,
-                provider_id: reply.provider_id(a).to_string(),
-            })
-            .collect();
+        let total = reply.len();
+        let hits = reply.iter().map(Hit::from).collect();
         (reply.pre.prefix.clone(), hits, total)
     }
 }
@@ -187,15 +188,7 @@ fn exclusive_prefix_hands_the_query_to_its_providers_only() {
             .add_provider(Box::new(TestProvider::new("shared", shared_row())))
             .expect("shared provider");
         let reply = engine.query("= 2 + 2");
-        let hits = reply
-            .scored
-            .iter()
-            .map(|a| Hit {
-                entry: reply.entry(a).clone(),
-                combined: a.combined,
-                provider_id: reply.provider_id(a).to_string(),
-            })
-            .collect();
+        let hits = reply.iter().map(Hit::from).collect();
         let _ = std::fs::remove_dir_all(&dir);
         hits
     };
@@ -344,7 +337,7 @@ fn unicode_suggestions_follow_a_prefix_override() {
     // that ends up in front of it.
     let reply = engine.query("~snowman");
     assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
-    let top = reply.entry(reply.scored.first().expect("a row for '~snowman'"));
+    let top = reply.get(0).expect("a row for '~snowman'").entry();
     let suggestion = top.set_query.as_ref().expect("a suggestion");
     assert!(suggestion.keep_prefix, "the prefix must not be baked in");
     assert_eq!(suggestion.query, "u+2603", "the text alone, no prefix");
@@ -354,7 +347,7 @@ fn unicode_suggestions_follow_a_prefix_override() {
     // prefix. Both rows have to exist for the round trip to be reachable.
     let reply = engine.query("~u+2603");
     assert_eq!(reply.pre.prefix.as_deref(), Some("~"));
-    let top = reply.entry(reply.scored.first().expect("a row for '~u+2603'"));
+    let top = reply.get(0).expect("a row for '~u+2603'").entry();
     let suggestion = top.set_query.as_ref().expect("a suggestion");
     assert_eq!(suggestion.query, "snowman");
     assert_eq!(suggestion.resolve(reply.pre.prefix.as_deref()), "~snowman");
@@ -432,11 +425,10 @@ fn actions_provider_serves_configured_entries() {
     // says "sleep".
     let reply = engine.query("sleep");
     let hit = reply
-        .scored
         .iter()
-        .find(|r| reply.provider_id(r) == "actions")
+        .find(|hit| hit.provider_id() == "actions")
         .expect("a configured action for 'sleep'");
-    let entry = reply.entry(hit);
+    let entry = hit.entry();
     assert_eq!(entry.id, "suspend");
     assert_eq!(entry.history_key.as_deref(), Some("actions-suspend"));
     match &entry.action {
@@ -449,11 +441,10 @@ fn actions_provider_serves_configured_entries() {
 
     let reply = engine.query("htop");
     let hit = reply
-        .scored
         .iter()
-        .find(|r| reply.provider_id(r) == "actions")
+        .find(|hit| hit.provider_id() == "actions")
         .expect("the htop action");
-    match &reply.entry(hit).action {
+    match &hit.entry().action {
         Action::Exec { args, mode, .. } => {
             assert_eq!(args, &["htop".to_string()]);
             assert_eq!(*mode, ExecMode::Terminal);
@@ -495,10 +486,9 @@ fn files_provider_lists_and_descends() {
     let reply = engine.query("/su");
     assert_eq!(reply.pre.prefix.as_deref(), Some("/"));
     let titles: Vec<&str> = reply
-        .scored
         .iter()
-        .filter(|s| reply.provider_id(s) == "files")
-        .map(|s| reply.entry(s).title.as_str())
+        .filter(|hit| hit.provider_id() == "files")
+        .map(|hit| hit.entry().title.as_str())
         .collect();
     assert!(titles.contains(&"sub"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
@@ -507,30 +497,23 @@ fn files_provider_lists_and_descends() {
     // `..` row, but not the file, which lives inside `sub`.
     let reply = engine.query("/");
     let titles: Vec<&str> = reply
-        .scored
         .iter()
-        .filter(|s| reply.provider_id(s) == "files")
-        .map(|s| reply.entry(s).title.as_str())
+        .filter(|hit| hit.provider_id() == "files")
+        .map(|hit| hit.entry().title.as_str())
         .collect();
     assert!(titles.contains(&"sub"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
 
     // Tab on the directory completes to `/sub/`, which switches the listing.
     let dir_row = reply
-        .scored
         .iter()
-        .find(|s| reply.entry(s).title == "sub")
-        .expect("the sub directory")
-        .clone();
-    let suggestion = reply
-        .entry(&dir_row)
-        .set_query
-        .as_ref()
-        .expect("a suggestion");
+        .find(|hit| hit.entry().title == "sub")
+        .expect("the sub directory");
+    let suggestion = dir_row.entry().set_query.as_ref().expect("a suggestion");
     assert_eq!(suggestion.resolve(Some("/")), "/sub/");
 
     // Enter on the directory opens a terminal working in it.
-    match &reply.entry(&dir_row).action {
+    match &dir_row.entry().action {
         Action::Exec { mode, cwd, .. } => {
             assert_eq!(*mode, huffi::engine::provider::ExecMode::Terminal);
             assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
@@ -542,19 +525,17 @@ fn files_provider_lists_and_descends() {
     // under its `files-<path>` key.
     let file_reply = engine.query("/sub/n");
     let file_row = file_reply
-        .scored
         .iter()
-        .find(|s| file_reply.entry(s).title == "note.txt")
-        .expect("the file row")
-        .clone();
-    match &file_reply.entry(&file_row).action {
+        .find(|hit| hit.entry().title == "note.txt")
+        .expect("the file row");
+    match &file_row.entry().action {
         Action::Exec { mode, cwd, .. } => {
             assert_eq!(*mode, huffi::engine::provider::ExecMode::Direct);
             assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
         }
         other => panic!("expected direct Exec, got {other:?}"),
     }
-    let file_id = file_reply.entry(&file_row).id.clone();
+    let file_id = file_row.entry().id.clone();
     engine.select("/sub/n", &file_id);
     let key = engine
         .list_entries("/sub/n")
@@ -569,9 +550,8 @@ fn files_provider_lists_and_descends() {
     let reply = engine.query("/su");
     assert!(
         reply
-            .scored
             .iter()
-            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
+            .any(|hit| hit.provider_id() == "files" && hit.entry().title == "note.txt"),
         "the remembered file is rebuilt from its history key"
     );
 
@@ -580,9 +560,8 @@ fn files_provider_lists_and_descends() {
     let reply = engine.query("/note");
     assert!(
         reply
-            .scored
             .iter()
-            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
+            .any(|hit| hit.provider_id() == "files" && hit.entry().title == "note.txt"),
         "the remembered file is rebuilt even under an unrelated query"
     );
 
@@ -592,9 +571,8 @@ fn files_provider_lists_and_descends() {
     let reply = engine.query("/sub/no");
     assert!(
         !reply
-            .scored
             .iter()
-            .any(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt"),
+            .any(|hit| hit.provider_id() == "files" && hit.entry().title == "note.txt"),
         "a vanished path is not reconstructed"
     );
 
@@ -634,10 +612,9 @@ fn files_provider_offers_open_with_variants() {
     let files_titles = |engine: &mut Engine| -> Vec<String> {
         let reply = engine.query("/note.txt");
         reply
-            .scored
             .iter()
-            .filter(|s| reply.provider_id(s) == "files")
-            .map(|s| reply.entry(s).title.clone())
+            .filter(|hit| hit.provider_id() == "files")
+            .map(|hit| hit.entry().title.clone())
             .collect()
     };
 
@@ -650,33 +627,29 @@ fn files_provider_offers_open_with_variants() {
     // out by the engine's fuzzy matching.
     let reply = engine.query("/note.txt @co");
     let titles: Vec<&str> = reply
-        .scored
         .iter()
-        .filter(|s| reply.provider_id(s) == "files")
-        .map(|s| reply.entry(s).title.as_str())
+        .filter(|hit| hit.provider_id() == "files")
+        .map(|hit| hit.entry().title.as_str())
         .collect();
     assert!(titles.contains(&"note.txt (code)"), "got {titles:?}");
     assert!(!titles.contains(&"note.txt"), "got {titles:?}");
     let variant = reply
-        .scored
         .iter()
-        .find(|s| reply.provider_id(s) == "files" && reply.entry(s).title == "note.txt (code)")
-        .expect("the code variant")
-        .clone();
+        .find(|hit| hit.provider_id() == "files" && hit.entry().title == "note.txt (code)")
+        .expect("the code variant");
     assert_eq!(
-        reply.entry(&variant).history_key,
+        variant.entry().history_key,
         Some(format!("files-{}@code", root.join("note.txt").display()))
     );
-    let variant_id = reply.entry(&variant).id.clone();
+    let variant_id = variant.entry().id.clone();
     engine.select("/note.txt @co", &variant_id);
 
     // The space is optional: the same variant matches without one.
     let reply = engine.query("/note.txt@cod");
     assert!(
         reply
-            .scored
             .iter()
-            .any(|s| reply.entry(s).title == "note.txt (code)"),
+            .any(|hit| hit.entry().title == "note.txt (code)"),
         "the suffix works without a space too"
     );
 

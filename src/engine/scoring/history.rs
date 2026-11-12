@@ -572,7 +572,7 @@ mod tests {
                 builder = builder.history_key(*key);
             }
             entries.push(builder.score(*base_score as f32));
-            scored.push(EntryAnnotation::new(0, index as u32, *base_score));
+            scored.push(EntryAnnotation::new(0, index, *base_score));
         }
         let groups = vec![QueryGroup {
             query: String::new(),

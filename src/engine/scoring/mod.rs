@@ -26,16 +26,21 @@ pub enum Rank {
 ///
 /// A result is deliberately just a position and three numbers. The entry
 /// itself is addressed through [`QueryGroup::entries`] rather than stored,
-/// so ranking a large corpus moves ~40 bytes per entry instead of copying
-/// every field. [`resolve`](Self::resolve) turns an annotation back into the
-/// entry it points at.
+/// so ranking a large corpus moves ~32 bytes per entry instead of copying
+/// every field.
+///
+/// This is an internal ranking record, not a public result handle. Its
+/// positions are private and only [`QueryReply`](crate::engine::QueryReply)
+/// can resolve them, returning a
+/// [`QueryHit`](crate::engine::QueryHit) that pairs the entry with its
+/// provider and scores.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryAnnotation {
-    pub group: u32,
-    pub index: u32,
-    pub base_score: f64,
-    pub history_score: Option<f64>,
-    pub combined: f64,
+    group: u32,
+    index: u32,
+    pub(crate) base_score: f64,
+    pub(crate) history_score: Option<f64>,
+    pub(crate) combined: f64,
 }
 
 impl EntryAnnotation {
@@ -43,11 +48,13 @@ impl EntryAnnotation {
     ///
     /// `combined` starts equal to `base_score`; history scoring later
     /// replaces it with the base/history blend, so a result with no history
-    /// already ranks by its base score.
-    pub fn new(group: u32, index: u32, base_score: f64) -> Self {
+    /// already ranks by its base score. Positions are checked rather than
+    /// truncated, so a corpus that outgrows `u32` fails loudly instead of
+    /// silently pointing at the wrong entry.
+    pub(crate) fn new(group: usize, index: usize, base_score: f64) -> Self {
         Self {
-            group,
-            index,
+            group: u32::try_from(group).expect("query group index exceeds u32::MAX"),
+            index: u32::try_from(index).expect("entry index exceeds u32::MAX"),
             base_score,
             history_score: None,
             combined: base_score,
@@ -55,12 +62,12 @@ impl EntryAnnotation {
     }
 
     /// The entry this annotation points at.
-    pub fn resolve<'a>(&self, groups: &'a [QueryGroup]) -> &'a Entry {
+    pub(crate) fn resolve<'a>(&self, groups: &'a [QueryGroup]) -> &'a Entry {
         &groups[self.group as usize].entries[self.index as usize]
     }
 
     /// The id of the provider that produced this entry.
-    pub fn provider_id<'a>(&self, groups: &'a [QueryGroup]) -> &'a str {
+    pub(crate) fn provider_id<'a>(&self, groups: &'a [QueryGroup]) -> &'a str {
         &groups[self.group as usize].provider_id
     }
 }

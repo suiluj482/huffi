@@ -41,10 +41,9 @@ impl BaseScorer {
         let mut fuzzy: Vec<EntryAnnotation> = Vec::new();
         let mut haystack_buf: Vec<char> = Vec::new();
         for (group, g) in groups.iter().enumerate() {
-            let group = group as u32;
             if g.query.is_empty() {
                 base_scored.extend(
-                    (0..g.entries.len() as u32)
+                    (0..g.entries.len())
                         .map(|index| EntryAnnotation::new(group, index, self.empty_query_score)),
                 );
                 continue;
@@ -64,7 +63,6 @@ impl BaseScorer {
             );
 
             for (index, entry) in g.entries.iter().enumerate() {
-                let index = index as u32;
                 match entry.rank {
                     Rank::Score(score) => {
                         base_scored.push(EntryAnnotation::new(group, index, score as f64));
@@ -337,11 +335,7 @@ mod tests {
             ],
         )];
         let scored = bs.base_scoring(&groups);
-        let rank_of = |a: &EntryAnnotation| {
-            groups[a.group as usize].entries[a.index as usize]
-                .rank
-                .clone()
-        };
+        let rank_of = |a: &EntryAnnotation| a.resolve(&groups).rank.clone();
         let score = scored
             .iter()
             .find(|a| matches!(rank_of(a), Rank::Score(_)))
