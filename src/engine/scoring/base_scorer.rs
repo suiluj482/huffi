@@ -1,11 +1,9 @@
 use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 
 use super::config::ScoringConfig;
-use super::{EntryAnnotation, MatchField, QueryGroup, Rank};
+use crate::engine::provider::QueryGroup;
 
-/// A fuzzy match before the batch maximum is known: just where it sits and
-/// what the matcher returned.
-type RawScore = (u32, u32, f64);
+use super::{EntryAnnotation, MatchField, Rank};
 
 pub struct BaseScorer {
     fuzzy_matcher: nucleo::Matcher,
@@ -40,18 +38,15 @@ impl BaseScorer {
     /// moves or copies an [`Entry`](crate::engine::provider::Entry).
     pub fn base_scoring(&mut self, groups: &[QueryGroup]) -> Vec<EntryAnnotation> {
         let mut base_scored: Vec<EntryAnnotation> = Vec::new();
-        let mut raw: Vec<RawScore> = Vec::new();
+        let mut fuzzy: Vec<EntryAnnotation> = Vec::new();
         let mut haystack_buf: Vec<char> = Vec::new();
         for (group, g) in groups.iter().enumerate() {
             let group = group as u32;
             if g.query.is_empty() {
-                base_scored.extend((0..g.entries.len() as u32).map(|index| EntryAnnotation {
-                    group,
-                    index,
-                    base_score: self.empty_query_score,
-                    history_score: None,
-                    combined: self.empty_query_score,
-                }));
+                base_scored.extend(
+                    (0..g.entries.len() as u32)
+                        .map(|index| EntryAnnotation::new(group, index, self.empty_query_score)),
+                );
                 continue;
             }
 
@@ -71,13 +66,9 @@ impl BaseScorer {
             for (index, entry) in g.entries.iter().enumerate() {
                 let index = index as u32;
                 match entry.rank {
-                    Rank::Score(score) => base_scored.push(EntryAnnotation {
-                        group,
-                        index,
-                        base_score: score as f64,
-                        history_score: None,
-                        combined: score as f64,
-                    }),
+                    Rank::Score(score) => {
+                        base_scored.push(EntryAnnotation::new(group, index, score as f64));
+                    }
                     Rank::MatchFields(ref fields) => {
                         if let Some(r) = score_fields(
                             &mut self.fuzzy_matcher,
@@ -86,24 +77,15 @@ impl BaseScorer {
                             &mut haystack_buf,
                         ) && r > 0.0
                         {
-                            raw.push((group, index, r));
+                            fuzzy.push(EntryAnnotation::new(group, index, r));
                         }
                     }
                 }
             }
         }
 
-        normalize_in_place(&mut raw);
-        base_scored.extend(
-            raw.into_iter()
-                .map(|(group, index, base_score)| EntryAnnotation {
-                    group,
-                    index,
-                    base_score,
-                    history_score: None,
-                    combined: base_score,
-                }),
-        );
+        normalize_in_place(&mut fuzzy);
+        base_scored.extend(fuzzy);
         base_scored
     }
 }
@@ -113,10 +95,18 @@ impl BaseScorer {
 /// Only [`Rank::MatchFields`] entries reach this step; their base score is
 /// the raw score divided by the maximum across the whole batch, so results
 /// from different providers remain comparable.
-fn normalize_in_place(raw: &mut [RawScore]) {
-    let max = raw.iter().map(|(_, _, r)| *r).fold(0.0f64, f64::max);
-    for (_, _, r) in raw.iter_mut() {
-        *r = if max > 0.0 { *r / max } else { 0.0 };
+fn normalize_in_place(fuzzy: &mut [EntryAnnotation]) {
+    let max = fuzzy
+        .iter()
+        .map(|annotation| annotation.base_score)
+        .fold(0.0f64, f64::max);
+    for annotation in fuzzy.iter_mut() {
+        annotation.base_score = if max > 0.0 {
+            annotation.base_score / max
+        } else {
+            0.0
+        };
+        annotation.combined = annotation.base_score;
     }
 }
 
@@ -301,23 +291,28 @@ mod tests {
         QueryGroup {
             query: query.to_string(),
             provider_id: "p".to_string(),
-            entries,
+            entries: entries.into(),
         }
     }
 
     #[test]
     fn normalize_uses_global_max_for_match_fields() {
-        let mut raw: Vec<RawScore> = vec![(0, 0, 300.0), (1, 0, 100.0)];
-        normalize_in_place(&mut raw);
-        assert_eq!(raw[0].2, 1.0);
-        assert!((raw[1].2 - 1.0 / 3.0).abs() < 1e-6);
+        let mut fuzzy = vec![
+            EntryAnnotation::new(0, 0, 300.0),
+            EntryAnnotation::new(1, 0, 100.0),
+        ];
+        normalize_in_place(&mut fuzzy);
+        assert_eq!(fuzzy[0].base_score, 1.0);
+        assert!((fuzzy[1].base_score - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(fuzzy[0].combined, 1.0);
+        assert!((fuzzy[1].combined - 1.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn normalize_empty_returns_empty() {
-        let mut raw: Vec<RawScore> = vec![];
-        normalize_in_place(&mut raw);
-        assert!(raw.is_empty());
+        let mut fuzzy: Vec<EntryAnnotation> = vec![];
+        normalize_in_place(&mut fuzzy);
+        assert!(fuzzy.is_empty());
     }
 
     #[test]

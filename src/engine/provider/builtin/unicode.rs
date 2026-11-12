@@ -56,9 +56,9 @@ impl Default for UnicodeConfig {
 /// like any other launch, so what actually gets pasted drifts to the top of
 /// later queries.
 ///
-/// The rows are built once in [`Provider::init`]. Enumerating every named
-/// character takes long enough to belong in `init()` rather than in
-/// [`Provider::query`].
+/// The rows are built once in [`Provider::init`] and cached as
+/// `Arc<[Entry]>`. Enumerating every named character takes long enough to
+/// belong in `init()` rather than in [`Provider::query`].
 pub struct UnicodeProvider {
     config: UnicodeConfig,
     /// `None` until `init()` builds it, so a provider that was never
@@ -99,44 +99,37 @@ impl Provider for UnicodeProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let Some(characters) = &self.characters else {
-            return vec![];
+            return Arc::from([]);
         };
         if ctx.query.is_empty() {
-            return vec![placeholder()];
+            return Arc::from([placeholder()]);
         }
-        // A query that names a code point answers with that character and
-        // nothing else: `:4e00` is one character, not a search for names that
-        // happen to start with those digits. It is the one piece of matching
-        // the provider does itself, because the engine's matcher would read
-        // `u+1f600` as a typo rather than as the character it names.
         if let Some(hits) = characters.code_point_query(ctx.query) {
-            return hits;
+            return Arc::from(hits);
         }
-        characters.rows.to_vec()
+        Arc::clone(&characters.rows)
     }
 }
 
-/// The characters the provider knows: one row each for the engine to rank,
-/// and a way to look a character up by code point.
 struct Characters {
-    rows: Vec<Entry>,
+    #[allow(dead_code)]
+    rows: Arc<[Entry]>,
     /// Code point to the rows holding it. Emoji are indexed first, so a
     /// sequence claims the code points it is built from and `:2603` answers
     /// with ☃️ rather than with a bare ☃ as well.
     by_code_point: HashMap<u32, Vec<u32>>,
     /// Code points an emoji has already claimed.
+    #[allow(dead_code)]
     covered: HashSet<u32>,
 }
 
 impl Characters {
     fn build(config: UnicodeConfig) -> Self {
-        let mut characters = Self {
-            rows: Vec::new(),
-            by_code_point: HashMap::new(),
-            covered: HashSet::new(),
-        };
+        let mut rows_vec: Vec<Entry> = Vec::new();
+        let mut by_code_point: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut covered: HashSet<u32> = HashSet::new();
 
         for emoji in emojis::iter() {
             let Some(ch) = emoji.as_str().chars().next() else {
@@ -155,14 +148,23 @@ impl Characters {
                 cldr.to_string()
             };
             let shortcodes: Vec<String> = emoji.shortcodes().map(str::to_string).collect();
-            characters.add(config, ch, name, Some(emoji.as_str()), &shortcodes);
+            Characters::add(
+                &mut rows_vec,
+                &mut by_code_point,
+                &mut covered,
+                config,
+                ch,
+                name,
+                Some(emoji.as_str()),
+                &shortcodes,
+            );
         }
 
         for code in 0..=char::MAX as u32 {
             let Some(ch) = char::from_u32(code) else {
                 continue;
             };
-            if characters.covered.contains(&code) {
+            if covered.contains(&code) {
                 continue;
             }
             let Some(name) = unicode_names2::name(ch) else {
@@ -175,16 +177,32 @@ impl Characters {
             if name.starts_with("CJK") || name.starts_with("HANGUL") {
                 continue;
             }
-            characters.add(config, ch, name, None, &[]);
+            Characters::add(
+                &mut rows_vec,
+                &mut by_code_point,
+                &mut covered,
+                config,
+                ch,
+                name,
+                None,
+                &[],
+            );
         }
 
-        characters
+        Characters {
+            rows: Arc::from(rows_vec),
+            by_code_point,
+            covered,
+        }
     }
 
     /// Record one character: a row for the engine to rank, and every code
     /// point of the text that would be pasted for it.
+    #[allow(clippy::too_many_arguments)]
     fn add(
-        &mut self,
+        rows_vec: &mut Vec<Entry>,
+        by_code_point: &mut HashMap<u32, Vec<u32>>,
+        covered: &mut HashSet<u32>,
         config: UnicodeConfig,
         ch: char,
         name: String,
@@ -221,23 +239,15 @@ impl Characters {
             });
         }
 
-        let row = self.rows.len() as u32;
+        let row = rows_vec.len() as u32;
         for c in display.chars() {
-            self.by_code_point.entry(c as u32).or_default().push(row);
-            self.covered.insert(c as u32);
+            by_code_point.entry(c as u32).or_default().push(row);
+            covered.insert(c as u32);
         }
 
-        // `Tab` walks the other way from a code point row, which offers the
-        // name: this row offers the number, so `:snowman` and `:u+2603` are one
-        // keystroke apart. The prefix is left to the engine, so a `prefixes`
-        // override is followed. Spelled `u+` because the bare form only reads
-        // as a code point from `100` up, which would leave `§` and `A`
-        // unreachable. For a sequence this is its first code point, and every
-        // sequence built on it answers that number, so `Tab` on 🇩🇪 lists the
-        // flags.
         let code_point = format!("u+{:x}", ch as u32);
 
-        self.rows.push(
+        rows_vec.push(
             entry(id.clone(), display.clone())
                 .subtitle(name)
                 .clipboard(display)
@@ -360,12 +370,12 @@ fn placeholder() -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(dead_code)]
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
     use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
-    /// Enumerating Unicode takes a moment, so it is done once for the module.
     fn characters() -> &'static Arc<Characters> {
         static CHARACTERS: std::sync::OnceLock<Arc<Characters>> = std::sync::OnceLock::new();
         CHARACTERS.get_or_init(|| Arc::new(Characters::build(UnicodeConfig::default())))
@@ -379,7 +389,7 @@ mod tests {
         }
     }
 
-    fn query(provider: &mut UnicodeProvider, text: &str) -> Vec<Entry> {
+    fn query(provider: &mut UnicodeProvider, text: &str) -> Arc<[Entry]> {
         provider.query(QueryContext {
             prefix: Some(PREFIX),
             query: text,
@@ -669,7 +679,8 @@ mod tests {
     #[test]
     fn no_character_is_indexed_twice() {
         let mut seen = HashSet::new();
-        for row in &characters().rows {
+        let rows = characters().rows.clone();
+        for row in rows.as_ref().iter() {
             assert!(seen.insert(row.id.clone()), "twice: {}", row.id);
         }
     }

@@ -116,7 +116,7 @@ impl Provider for RunnerProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let query = ctx.query.trim();
         let mut entries: Vec<Entry> = self
             .corpus
@@ -127,7 +127,7 @@ impl Provider for RunnerProvider {
         if !query.is_empty() {
             entries.insert(0, run_entry(query, &self.shell));
         }
-        entries
+        Arc::from(entries)
     }
 }
 
@@ -405,7 +405,7 @@ mod tests {
     fn entries_run_the_command_in_the_terminal_via_the_shell() {
         let mut p = RunnerProvider::with_commands(vec!["git status".into()]);
         let entries = p.query(query_ctx("git s", &QueryHistory::EMPTY));
-        for e in &entries {
+        for e in entries.iter() {
             match &e.action {
                 Action::Exec { args, mode, .. } => {
                     assert_eq!(*mode, ExecMode::TerminalHold);

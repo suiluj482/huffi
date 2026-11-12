@@ -15,10 +15,10 @@ use std::path::Path;
 
 use crate::engine::config::{EngineConfig, ExternalConfig};
 use crate::engine::provider::{
-    Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta,
+    Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta, QueryGroup,
 };
 use crate::engine::scoring::history::{KeyedHistoryRecord, QueryHistory};
-use crate::engine::scoring::{EntryAnnotation, QueryGroup, Scorer};
+use crate::engine::scoring::{EntryAnnotation, Scorer};
 
 /// The result of a query: the resolved [`PreprocessedQuery`], the
 /// precomputed [`QueryHistory`] for it, the entry batches the results were
@@ -271,7 +271,7 @@ mod tests {
 
     struct CountingProvider {
         id: String,
-        entries: Vec<Entry>,
+        entries: Arc<[Entry]>,
         calls: Arc<Mutex<usize>>,
         handled: Arc<Mutex<Vec<String>>>,
     }
@@ -283,9 +283,9 @@ mod tests {
         fn init(&mut self, _ctx: InitContext) -> ProviderResult {
             ProviderResult::Ok
         }
-        fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+        fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
             *self.calls.lock().unwrap() += 1;
-            self.entries.clone()
+            Arc::clone(&self.entries)
         }
         fn handle(&mut self, ctx: HandleContext) {
             self.handled.lock().unwrap().push(ctx.entry_id.to_string());
@@ -300,7 +300,7 @@ mod tests {
         (
             Box::new(CountingProvider {
                 id: id.into(),
-                entries: vec![match_fields_entry("alpha", "alpha")],
+                entries: Arc::from(vec![match_fields_entry("alpha", "alpha")]),
                 calls: Arc::clone(calls),
                 handled: Arc::clone(&handled),
             }),
@@ -364,9 +364,9 @@ mod tests {
         fn init(&mut self, _ctx: InitContext) -> ProviderResult {
             ProviderResult::Ok
         }
-        fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+        fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
             self.queried.lock().unwrap().push(history_view(&ctx));
-            self.entries.clone()
+            Arc::from(self.entries.clone())
         }
         fn handle(&mut self, ctx: HandleContext) {
             self.handled.lock().unwrap().push(history_view(&ctx.query));
@@ -703,7 +703,7 @@ mod tests {
 
         struct HandleTrackingProvider {
             id: String,
-            entries: Vec<Entry>,
+            entries: Arc<[Entry]>,
             handled: Arc<Mutex<Vec<String>>>,
         }
 
@@ -714,8 +714,8 @@ mod tests {
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                self.entries.clone()
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::clone(&self.entries)
             }
             fn handle(&mut self, ctx: HandleContext) {
                 self.handled.lock().unwrap().push(ctx.entry_id.to_string());
@@ -726,7 +726,7 @@ mod tests {
         let handled: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         e.add_provider(Box::new(HandleTrackingProvider {
             id: "h".into(),
-            entries: vec![match_fields_entry("h-entry", "hello")],
+            entries: Arc::from(vec![match_fields_entry("h-entry", "hello")]),
             handled: Arc::clone(&handled),
         }))
         .unwrap();

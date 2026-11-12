@@ -132,11 +132,11 @@ impl Provider for NixRunProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
         self.entries
             .read()
-            .map(|guard| guard.to_vec())
-            .unwrap_or_default()
+            .map(|guard| Arc::clone(&*guard))
+            .unwrap_or_else(|_| Arc::from([]))
     }
 }
 
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     #[ignore]
     fn profile_nix_keystroke_cost() {
-        use crate::engine::scoring::QueryGroup;
+        use crate::engine::provider::QueryGroup;
         use crate::engine::scoring::base_scorer::BaseScorer;
         use std::time::Instant;
 
@@ -594,7 +594,7 @@ mod tests {
             let groups = vec![QueryGroup {
                 query: needle.to_string(),
                 provider_id: "nix".to_string(),
-                entries: cloned,
+                entries: cloned.into(),
             }];
             let t = Instant::now();
             let scored = scorer.base_scoring(&groups);

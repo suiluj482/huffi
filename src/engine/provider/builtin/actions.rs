@@ -187,8 +187,8 @@ impl Provider for ActionsProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.entries.to_vec()
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::clone(&self.entries)
     }
 }
 

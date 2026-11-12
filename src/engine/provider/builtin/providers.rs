@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
 };
@@ -55,36 +57,37 @@ impl Provider for ProvidersProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.providers
-            .iter()
-            .filter(|meta| meta.enabled)
-            .map(|meta| {
-                let target = format!("{}{} ", self.target_prefix, meta.id);
-                let mut fields = vec![MatchField {
-                    text: meta.name.clone(),
-                    weight: 1.0,
-                }];
-                if meta.name != meta.id {
-                    fields.push(MatchField {
-                        text: meta.id.clone(),
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::from_iter(
+            self.providers
+                .iter()
+                .filter(|meta| meta.enabled)
+                .map(|meta| {
+                    let target = format!("{}{} ", self.target_prefix, meta.id);
+                    let mut fields = vec![MatchField {
+                        text: meta.name.clone(),
                         weight: 1.0,
-                    });
-                }
-                for prefix in &meta.prefixes {
-                    fields.push(MatchField {
-                        text: prefix.clone(),
-                        weight: 1.0,
-                    });
-                }
-                entry(format!("provider-{}", meta.id), meta.name.clone())
-                    .subtitle(Self::trigger(meta))
-                    .history_key(format!("provider-{}", meta.id))
-                    .set_query(target.clone())
-                    .action_set_query(target)
-                    .match_fields(fields)
-            })
-            .collect()
+                    }];
+                    if meta.name != meta.id {
+                        fields.push(MatchField {
+                            text: meta.id.clone(),
+                            weight: 1.0,
+                        });
+                    }
+                    for prefix in &meta.prefixes {
+                        fields.push(MatchField {
+                            text: prefix.clone(),
+                            weight: 1.0,
+                        });
+                    }
+                    entry(format!("provider-{}", meta.id), meta.name.clone())
+                        .subtitle(Self::trigger(meta))
+                        .history_key(format!("provider-{}", meta.id))
+                        .set_query(target.clone())
+                        .action_set_query(target)
+                        .match_fields(fields)
+                }),
+        )
     }
 }
 
@@ -124,7 +127,7 @@ mod tests {
         p
     }
 
-    fn query(p: &mut ProvidersProvider) -> Vec<Entry> {
+    fn query(p: &mut ProvidersProvider) -> Arc<[Entry]> {
         p.query(QueryContext {
             prefix: Some("\\"),
             query: "",

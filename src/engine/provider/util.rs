@@ -215,7 +215,7 @@ fn resolve_cwd(
 /// object id and looks the widget up under exactly that name.
 ///
 /// Enforced by `debug_assert!` in [`EntryBuilder::detail`] rather than a
-/// panic. `Provider::query` returns a plain `Vec<Entry>`, so a provider has no
+/// panic. `Provider::query` returns an `Arc<[Entry]>`, so a provider has no
 /// way to report a bad key; a hard assert would mean one bad key in a
 /// third-party provider crashes the launcher on every keystroke. This way
 /// development builds and the test suite fail loudly at the point of the

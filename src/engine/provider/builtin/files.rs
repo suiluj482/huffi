@@ -73,6 +73,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mime_guess::Mime;
 use serde::Deserialize;
@@ -645,7 +646,7 @@ impl Provider for FilesProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         // The suffix marks opener variants, never path text: `/etc/ho @code`
         // lists from `/etc/ho ` and suffixes with `code`.
         let (query, suffix) = self.split_suffix(ctx.query);
@@ -686,7 +687,7 @@ impl Provider for FilesProvider {
             }
         }
 
-        entries
+        Arc::from(entries)
     }
 }
 
@@ -1028,8 +1029,8 @@ mod tests {
         std::fs::write(root.join("note.txt"), "hi").unwrap();
 
         let mut p = provider_at(&root);
-        for entry in p.query(ctx("", "/", &QueryHistory::EMPTY)) {
-            let key = entry.history_key.expect("a history key");
+        for entry in p.query(ctx("", "/", &QueryHistory::EMPTY)).iter() {
+            let key = entry.history_key.as_ref().expect("a history key");
             assert!(key.starts_with("files-"), "{key} must be namespaced");
             assert!(matches!(entry.rank, Rank::MatchFields(_)));
         }

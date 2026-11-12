@@ -1,4 +1,5 @@
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -38,7 +39,7 @@ impl Default for CliphistConfig {
 pub struct CliphistProvider {
     config: CliphistConfig,
     /// Entries fetched for `loaded_session`, reused until the next session.
-    entries: Vec<Entry>,
+    entries: Arc<[Entry]>,
     /// The session `entries` was fetched for; `None` before the first query.
     loaded_session: Option<u64>,
 }
@@ -53,7 +54,7 @@ impl CliphistProvider {
     pub fn new() -> Self {
         Self {
             config: CliphistConfig::default(),
-            entries: Vec::new(),
+            entries: Arc::from([]),
             loaded_session: None,
         }
     }
@@ -82,12 +83,12 @@ impl Provider for CliphistProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         if self.loaded_session != Some(ctx.generation.session) {
-            self.entries = load_cliphist(self.config.max_entries);
+            self.entries = load_cliphist(self.config.max_entries).into();
             self.loaded_session = Some(ctx.generation.session);
         }
-        self.entries.clone()
+        Arc::clone(&self.entries)
     }
 }
 

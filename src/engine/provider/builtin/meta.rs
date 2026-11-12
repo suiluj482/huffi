@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::engine::provider::{
@@ -59,7 +60,7 @@ impl Provider for MetaProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
         let uptime = format_uptime(self.uptime());
         let socket = self.control_socket.to_string_lossy().into_owned();
         let data = self.data_dir.to_string_lossy().into_owned();
@@ -102,7 +103,7 @@ impl Provider for MetaProvider {
                 .match_field("Open data folder"),
         );
 
-        entries
+        Arc::from(entries)
     }
 }
 

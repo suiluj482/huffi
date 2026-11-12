@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -274,14 +275,14 @@ impl Provider for AiProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        match classify(ctx.query, &self.config.trigger_suffix) {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::from(match classify(ctx.query, &self.config.trigger_suffix) {
             Submission::Hint => vec![hint_entry()],
             Submission::Submit { prompt } => {
                 vec![submit_entry(prompt, &self.config.trigger_suffix)]
             }
             Submission::Request { prompt } => self.answer(prompt),
-        }
+        })
     }
 }
 

@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::config::ScoringConfig;
 
-use super::{EntryAnnotation, QueryGroup};
+use crate::engine::provider::QueryGroup;
+
+use super::EntryAnnotation;
 
 pub type HistoryKey = String;
 
@@ -570,18 +572,12 @@ mod tests {
                 builder = builder.history_key(*key);
             }
             entries.push(builder.score(*base_score as f32));
-            scored.push(EntryAnnotation {
-                group: 0,
-                index: index as u32,
-                base_score: *base_score,
-                history_score: None,
-                combined: *base_score,
-            });
+            scored.push(EntryAnnotation::new(0, index as u32, *base_score));
         }
         let groups = vec![QueryGroup {
             query: String::new(),
             provider_id: "p".to_string(),
-            entries,
+            entries: entries.into(),
         }];
         (groups, scored)
     }

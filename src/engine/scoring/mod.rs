@@ -7,7 +7,7 @@ pub use config::ScoringConfig;
 use base_scorer::BaseScorer;
 use history::{HistoryStore, KeyedHistoryRecord, KnownHistory, QueryHistory};
 
-use crate::engine::provider::Entry;
+use crate::engine::provider::{Entry, QueryGroup};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchField {
@@ -19,22 +19,6 @@ pub struct MatchField {
 pub enum Rank {
     Score(f32),
     MatchFields(Vec<MatchField>),
-}
-
-/// A batch of entries to be fuzzy-scored against a single query.
-///
-/// Each group supplies its own needle; all groups are normalized together
-/// against the same global maximum.
-///
-/// The provider identity lives here rather than on [`Entry`]: every entry in
-/// a group comes from the same provider, so one copy per group replaces one
-/// per entry, and the annotation that replaces it can address an entry by
-/// position rather than by owning it.
-#[derive(Debug, Clone)]
-pub struct QueryGroup {
-    pub query: String,
-    pub provider_id: String,
-    pub entries: Vec<Entry>,
 }
 
 /// One scored entry: where it sits in its [`QueryGroup`], plus the scores the
@@ -55,6 +39,21 @@ pub struct EntryAnnotation {
 }
 
 impl EntryAnnotation {
+    /// A freshly base-scored entry.
+    ///
+    /// `combined` starts equal to `base_score`; history scoring later
+    /// replaces it with the base/history blend, so a result with no history
+    /// already ranks by its base score.
+    pub fn new(group: u32, index: u32, base_score: f64) -> Self {
+        Self {
+            group,
+            index,
+            base_score,
+            history_score: None,
+            combined: base_score,
+        }
+    }
+
     /// The entry this annotation points at.
     pub fn resolve<'a>(&self, groups: &'a [QueryGroup]) -> &'a Entry {
         &groups[self.group as usize].entries[self.index as usize]

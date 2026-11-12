@@ -26,11 +26,12 @@ pub mod util;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::engine::scoring::Rank;
 use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
-pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
+pub use collection::{PreprocessedQuery, QueryGroup, matches_prefix, matches_query};
 pub use util::{
     Action, EntryBuilder, ExecMode, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
 };
@@ -417,7 +418,7 @@ pub struct HandleContext<'a> {
 /// # Example
 ///
 /// ```ignore
-/// struct MyProvider { entries: Vec<Entry> }
+/// struct MyProvider { entries: Arc<[Entry]> }
 ///
 /// impl Provider for MyProvider {
 ///     fn meta(&self) -> ProviderMeta {
@@ -426,17 +427,23 @@ pub struct HandleContext<'a> {
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */
 ///     }
-///     fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-///         self.entries.clone()
+///     fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+///         Arc::clone(&self.entries)
 ///     }
 /// }
 /// ```
+///
+/// The result is a shared slice rather than an owned `Vec`: a provider that
+/// answers every keystroke from an index it built once pays one allocation
+/// up front instead of one deep clone per query. Callers still see ordinary
+/// `Entry` values — [`QueryGroup`] owns the slice, and scoring
+/// addresses its rows by position.
 ///
 /// See [`CalculatorProvider`] for a real provider with a prefix trigger.
 pub trait Provider: Send {
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]>;
     fn handle(&mut self, _ctx: HandleContext) {}
 }
 
