@@ -307,7 +307,9 @@ impl ProviderCollection {
     }
 
     /// Query each provider and group its entries with the query they should
-    /// be fuzzy-scored against. Entries are annotated with their provider id.
+    /// be fuzzy-scored against. Each group carries the provider id for its
+    /// whole entry slice, so the scorer can name the source of an annotation
+    /// without storing the id on every entry.
     ///
     /// Only providers for which [`matches_query`] holds are queried: those
     /// owning the active prefix, plus — unless the prefix is exclusive or the

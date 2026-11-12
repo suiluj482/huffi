@@ -114,95 +114,40 @@ impl Provider for UnicodeProvider {
 }
 
 struct Characters {
-    #[allow(dead_code)]
     rows: Arc<[Entry]>,
     /// Code point to the rows holding it. Emoji are indexed first, so a
     /// sequence claims the code points it is built from and `:2603` answers
     /// with ☃️ rather than with a bare ☃ as well.
     by_code_point: HashMap<u32, Vec<u32>>,
-    /// Code points an emoji has already claimed.
-    #[allow(dead_code)]
+}
+
+/// Accumulates rows and their code-point index while [`Characters::build`]
+/// walks the Unicode tables.
+///
+/// `covered` lives only for the duration of that walk: the emoji pass claims
+/// a code point, and the character pass then leaves it out. Splitting the
+/// builder from the finished [`Characters`] keeps the coverage set out of the
+/// cached value, and lets [`add`](Self::add) borrow the maps mutably without
+/// threading them through every call.
+struct CharactersBuilder {
+    rows: Vec<Entry>,
+    by_code_point: HashMap<u32, Vec<u32>>,
     covered: HashSet<u32>,
 }
 
-impl Characters {
-    fn build(config: UnicodeConfig) -> Self {
-        let mut rows_vec: Vec<Entry> = Vec::new();
-        let mut by_code_point: HashMap<u32, Vec<u32>> = HashMap::new();
-        let mut covered: HashSet<u32> = HashSet::new();
-
-        for emoji in emojis::iter() {
-            let Some(ch) = emoji.as_str().chars().next() else {
-                continue;
-            };
-            // An emoji is named by CLDR (`snowman`) at least as often as by
-            // Unicode (`SNOWMAN WITH SNOW`), and the short name is the one a
-            // person searching for it would recognise.
-            let cldr = emoji.name();
-            let name = if cldr.is_empty() {
-                match unicode_names2::name(ch) {
-                    Some(name) => name.to_string(),
-                    None => continue,
-                }
-            } else {
-                cldr.to_string()
-            };
-            let shortcodes: Vec<String> = emoji.shortcodes().map(str::to_string).collect();
-            Characters::add(
-                &mut rows_vec,
-                &mut by_code_point,
-                &mut covered,
-                config,
-                ch,
-                name,
-                Some(emoji.as_str()),
-                &shortcodes,
-            );
-        }
-
-        for code in 0..=char::MAX as u32 {
-            let Some(ch) = char::from_u32(code) else {
-                continue;
-            };
-            if covered.contains(&code) {
-                continue;
-            }
-            let Some(name) = unicode_names2::name(ch) else {
-                continue;
-            };
-            let name = name.to_string();
-            // The CJK and Hangul names are formulas rather than words —
-            // `CJK UNIFIED IDEOGRAPH-4E00` — and there are over a hundred
-            // thousand of them. Asking for one by code point still works.
-            if name.starts_with("CJK") || name.starts_with("HANGUL") {
-                continue;
-            }
-            Characters::add(
-                &mut rows_vec,
-                &mut by_code_point,
-                &mut covered,
-                config,
-                ch,
-                name,
-                None,
-                &[],
-            );
-        }
-
-        Characters {
-            rows: Arc::from(rows_vec),
-            by_code_point,
-            covered,
+impl CharactersBuilder {
+    fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            by_code_point: HashMap::new(),
+            covered: HashSet::new(),
         }
     }
 
     /// Record one character: a row for the engine to rank, and every code
     /// point of the text that would be pasted for it.
-    #[allow(clippy::too_many_arguments)]
     fn add(
-        rows_vec: &mut Vec<Entry>,
-        by_code_point: &mut HashMap<u32, Vec<u32>>,
-        covered: &mut HashSet<u32>,
+        &mut self,
         config: UnicodeConfig,
         ch: char,
         name: String,
@@ -239,15 +184,15 @@ impl Characters {
             });
         }
 
-        let row = rows_vec.len() as u32;
+        let row = self.rows.len() as u32;
         for c in display.chars() {
-            by_code_point.entry(c as u32).or_default().push(row);
-            covered.insert(c as u32);
+            self.by_code_point.entry(c as u32).or_default().push(row);
+            self.covered.insert(c as u32);
         }
 
         let code_point = format!("u+{:x}", ch as u32);
 
-        rows_vec.push(
+        self.rows.push(
             entry(id.clone(), display.clone())
                 .subtitle(name)
                 .clipboard(display)
@@ -255,6 +200,61 @@ impl Characters {
                 .set_query_keeping_prefix(code_point)
                 .match_fields(fields),
         );
+    }
+
+    fn build(self) -> Characters {
+        Characters {
+            rows: Arc::from(self.rows),
+            by_code_point: self.by_code_point,
+        }
+    }
+}
+
+impl Characters {
+    fn build(config: UnicodeConfig) -> Self {
+        let mut builder = CharactersBuilder::new();
+
+        for emoji in emojis::iter() {
+            let Some(ch) = emoji.as_str().chars().next() else {
+                continue;
+            };
+            // An emoji is named by CLDR (`snowman`) at least as often as by
+            // Unicode (`SNOWMAN WITH SNOW`), and the short name is the one a
+            // person searching for it would recognise.
+            let cldr = emoji.name();
+            let name = if cldr.is_empty() {
+                match unicode_names2::name(ch) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                }
+            } else {
+                cldr.to_string()
+            };
+            let shortcodes: Vec<String> = emoji.shortcodes().map(str::to_string).collect();
+            builder.add(config, ch, name, Some(emoji.as_str()), &shortcodes);
+        }
+
+        for code in 0..=char::MAX as u32 {
+            let Some(ch) = char::from_u32(code) else {
+                continue;
+            };
+            if builder.covered.contains(&code) {
+                continue;
+            }
+            let Some(name) = unicode_names2::name(ch) else {
+                continue;
+            };
+            let name = name.to_string();
+            // The CJK and Hangul names are formulas rather than words —
+            // `CJK UNIFIED IDEOGRAPH-4E00` — and there are over a hundred
+            // thousand of them. Asking for one by code point still works.
+            if name.starts_with("CJK") || name.starts_with("HANGUL") {
+                continue;
+            }
+            builder.add(config, ch, name, None, &[]);
+        }
+
+        builder.build()
     }
 
     /// The rows for a query that names a code point outright: `2603`,
@@ -370,7 +370,6 @@ fn placeholder() -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[allow(dead_code)]
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
     use crate::engine::scoring::Rank;

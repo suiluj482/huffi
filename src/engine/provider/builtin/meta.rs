@@ -69,7 +69,7 @@ impl Provider for MetaProvider {
         let dry_run = if self.dry_run { "on" } else { "off" };
         let started_at = started_at_string(self.started_at).unwrap_or_default();
 
-        let mut entries = vec![
+        let fixed = [
             meta_entry("meta-uptime", "Uptime", uptime),
             meta_entry("meta-socket", "Control socket", socket),
             meta_entry("meta-data", "Data path", data.clone()),
@@ -78,32 +78,30 @@ impl Provider for MetaProvider {
             meta_entry("meta-dry-run", "Dry-run", dry_run.to_string()),
             meta_entry("meta-started-at", "Started at", started_at),
         ];
-
-        if let Some(rss) = proc_status_field("VmRSS:") {
-            entries.push(meta_entry(
-                "meta-memory",
-                "Memory (RSS)",
-                format!("{rss} KiB"),
-            ));
-        }
-        if let Some(threads) = proc_status_field("Threads:") {
-            entries.push(meta_entry("meta-threads", "Threads", threads.to_string()));
-        }
-
-        entries.push(
+        let memory = proc_status_field("VmRSS:")
+            .map(|rss| meta_entry("meta-memory", "Memory (RSS)", format!("{rss} KiB")));
+        let threads = proc_status_field("Threads:")
+            .map(|threads| meta_entry("meta-threads", "Threads", threads.to_string()));
+        let actions = [
             entry("meta-kill", "Quit huffi")
                 .subtitle(format!("terminate pid {pid}"))
                 .exec(vec!["kill".into(), pid])
+                .track_history()
                 .match_field("Quit huffi"),
-        );
-        entries.push(
             entry("meta-open-data", "Open data folder")
                 .subtitle(data.clone())
                 .exec(vec!["xdg-open".into(), data])
+                .track_history()
                 .match_field("Open data folder"),
-        );
+        ];
 
-        Arc::from(entries)
+        Arc::from_iter(
+            fixed
+                .into_iter()
+                .chain(memory)
+                .chain(threads)
+                .chain(actions),
+        )
     }
 }
 
@@ -115,6 +113,7 @@ fn meta_entry(id: &str, label: &str, value: String) -> Entry {
     entry(id, label)
         .subtitle(value.clone())
         .clipboard(value)
+        .track_history()
         .match_field(label)
 }
 
@@ -256,6 +255,32 @@ mod tests {
         assert!(entries.iter().any(|e| e.id == "meta-threads"));
         assert!(entries.iter().any(|e| e.id == "meta-kill"));
         assert!(entries.iter().any(|e| e.id == "meta-open-data"));
+    }
+
+    #[test]
+    fn every_entry_carries_a_namespaced_history_key() {
+        let mut p = provider("/tmp/data");
+        let entries = p.query(QueryContext {
+            prefix: Some("@"),
+            query: "",
+            original: "@",
+            history: &QueryHistory::EMPTY,
+            known_history: &KnownHistory::EMPTY,
+            generation: Generation::default(),
+        });
+        for e in entries.iter() {
+            assert!(
+                e.id.starts_with("meta-"),
+                "id {} must carry the provider prefix",
+                e.id
+            );
+            assert_eq!(
+                e.history_key.as_deref(),
+                Some(e.id.as_str()),
+                "{} must key history by its namespaced id",
+                e.id
+            );
+        }
     }
 
     #[test]

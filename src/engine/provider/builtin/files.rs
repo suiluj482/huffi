@@ -672,22 +672,23 @@ impl Provider for FilesProvider {
         // One dedup pass over the targets — current first, so the listing
         // wins over history — then a single construction pass: each
         // surviving target that still exists becomes exactly one entry.
-        let mut entries: Vec<Entry> = dedup_targets(&[&current, &history])
-            .iter()
-            .filter_map(|target| self.path_entry(target))
-            .collect();
+        let entries = dedup_targets(&[&current, &history])
+            .into_iter()
+            .filter_map(|target| self.path_entry(&target));
 
-        if browsing && self.config.show_parent {
+        let parent = if browsing && self.config.show_parent {
             let dir = self.extended_prefix(query);
-            if let Some(parent) = dir.parent() {
-                entries.push(self.parent_entry(
+            dir.parent().map(|parent| {
+                self.parent_entry(
                     parent,
                     format!("{}/", relative_to(&self.config.root, parent)),
-                ));
-            }
-        }
+                )
+            })
+        } else {
+            None
+        };
 
-        Arc::from(entries)
+        Arc::from_iter(entries.chain(parent))
     }
 }
 

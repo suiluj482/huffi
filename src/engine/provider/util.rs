@@ -399,6 +399,18 @@ impl EntryBuilder {
         self
     }
 
+    /// Track history under this entry's own id.
+    ///
+    /// Equivalent to `.history_key(id)` for providers whose ids already carry
+    /// the provider namespace (e.g. `unicode-2603` or `meta-uptime`), so the
+    /// key stays unique in the shared history store without repeating it at
+    /// the call site. Call it after the id is fixed; the builder captures the
+    /// id it was created with.
+    pub fn track_history(mut self) -> Self {
+        self.history_key = Some(self.id.clone());
+        self
+    }
+
     /// Set the query suggestion the UI applies when this entry is
     /// tab-selected. The text replaces the whole query.
     pub fn set_query(mut self, query: impl Into<String>) -> Self {
@@ -639,6 +651,22 @@ mod tests {
         assert_eq!(details["exact"], "1/3");
         assert_eq!(details["dimensions"], "L T^-1");
         assert!(details.keys().all(|k| is_detail_key(k)));
+    }
+
+    #[test]
+    fn track_history_uses_the_entry_id_as_the_key() {
+        let tracked = entry("meta-uptime", "Uptime").track_history().build();
+        assert_eq!(tracked.history_key.as_deref(), Some("meta-uptime"));
+
+        // It is a normal builder step: a later explicit key still wins.
+        let overridden = entry("id", "title")
+            .track_history()
+            .history_key("explicit")
+            .build();
+        assert_eq!(overridden.history_key.as_deref(), Some("explicit"));
+
+        let untracked = entry("id", "title").build();
+        assert!(untracked.history_key.is_none());
     }
 
     #[derive(Debug, PartialEq, Deserialize)]

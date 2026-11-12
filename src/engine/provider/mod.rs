@@ -122,9 +122,11 @@ impl QuerySuggestion {
 
 /// One launchable result: everything a provider declares about an entry.
 ///
-/// Query-independent by construction — the fields a keystroke varies (`rank`)
-/// and the history key both sit here too, because a provider builds them once
-/// in [`init`](Provider::init) and they are read on every keystroke.
+/// The provider identity is not stored here: every entry in a
+/// [`QueryGroup`](collection::QueryGroup) comes from the same provider, so the
+/// group carries it once. `rank` and the history key are the provider's
+/// declared inputs to scoring; the engine reads them on every keystroke rather
+/// than mutating the entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     /// Id unique within the provider; selection looks results up by it.

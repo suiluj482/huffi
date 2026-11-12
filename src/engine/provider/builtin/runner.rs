@@ -118,16 +118,9 @@ impl Provider for RunnerProvider {
 
     fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let query = ctx.query.trim();
-        let mut entries: Vec<Entry> = self
-            .corpus
-            .iter()
-            .filter(|e| e.title != query)
-            .cloned()
-            .collect();
-        if !query.is_empty() {
-            entries.insert(0, run_entry(query, &self.shell));
-        }
-        Arc::from(entries)
+        let corpus = self.corpus.iter().filter(|e| e.title != query).cloned();
+        let run = (!query.is_empty()).then(|| run_entry(query, &self.shell));
+        Arc::from_iter(run.into_iter().chain(corpus))
     }
 }
 
