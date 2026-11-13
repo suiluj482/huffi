@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rink_core::output::{NumberParts, QueryReply};
 use rink_core::{eval, simple_context};
@@ -66,22 +67,18 @@ impl Provider for CalculatorProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let Some(rink) = self.rink.as_mut() else {
-            return vec![];
+            return Arc::from([]);
         };
 
         if ctx.query.is_empty() {
-            // The placeholder is a value like any other, so it is copied and
-            // re-queried on selection just as a result would be.
-            return vec![self.row(PLACEHOLDER).score(1.0)];
+            return Arc::from([self.row(PLACEHOLDER).score(1.0)]);
         }
 
         match eval(rink, ctx.query) {
-            Ok(reply) => vec![self.present(&reply)],
-            // A failed expression is a legitimate result: the error becomes the
-            // title, and there is nothing to copy or re-query.
-            Err(err) => vec![self.base(&err.to_string()).score(1.0)],
+            Ok(reply) => Arc::from([self.present(&reply)]),
+            Err(err) => Arc::from([self.base(&err.to_string()).score(1.0)]),
         }
     }
 }
@@ -260,9 +257,9 @@ mod tests {
     use super::*;
 
     /// One result's entry fields, so assertions read `shown.title` rather than
-    /// `shown.entry.title`.
-    fn shown(reply: &QueryReply) -> crate::engine::provider::EntryMeta {
-        CalculatorProvider::new().present(reply).entry
+    /// `shown.title`.
+    fn shown(reply: &QueryReply) -> crate::engine::provider::Entry {
+        CalculatorProvider::new().present(reply)
     }
 
     fn detail<'a>(details: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {

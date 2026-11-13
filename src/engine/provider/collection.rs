@@ -1,17 +1,33 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::engine::scoring::QueryGroup;
 use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
 use super::config::{ProviderConfig, ProviderOverride, default_target_prefix};
 use super::{
-    ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider,
-    EntryMeta, FilesProvider, Generation, HandleContext, InitContext, NixRunProvider, Provider,
-    ProviderMeta, ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
+    ActionsProvider, AiProvider, CalculatorProvider, CliphistProvider, DesktopEntryProvider, Entry,
+    FilesProvider, Generation, HandleContext, InitContext, NixRunProvider, Provider, ProviderMeta,
+    ProviderResult, QueryContext, RunnerProvider, UnicodeProvider,
 };
+
+/// A batch of entries to be fuzzy-scored against a single query.
+///
+/// Each group supplies its own needle; all groups are normalized together
+/// against the same global maximum.
+///
+/// The provider identity lives here rather than on [`Entry`]: every entry in
+/// a group comes from the same provider, so one copy per group replaces one
+/// per entry, and the annotation that replaces it can address an entry by
+/// position rather than by owning it.
+#[derive(Debug, Clone)]
+pub struct QueryGroup {
+    pub query: String,
+    pub provider_id: String,
+    pub entries: Arc<[Entry]>,
+}
 
 pub struct ProviderCollection {
     /// Registered providers in insertion order, with the metadata used for
@@ -291,7 +307,9 @@ impl ProviderCollection {
     }
 
     /// Query each provider and group its entries with the query they should
-    /// be fuzzy-scored against. Entries are annotated with their provider id.
+    /// be fuzzy-scored against. Each group carries the provider id for its
+    /// whole entry slice, so the scorer can name the source of an annotation
+    /// without storing the id on every entry.
     ///
     /// Only providers for which [`matches_query`] holds are queried: those
     /// owning the active prefix, plus — unless the prefix is exclusive or the
@@ -312,7 +330,7 @@ impl ProviderCollection {
         history: &QueryHistory,
         known_history: &KnownHistory,
         generation: Generation,
-    ) -> Vec<QueryGroup<EntryMeta>> {
+    ) -> Vec<QueryGroup> {
         let target_prefix = self.target_prefix.clone();
         self.providers
             .iter_mut()
@@ -328,13 +346,10 @@ impl ProviderCollection {
                     known_history,
                     generation,
                 );
-                let mut entries = p.query(ctx);
-                for e in entries.iter_mut() {
-                    e.entry.provider_id = Some(meta.id.clone());
-                }
                 Some(QueryGroup {
                     query: ctx.query.to_string(),
-                    entries,
+                    provider_id: meta.id.clone(),
+                    entries: p.query(ctx),
                 })
             })
             .collect()
@@ -471,13 +486,13 @@ mod tests {
             ProviderResult::Ok
         }
 
-        fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+        fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
             self.calls.lock().unwrap().push((
                 self.id.clone(),
                 ctx.prefix.map(String::from),
                 ctx.query.to_string(),
             ));
-            vec![entry(&self.id, &self.id).history_key(&self.id).score(1.0)]
+            Arc::from([entry(&self.id, &self.id).history_key(&self.id).score(1.0)])
         }
 
         fn handle(&mut self, ctx: HandleContext) {
@@ -798,32 +813,29 @@ mod tests {
     }
 
     #[test]
-    fn entries_are_stamped_with_provider_id() {
+    fn groups_carry_the_provider_id() {
         let mut c = collection();
         c.add_provider(Box::new(TestProvider::new(
-            "desktop",
-            vec![match_fields_entry("desktop", "Firefox")],
+            "stamped",
+            vec![match_fields_entry("stamped", "Firefox")],
         )))
         .unwrap();
         let pre = c.preprocess_query("firefox");
-        let entries: Vec<_> = c
-            .grouped_entries(
-                &pre,
-                &QueryHistory::EMPTY,
-                &KnownHistory::EMPTY,
-                Generation::default(),
-            )
-            .into_iter()
-            .flat_map(|g| g.entries)
-            .map(|s| s.entry)
-            .collect();
-        for e in &entries {
-            assert!(e.provider_id.is_some());
-        }
+        let groups = c.grouped_entries(
+            &pre,
+            &QueryHistory::EMPTY,
+            &KnownHistory::EMPTY,
+            Generation::default(),
+        );
+        let stamped = groups
+            .iter()
+            .find(|g| g.provider_id == "stamped")
+            .expect("a group for the added provider");
+        assert_eq!(stamped.entries.len(), 1);
+        assert_eq!(stamped.entries[0].id, "stamped");
         assert!(
-            entries
-                .iter()
-                .any(|e| e.provider_id.as_deref() == Some("desktop"))
+            groups.iter().all(|g| !g.provider_id.is_empty()),
+            "every group names the provider it came from"
         );
     }
 
@@ -995,8 +1007,8 @@ mod tests {
                 *self.received.lock().unwrap() = ctx.extra.clone();
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 
@@ -1040,8 +1052,8 @@ mod tests {
                     critical: true,
                 }
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 
@@ -1071,8 +1083,8 @@ mod tests {
                 *self.inits.lock().unwrap() += 1;
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 
@@ -1108,8 +1120,8 @@ mod tests {
                 *self.inits.lock().unwrap() += 1;
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 
@@ -1163,17 +1175,15 @@ mod tests {
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
             }
-            fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+            fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
                 self.calls.lock().unwrap().push((
                     "prefixed".to_string(),
                     ctx.prefix.map(String::from),
                     ctx.query.to_string(),
                 ));
-                vec![
-                    entry("prefixed", "prefixed")
-                        .history_key("prefixed")
-                        .score(1.0),
-                ]
+                Arc::from([entry("prefixed", "prefixed")
+                    .history_key("prefixed")
+                    .score(1.0)])
             }
         }
 
@@ -1464,8 +1474,8 @@ mod tests {
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 
@@ -1496,8 +1506,8 @@ mod tests {
             fn init(&mut self, _ctx: InitContext) -> ProviderResult {
                 ProviderResult::Ok
             }
-            fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-                vec![]
+            fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+                Arc::from([])
             }
         }
 

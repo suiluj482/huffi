@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -274,14 +275,14 @@ impl Provider for AiProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
-        match classify(ctx.query, &self.config.trigger_suffix) {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::from(match classify(ctx.query, &self.config.trigger_suffix) {
             Submission::Hint => vec![hint_entry()],
             Submission::Submit { prompt } => {
                 vec![submit_entry(prompt, &self.config.trigger_suffix)]
             }
             Submission::Request { prompt } => self.answer(prompt),
-        }
+        })
     }
 }
 
@@ -426,10 +427,10 @@ mod tests {
     fn submit_entry_shows_the_suffix_as_title_and_submit_as_subtitle() {
         let entries = AiProvider::new().query(query("hello", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.title, "hello?");
-        assert_eq!(entries[0].entry.subtitle.as_deref(), Some("Submit"));
+        assert_eq!(entries[0].title, "hello?");
+        assert_eq!(entries[0].subtitle.as_deref(), Some("Submit"));
 
-        match &entries[0].entry.action {
+        match &entries[0].action {
             Action::SetQuery { suggestion } => {
                 assert!(suggestion.keep_prefix);
                 assert_eq!(suggestion.query, "hello?");
@@ -445,8 +446,8 @@ mod tests {
         for text in ["", "   ", "?"] {
             let entries = provider.query(query(text, &QueryHistory::EMPTY));
             assert_eq!(entries.len(), 1, "one hint entry for {text:?}");
-            assert_eq!(entries[0].entry.id, "ai-hint");
-            assert_eq!(entries[0].entry.title, "Type to query");
+            assert_eq!(entries[0].id, "ai-hint");
+            assert_eq!(entries[0].title, "Type to query");
         }
     }
 
@@ -459,14 +460,14 @@ mod tests {
 
         let entries = provider.query(query("hello?", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.title, "world");
+        assert_eq!(entries[0].title, "world");
         assert_eq!(copy_value(&entries[0]), "world");
-        assert_eq!(entries[0].entry.id, "ai-answer");
+        assert_eq!(entries[0].id, "ai-answer");
     }
 
     fn copy_value(row: &Entry) -> String {
-        let Action::Clipboard { value } = &row.entry.action else {
-            panic!("expected a clipboard action, got {:?}", row.entry.action);
+        let Action::Clipboard { value } = &row.action else {
+            panic!("expected a clipboard action, got {:?}", row.action);
         };
         value.clone()
     }

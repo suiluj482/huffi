@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::config::ScoringConfig;
 
-use super::{BaseScored, Scored};
+use crate::engine::provider::QueryGroup;
+
+use super::EntryAnnotation;
 
 pub type HistoryKey = String;
 
@@ -354,24 +356,34 @@ impl HistoryStore {
         }
     }
 
-    /// Blend base scores with a precomputed [`QueryHistory`].
+    /// Blend usage history into `scored` in place.
     ///
     /// The query-level [`confidence`](QueryHistory::confidence) and
     /// [`peak`](QueryHistory::peak) look over the whole query; the final blend
     /// narrows to the keys **present in the result set** so records left
     /// behind by launch fan-out for entries the query does not surface
     /// cannot inflate confidence or the normalizer.
-    pub fn history_scoring<T>(
+    ///
+    /// `groups` resolves each annotation to the entry that carries its
+    /// history key; the scores it produces replace `combined`.
+    pub fn history_scoring(
         &self,
         history: &QueryHistory,
-        base_scored: Vec<BaseScored<T>>,
-    ) -> Vec<Scored<T>> {
+        groups: &[QueryGroup],
+        scored: &mut [EntryAnnotation],
+    ) {
         // Only records for entries actually present in the result set may
         // influence confidence and normalization; launch fan-out leaves
         // records for apps that the current query does not surface.
-        let present: HashMap<&str, &QueryHistoryEntry> = base_scored
+        let present: HashMap<&str, &QueryHistoryEntry> = scored
             .iter()
-            .filter_map(|c| c.history_key.as_deref().and_then(|key| history.get(key)))
+            .filter_map(|a| {
+                let entry = a.resolve(groups);
+                entry
+                    .history_key
+                    .as_deref()
+                    .and_then(|key| history.get(key))
+            })
             .map(|e| (e.key.as_str(), e))
             .collect();
 
@@ -379,36 +391,27 @@ impl HistoryStore {
         let confidence = n / (n + self.confidence_k);
         let max_effective = present.values().map(|e| e.effective).fold(0.0f64, f64::max);
 
-        base_scored
-            .into_iter()
-            .map(|c| {
-                let (history_score, combined) = match &c.history_key {
-                    Some(key) => {
-                        let h = present
-                            .get(key.as_str())
-                            .map(|e| {
-                                if max_effective > 0.0 {
-                                    e.effective / max_effective
-                                } else {
-                                    0.0
-                                }
-                            })
-                            .unwrap_or(0.0);
-                        let combined = confidence * h + (1.0 - confidence) * c.base_score;
-                        (Some(h), combined)
-                    }
-                    None => (None, c.base_score),
-                };
-                Scored {
-                    entry: c.entry,
-                    rank: c.rank,
-                    history_key: c.history_key,
-                    base_score: c.base_score,
-                    history_score,
-                    combined,
+        for a in scored.iter_mut() {
+            let entry = a.resolve(groups);
+            let combined = match &entry.history_key {
+                Some(key) => {
+                    let h = present
+                        .get(key.as_str())
+                        .map(|e| {
+                            if max_effective > 0.0 {
+                                e.effective / max_effective
+                            } else {
+                                0.0
+                            }
+                        })
+                        .unwrap_or(0.0);
+                    a.history_score = Some(h);
+                    confidence * h + (1.0 - confidence) * a.base_score
                 }
-            })
-            .collect()
+                None => a.base_score,
+            };
+            a.combined = combined;
+        }
     }
 
     pub fn list_entries(&self, prefix: &str) -> Vec<KeyedHistoryRecord> {
@@ -556,6 +559,39 @@ mod tests {
         assert!(entries.is_empty());
     }
 
+    /// One group of entries identified by their `id`, plus the un-scored
+    /// annotations `history_scoring` fills in.
+    fn groups_and_base(
+        rows: &[(&str, f64, Option<&str>)],
+    ) -> (Vec<QueryGroup>, Vec<EntryAnnotation>) {
+        let mut entries = Vec::new();
+        let mut scored = Vec::new();
+        for (index, (id, base_score, key)) in rows.iter().enumerate() {
+            let mut builder = crate::engine::provider::entry(*id, *id);
+            if let Some(key) = key {
+                builder = builder.history_key(*key);
+            }
+            entries.push(builder.score(*base_score as f32));
+            scored.push(EntryAnnotation::new(0, index, *base_score));
+        }
+        let groups = vec![QueryGroup {
+            query: String::new(),
+            provider_id: "p".to_string(),
+            entries: entries.into(),
+        }];
+        (groups, scored)
+    }
+
+    fn scored_by_id<'a>(
+        groups: &'a [QueryGroup],
+        scored: &'a [EntryAnnotation],
+    ) -> Vec<(&'a str, &'a EntryAnnotation)> {
+        scored
+            .iter()
+            .map(|a| (a.resolve(groups).id.as_str(), a))
+            .collect()
+    }
+
     #[test]
     fn history_for_reports_recorded_history_for_the_exact_query() {
         let mut history = HistoryStore::default();
@@ -664,22 +700,15 @@ mod tests {
             history.record_launch("fi", "Gimp");
         }
 
-        fn base<'a>(name: &'a str, score: f64, key: Option<&str>) -> BaseScored<&'a str> {
-            BaseScored {
-                entry: name,
-                rank: crate::engine::scoring::Rank::Score(0.0),
-                history_key: key.map(str::to_string),
-                base_score: score,
-            }
-        }
+        let (groups, mut scored) =
+            groups_and_base(&[("Gimp", 0.7, Some("Gimp")), ("Other", 0.6, None)]);
+        history.history_scoring(&history.history_for("fi"), &groups, &mut scored);
 
-        let scored = history.history_scoring(
-            &history.history_for("fi"),
-            vec![base("Gimp", 0.7, Some("Gimp")), base("Other", 0.6, None)],
-        );
-
-        let gimp = scored.iter().find(|s| s.entry == "Gimp").unwrap();
-        let other = scored.iter().find(|s| s.entry == "Other").unwrap();
+        let rows = scored_by_id(&groups, &scored);
+        let gimp = rows[0].1;
+        let other = rows[1].1;
+        assert_eq!(rows[0].0, "Gimp");
+        assert_eq!(rows[1].0, "Other");
 
         assert_eq!(
             gimp.history_score.unwrap(),
@@ -704,27 +733,18 @@ mod tests {
             history.record_launch("fi", "Gimp");
         }
 
-        fn base<'a>(name: &'a str, score: f64, key: Option<&str>) -> BaseScored<&'a str> {
-            BaseScored {
-                entry: name,
-                rank: crate::engine::scoring::Rank::Score(0.0),
-                history_key: key.map(str::to_string),
-                base_score: score,
-            }
-        }
+        let (groups, mut scored) = groups_and_base(&[
+            ("Firefox", 0.8, Some("Firefox")),
+            ("Gimp", 0.7, Some("Gimp")),
+            ("Other", 0.6, None),
+        ]);
+        history.history_scoring(&history.history_for("fi"), &groups, &mut scored);
 
-        let scored = history.history_scoring(
-            &history.history_for("fi"),
-            vec![
-                base("Firefox", 0.8, Some("Firefox")),
-                base("Gimp", 0.7, Some("Gimp")),
-                base("Other", 0.6, None),
-            ],
-        );
-
-        let firefox = scored.iter().find(|s| s.entry == "Firefox").unwrap();
-        let gimp = scored.iter().find(|s| s.entry == "Gimp").unwrap();
-        let other = scored.iter().find(|s| s.entry == "Other").unwrap();
+        let rows = scored_by_id(&groups, &scored);
+        let find = |id: &str| rows.iter().find(|(i, _)| *i == id).unwrap().1;
+        let firefox = find("Firefox");
+        let gimp = find("Gimp");
+        let other = find("Other");
 
         assert_eq!(firefox.history_score.unwrap(), 1.0);
         assert!((gimp.history_score.unwrap() - 0.2).abs() < 1e-6);

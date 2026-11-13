@@ -1,4 +1,5 @@
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -38,7 +39,7 @@ impl Default for CliphistConfig {
 pub struct CliphistProvider {
     config: CliphistConfig,
     /// Entries fetched for `loaded_session`, reused until the next session.
-    entries: Vec<Entry>,
+    entries: Arc<[Entry]>,
     /// The session `entries` was fetched for; `None` before the first query.
     loaded_session: Option<u64>,
 }
@@ -53,7 +54,7 @@ impl CliphistProvider {
     pub fn new() -> Self {
         Self {
             config: CliphistConfig::default(),
-            entries: Vec::new(),
+            entries: Arc::from([]),
             loaded_session: None,
         }
     }
@@ -82,12 +83,12 @@ impl Provider for CliphistProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         if self.loaded_session != Some(ctx.generation.session) {
-            self.entries = load_cliphist(self.config.max_entries);
+            self.entries = load_cliphist(self.config.max_entries).into();
             self.loaded_session = Some(ctx.generation.session);
         }
-        self.entries.clone()
+        Arc::clone(&self.entries)
     }
 }
 
@@ -158,11 +159,8 @@ mod tests {
     use crate::engine::scoring::Rank;
 
     fn copy_command(row: &Entry) -> Vec<String> {
-        let Action::ClipboardCommand { args } = &row.entry.action else {
-            panic!(
-                "expected a cliphist decode command, got {:?}",
-                row.entry.action
-            );
+        let Action::ClipboardCommand { args } = &row.action else {
+            panic!("expected a cliphist decode command, got {:?}", row.action);
         };
         args.clone()
     }
@@ -187,8 +185,8 @@ mod tests {
     fn selecting_an_entry_decodes_its_original_content() {
         let rows = entries_from_list("1\tcargo test\n", 0);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].entry.id, "cliphist:1");
-        assert_eq!(rows[0].entry.title, "cargo test");
+        assert_eq!(rows[0].id, "cliphist:1");
+        assert_eq!(rows[0].title, "cargo test");
         assert_eq!(
             copy_command(&rows[0]),
             vec![
@@ -227,15 +225,15 @@ mod tests {
     fn empty_lines_are_skipped() {
         let rows = entries_from_list("1\t\n2\t\n3\thello\n", 0);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].entry.id, "cliphist:3");
-        assert_eq!(rows[0].entry.title, "hello");
+        assert_eq!(rows[0].id, "cliphist:3");
+        assert_eq!(rows[0].title, "hello");
     }
 
     #[test]
     fn the_title_is_cliphist_preview_verbatim() {
         let preview = format!("{}…", "x".repeat(100));
         let rows = entries_from_list(&format!("7\t{preview}\n"), 0);
-        assert_eq!(rows[0].entry.title, preview);
+        assert_eq!(rows[0].title, preview);
         assert_eq!(match_text(&rows[0]), preview);
         assert_eq!(
             copy_command(&rows[0]),
@@ -251,8 +249,8 @@ mod tests {
     fn image_entries_decode_the_image_data() {
         let preview = "[[ binary data 2 MiB png 2736x2272 ]]";
         let rows = entries_from_list(&format!("42\t{preview}\n"), 0);
-        assert_eq!(rows[0].entry.id, "cliphist:42");
-        assert_eq!(rows[0].entry.title, preview);
+        assert_eq!(rows[0].id, "cliphist:42");
+        assert_eq!(rows[0].title, preview);
         assert_eq!(match_text(&rows[0]), preview);
         assert_eq!(
             copy_command(&rows[0]),

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use crate::engine::config::ExternalConfig;
 use crate::engine::scoring::{MatchField, Rank};
 
-use super::{Entry, EntryMeta, Icon, ProviderMeta, ProviderResult, QuerySuggestion};
+use super::{Entry, Icon, ProviderMeta, ProviderResult, QuerySuggestion};
 
 /// How an [`Action::Exec`] launches its args.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +215,7 @@ fn resolve_cwd(
 /// object id and looks the widget up under exactly that name.
 ///
 /// Enforced by `debug_assert!` in [`EntryBuilder::detail`] rather than a
-/// panic. `Provider::query` returns a plain `Vec<Entry>`, so a provider has no
+/// panic. `Provider::query` returns an `Arc<[Entry]>`, so a provider has no
 /// way to report a bad key; a hard assert would mean one bad key in a
 /// third-party provider crashes the launcher on every keystroke. This way
 /// development builds and the test suite fail loudly at the point of the
@@ -232,7 +232,6 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
     EntryBuilder {
         id: id.into(),
         title: title.into(),
-        provider_id: None,
         subtitle: None,
         comment: None,
         icon: None,
@@ -249,7 +248,6 @@ pub fn entry(id: impl Into<String>, title: impl Into<String>) -> EntryBuilder {
 pub struct EntryBuilder {
     id: String,
     title: String,
-    provider_id: Option<String>,
     subtitle: Option<String>,
     comment: Option<String>,
     icon: Option<Icon>,
@@ -263,11 +261,6 @@ pub struct EntryBuilder {
 }
 
 impl EntryBuilder {
-    pub fn provider(mut self, id: impl Into<String>) -> Self {
-        self.provider_id = Some(id.into());
-        self
-    }
-
     /// Set the secondary line under the title.
     pub fn subtitle(mut self, s: impl Into<String>) -> Self {
         self.subtitle = Some(s.into());
@@ -309,7 +302,7 @@ impl EntryBuilder {
     /// match `[a-z0-9-]+` (see [`is_detail_key`]). A later detail with the same
     /// key replaces this one.
     ///
-    /// See [`EntryMeta::details`].
+    /// See [`Entry::details`].
     pub fn detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let key = key.into();
         debug_assert!(
@@ -337,7 +330,7 @@ impl EntryBuilder {
     /// could plausibly want too — that is what lets a theme ship one
     /// `variants/<name>/entry.ui` for every provider reporting it.
     ///
-    /// See [`EntryMeta::variant`].
+    /// See [`Entry::variant`].
     pub fn variant(mut self, name: impl Into<String>) -> Self {
         self.variant = Some(name.into());
         self
@@ -403,6 +396,18 @@ impl EntryBuilder {
 
     pub fn history_key(mut self, key: impl Into<String>) -> Self {
         self.history_key = Some(key.into());
+        self
+    }
+
+    /// Track history under this entry's own id.
+    ///
+    /// Equivalent to `.history_key(id)` for providers whose ids already carry
+    /// the provider namespace (e.g. `unicode-2603` or `meta-uptime`), so the
+    /// key stays unique in the shared history store without repeating it at
+    /// the call site. Call it after the id is fixed; the builder captures the
+    /// id it was created with.
+    pub fn track_history(mut self) -> Self {
+        self.history_key = Some(self.id.clone());
         self
     }
 
@@ -481,18 +486,15 @@ impl EntryBuilder {
             }
         }
         Entry {
-            entry: EntryMeta {
-                id: self.id,
-                provider_id: self.provider_id,
-                title: self.title,
-                subtitle: self.subtitle,
-                comment: self.comment,
-                icon: self.icon,
-                details: self.details,
-                variant: self.variant,
-                set_query: self.set_query,
-                action,
-            },
+            id: self.id,
+            title: self.title,
+            subtitle: self.subtitle,
+            comment: self.comment,
+            icon: self.icon,
+            details: self.details,
+            variant: self.variant,
+            set_query: self.set_query,
+            action,
             rank: self.rank.unwrap_or(Rank::Score(1.0)),
             history_key: self.history_key,
         }
@@ -644,11 +646,27 @@ mod tests {
                 ("dimensions".to_owned(), "L T^-1".to_owned()),
             ])
             .build();
-        let details = &meta.entry.details;
+        let details = &meta.details;
         assert_eq!(details["quantity"], "length");
         assert_eq!(details["exact"], "1/3");
         assert_eq!(details["dimensions"], "L T^-1");
         assert!(details.keys().all(|k| is_detail_key(k)));
+    }
+
+    #[test]
+    fn track_history_uses_the_entry_id_as_the_key() {
+        let tracked = entry("meta-uptime", "Uptime").track_history().build();
+        assert_eq!(tracked.history_key.as_deref(), Some("meta-uptime"));
+
+        // It is a normal builder step: a later explicit key still wins.
+        let overridden = entry("id", "title")
+            .track_history()
+            .history_key("explicit")
+            .build();
+        assert_eq!(overridden.history_key.as_deref(), Some("explicit"));
+
+        let untracked = entry("id", "title").build();
+        assert!(untracked.history_key.is_none());
     }
 
     #[derive(Debug, PartialEq, Deserialize)]
@@ -692,7 +710,7 @@ mod tests {
     #[test]
     fn set_query_carries_the_whole_query() {
         let entry = entry("id", "title").set_query("=42").score(1.0);
-        let suggestion = entry.entry.set_query.expect("a suggestion");
+        let suggestion = entry.set_query.expect("a suggestion");
         assert!(!suggestion.keep_prefix);
         assert_eq!(suggestion.query, "=42");
     }
@@ -704,7 +722,7 @@ mod tests {
         let entry = entry("id", "title")
             .set_query_keeping_prefix("42")
             .score(1.0);
-        let suggestion = entry.entry.set_query.expect("a suggestion");
+        let suggestion = entry.set_query.expect("a suggestion");
         assert!(suggestion.keep_prefix);
         assert_eq!(suggestion.query, "42");
         assert_eq!(suggestion.resolve(Some("#")), "#42");
@@ -714,7 +732,7 @@ mod tests {
     #[test]
     fn an_entry_without_a_suggestion_has_nothing_to_resolve() {
         let entry = entry("id", "title").score(1.0);
-        assert!(entry.entry.set_query.is_none());
+        assert!(entry.set_query.is_none());
     }
 
     #[test]
@@ -834,7 +852,7 @@ mod tests {
         let ls = || vec!["ls".to_string()];
         let direct = entry("id", "title").exec(ls()).score(1.0);
         assert_eq!(
-            direct.entry.action,
+            direct.action,
             Action::Exec {
                 args: ls(),
                 mode: ExecMode::Direct,
@@ -844,7 +862,7 @@ mod tests {
 
         let terminal = entry("id", "title").terminal_exec(ls()).score(1.0);
         assert_eq!(
-            terminal.entry.action,
+            terminal.action,
             Action::Exec {
                 args: ls(),
                 mode: ExecMode::Terminal,
@@ -854,7 +872,7 @@ mod tests {
 
         let hold = entry("id", "title").terminal_hold(ls()).score(1.0);
         assert_eq!(
-            hold.entry.action,
+            hold.action,
             Action::Exec {
                 args: ls(),
                 mode: ExecMode::TerminalHold,
@@ -870,8 +888,8 @@ mod tests {
         let ls = || vec!["ls".to_string()];
         let after = entry("id", "title").exec(ls()).cwd("/tmp").score(1.0);
         let before = entry("id", "title").cwd("/tmp").exec(ls()).score(1.0);
-        assert_eq!(after.entry.action, before.entry.action);
-        match &after.entry.action {
+        assert_eq!(after.action, before.action);
+        match &after.action {
             Action::Exec { cwd, .. } => assert_eq!(cwd.as_deref(), Some(Path::new("/tmp"))),
             other => panic!("expected exec action, got {other:?}"),
         }
@@ -975,11 +993,11 @@ mod tests {
             .action_set_query("enter value")
             .score(1.0);
 
-        let tab = e.entry.set_query.expect("tab suggestion");
+        let tab = e.set_query.expect("tab suggestion");
         assert_eq!(tab.query, "tab value");
         assert!(!tab.keep_prefix);
         assert_eq!(
-            e.entry.action.query_suggestion().map(|s| s.query.as_str()),
+            e.action.query_suggestion().map(|s| s.query.as_str()),
             Some("enter value"),
             "Enter applies its own value, not the tab one"
         );
@@ -990,17 +1008,10 @@ mod tests {
         let e = entry("id", "title")
             .action_set_query_keeping_prefix("u+2603")
             .score(1.0);
-        let suggestion = e
-            .entry
-            .action
-            .query_suggestion()
-            .expect("a query suggestion");
+        let suggestion = e.action.query_suggestion().expect("a query suggestion");
         assert!(suggestion.keep_prefix);
         assert_eq!(suggestion.resolve(Some(":")), ":u+2603");
-        assert!(
-            e.entry.set_query.is_none(),
-            "the tab suggestion stays unset"
-        );
+        assert!(e.set_query.is_none(), "the tab suggestion stays unset");
     }
 
     /// The accessor is how the UI pulls the suggestion out of the row
@@ -1009,7 +1020,7 @@ mod tests {
     fn only_the_set_query_action_exposes_a_suggestion() {
         let ls = || vec!["ls".to_string()];
         let with = entry("id", "t").action_set_query("q").score(1.0);
-        assert!(with.entry.action.query_suggestion().is_some());
+        assert!(with.action.query_suggestion().is_some());
 
         for no in [
             entry("a", "t").exec(ls()).score(1.0),
@@ -1018,9 +1029,9 @@ mod tests {
             entry("d", "t").score(1.0),
         ] {
             assert!(
-                no.entry.action.query_suggestion().is_none(),
+                no.action.query_suggestion().is_none(),
                 "{:?} should not offer a suggestion",
-                no.entry.action
+                no.action
             );
         }
     }

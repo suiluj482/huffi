@@ -116,18 +116,11 @@ impl Provider for RunnerProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let query = ctx.query.trim();
-        let mut entries: Vec<Entry> = self
-            .corpus
-            .iter()
-            .filter(|e| e.entry.title != query)
-            .cloned()
-            .collect();
-        if !query.is_empty() {
-            entries.insert(0, run_entry(query, &self.shell));
-        }
-        entries
+        let corpus = self.corpus.iter().filter(|e| e.title != query).cloned();
+        let run = (!query.is_empty()).then(|| run_entry(query, &self.shell));
+        Arc::from_iter(run.into_iter().chain(corpus))
     }
 }
 
@@ -359,8 +352,8 @@ mod tests {
         let mut p = RunnerProvider::with_commands(vec!["ls".into(), "git status".into()]);
         let entries = p.query(query_ctx("", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].entry.title, "ls");
-        assert_eq!(entries[1].entry.title, "git status");
+        assert_eq!(entries[0].title, "ls");
+        assert_eq!(entries[1].title, "git status");
         assert!(matches!(entries[0].rank, Rank::MatchFields(_)));
     }
 
@@ -369,11 +362,11 @@ mod tests {
         let mut p = RunnerProvider::with_commands(vec!["git status".into(), "ls".into()]);
         let entries = p.query(query_ctx("git s", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].entry.title, "git s");
-        assert_eq!(entries[0].entry.id, "run:git s");
+        assert_eq!(entries[0].title, "git s");
+        assert_eq!(entries[0].id, "run:git s");
         assert!(matches!(entries[0].rank, Rank::Score(s) if s == 1.0));
         assert_eq!(entries[0].history_key.as_deref(), Some("runner-git s"));
-        assert_eq!(entries[1].entry.id, "hist:git status");
+        assert_eq!(entries[1].id, "hist:git status");
     }
 
     #[test]
@@ -381,8 +374,8 @@ mod tests {
         let mut p = RunnerProvider::with_commands(vec!["git status".into(), "ls".into()]);
         let entries = p.query(query_ctx("git status", &QueryHistory::EMPTY));
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].entry.id, "run:git status");
-        assert_eq!(entries[1].entry.id, "hist:ls");
+        assert_eq!(entries[0].id, "run:git status");
+        assert_eq!(entries[1].id, "hist:ls");
     }
 
     #[test]
@@ -397,7 +390,7 @@ mod tests {
             1,
             "corpus copy of the exact query is skipped"
         );
-        assert_eq!(entries[0].entry.id, "run:ls");
+        assert_eq!(entries[0].id, "run:ls");
         assert_eq!(entries[0].history_key.as_deref(), Some("runner-ls"));
     }
 
@@ -405,21 +398,18 @@ mod tests {
     fn entries_run_the_command_in_the_terminal_via_the_shell() {
         let mut p = RunnerProvider::with_commands(vec!["git status".into()]);
         let entries = p.query(query_ctx("git s", &QueryHistory::EMPTY));
-        for e in &entries {
-            match &e.entry.action {
+        for e in entries.iter() {
+            match &e.action {
                 Action::Exec { args, mode, .. } => {
                     assert_eq!(*mode, ExecMode::TerminalHold);
                     assert_eq!(
                         args,
-                        &vec!["sh".to_string(), "-c".to_string(), e.entry.title.clone()]
+                        &vec!["sh".to_string(), "-c".to_string(), e.title.clone()]
                     );
                 }
                 other => panic!("expected TerminalHold exec, got {other:?}"),
             }
-            assert_eq!(
-                e.history_key,
-                Some(format!("{HISTORY_PREFIX}-{}", e.entry.title))
-            );
+            assert_eq!(e.history_key, Some(format!("{HISTORY_PREFIX}-{}", e.title)));
         }
     }
 
@@ -455,7 +445,7 @@ mod tests {
             extra: Some(extra),
         });
         assert!(matches!(result, ProviderResult::Ok));
-        let titles: Vec<&str> = p.corpus.iter().map(|e| e.entry.title.as_str()).collect();
+        let titles: Vec<&str> = p.corpus.iter().map(|e| e.title.as_str()).collect();
         assert_eq!(titles, vec!["git status", "ls"]);
     }
 

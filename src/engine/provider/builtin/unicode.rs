@@ -56,9 +56,9 @@ impl Default for UnicodeConfig {
 /// like any other launch, so what actually gets pasted drifts to the top of
 /// later queries.
 ///
-/// The rows are built once in [`Provider::init`]. Enumerating every named
-/// character takes long enough to belong in `init()` rather than in
-/// [`Provider::query`].
+/// The rows are built once in [`Provider::init`] and cached as
+/// `Arc<[Entry]>`. Enumerating every named character takes long enough to
+/// belong in `init()` rather than in [`Provider::query`].
 pub struct UnicodeProvider {
     config: UnicodeConfig,
     /// `None` until `init()` builds it, so a provider that was never
@@ -99,86 +99,49 @@ impl Provider for UnicodeProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         let Some(characters) = &self.characters else {
-            return vec![];
+            return Arc::from([]);
         };
         if ctx.query.is_empty() {
-            return vec![placeholder()];
+            return Arc::from([placeholder()]);
         }
-        // A query that names a code point answers with that character and
-        // nothing else: `:4e00` is one character, not a search for names that
-        // happen to start with those digits. It is the one piece of matching
-        // the provider does itself, because the engine's matcher would read
-        // `u+1f600` as a typo rather than as the character it names.
         if let Some(hits) = characters.code_point_query(ctx.query) {
-            return hits;
+            return Arc::from(hits);
         }
-        characters.rows.to_vec()
+        Arc::clone(&characters.rows)
     }
 }
 
-/// The characters the provider knows: one row each for the engine to rank,
-/// and a way to look a character up by code point.
 struct Characters {
-    rows: Vec<Entry>,
+    rows: Arc<[Entry]>,
     /// Code point to the rows holding it. Emoji are indexed first, so a
     /// sequence claims the code points it is built from and `:2603` answers
     /// with ☃️ rather than with a bare ☃ as well.
     by_code_point: HashMap<u32, Vec<u32>>,
-    /// Code points an emoji has already claimed.
+}
+
+/// Accumulates rows and their code-point index while [`Characters::build`]
+/// walks the Unicode tables.
+///
+/// `covered` lives only for the duration of that walk: the emoji pass claims
+/// a code point, and the character pass then leaves it out. Splitting the
+/// builder from the finished [`Characters`] keeps the coverage set out of the
+/// cached value, and lets [`add`](Self::add) borrow the maps mutably without
+/// threading them through every call.
+struct CharactersBuilder {
+    rows: Vec<Entry>,
+    by_code_point: HashMap<u32, Vec<u32>>,
     covered: HashSet<u32>,
 }
 
-impl Characters {
-    fn build(config: UnicodeConfig) -> Self {
-        let mut characters = Self {
+impl CharactersBuilder {
+    fn new() -> Self {
+        Self {
             rows: Vec::new(),
             by_code_point: HashMap::new(),
             covered: HashSet::new(),
-        };
-
-        for emoji in emojis::iter() {
-            let Some(ch) = emoji.as_str().chars().next() else {
-                continue;
-            };
-            // An emoji is named by CLDR (`snowman`) at least as often as by
-            // Unicode (`SNOWMAN WITH SNOW`), and the short name is the one a
-            // person searching for it would recognise.
-            let cldr = emoji.name();
-            let name = if cldr.is_empty() {
-                match unicode_names2::name(ch) {
-                    Some(name) => name.to_string(),
-                    None => continue,
-                }
-            } else {
-                cldr.to_string()
-            };
-            let shortcodes: Vec<String> = emoji.shortcodes().map(str::to_string).collect();
-            characters.add(config, ch, name, Some(emoji.as_str()), &shortcodes);
         }
-
-        for code in 0..=char::MAX as u32 {
-            let Some(ch) = char::from_u32(code) else {
-                continue;
-            };
-            if characters.covered.contains(&code) {
-                continue;
-            }
-            let Some(name) = unicode_names2::name(ch) else {
-                continue;
-            };
-            let name = name.to_string();
-            // The CJK and Hangul names are formulas rather than words —
-            // `CJK UNIFIED IDEOGRAPH-4E00` — and there are over a hundred
-            // thousand of them. Asking for one by code point still works.
-            if name.starts_with("CJK") || name.starts_with("HANGUL") {
-                continue;
-            }
-            characters.add(config, ch, name, None, &[]);
-        }
-
-        characters
     }
 
     /// Record one character: a row for the engine to rank, and every code
@@ -227,14 +190,6 @@ impl Characters {
             self.covered.insert(c as u32);
         }
 
-        // `Tab` walks the other way from a code point row, which offers the
-        // name: this row offers the number, so `:snowman` and `:u+2603` are one
-        // keystroke apart. The prefix is left to the engine, so a `prefixes`
-        // override is followed. Spelled `u+` because the bare form only reads
-        // as a code point from `100` up, which would leave `§` and `A`
-        // unreachable. For a sequence this is its first code point, and every
-        // sequence built on it answers that number, so `Tab` on 🇩🇪 lists the
-        // flags.
         let code_point = format!("u+{:x}", ch as u32);
 
         self.rows.push(
@@ -245,6 +200,61 @@ impl Characters {
                 .set_query_keeping_prefix(code_point)
                 .match_fields(fields),
         );
+    }
+
+    fn build(self) -> Characters {
+        Characters {
+            rows: Arc::from(self.rows),
+            by_code_point: self.by_code_point,
+        }
+    }
+}
+
+impl Characters {
+    fn build(config: UnicodeConfig) -> Self {
+        let mut builder = CharactersBuilder::new();
+
+        for emoji in emojis::iter() {
+            let Some(ch) = emoji.as_str().chars().next() else {
+                continue;
+            };
+            // An emoji is named by CLDR (`snowman`) at least as often as by
+            // Unicode (`SNOWMAN WITH SNOW`), and the short name is the one a
+            // person searching for it would recognise.
+            let cldr = emoji.name();
+            let name = if cldr.is_empty() {
+                match unicode_names2::name(ch) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                }
+            } else {
+                cldr.to_string()
+            };
+            let shortcodes: Vec<String> = emoji.shortcodes().map(str::to_string).collect();
+            builder.add(config, ch, name, Some(emoji.as_str()), &shortcodes);
+        }
+
+        for code in 0..=char::MAX as u32 {
+            let Some(ch) = char::from_u32(code) else {
+                continue;
+            };
+            if builder.covered.contains(&code) {
+                continue;
+            }
+            let Some(name) = unicode_names2::name(ch) else {
+                continue;
+            };
+            let name = name.to_string();
+            // The CJK and Hangul names are formulas rather than words —
+            // `CJK UNIFIED IDEOGRAPH-4E00` — and there are over a hundred
+            // thousand of them. Asking for one by code point still works.
+            if name.starts_with("CJK") || name.starts_with("HANGUL") {
+                continue;
+            }
+            builder.add(config, ch, name, None, &[]);
+        }
+
+        builder.build()
     }
 
     /// The rows for a query that names a code point outright: `2603`,
@@ -273,8 +283,8 @@ impl Characters {
             rows.iter()
                 .map(|row| {
                     let row = &self.rows[*row as usize];
-                    let (id, display) = (&row.entry.id, &row.entry.title);
-                    let name = row.entry.subtitle.as_deref().unwrap_or_default();
+                    let (id, display) = (&row.id, &row.title);
+                    let name = row.subtitle.as_deref().unwrap_or_default();
                     entry(id.clone(), display.clone())
                         .subtitle(name)
                         .clipboard(number.clone())
@@ -365,7 +375,6 @@ mod tests {
     use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
-    /// Enumerating Unicode takes a moment, so it is done once for the module.
     fn characters() -> &'static Arc<Characters> {
         static CHARACTERS: std::sync::OnceLock<Arc<Characters>> = std::sync::OnceLock::new();
         CHARACTERS.get_or_init(|| Arc::new(Characters::build(UnicodeConfig::default())))
@@ -379,7 +388,7 @@ mod tests {
         }
     }
 
-    fn query(provider: &mut UnicodeProvider, text: &str) -> Vec<Entry> {
+    fn query(provider: &mut UnicodeProvider, text: &str) -> Arc<[Entry]> {
         provider.query(QueryContext {
             prefix: Some(PREFIX),
             query: text,
@@ -396,7 +405,7 @@ mod tests {
     }
 
     fn titles(rows: &[Entry]) -> Vec<&str> {
-        rows.iter().map(|row| row.entry.title.as_str()).collect()
+        rows.iter().map(|row| row.title.as_str()).collect()
     }
 
     fn field_texts(row: &Entry) -> Vec<&str> {
@@ -410,7 +419,7 @@ mod tests {
     /// engine puts the active one back when the suggestion is applied, which is
     /// what makes a `prefixes` override work.
     fn suggestion(row: &Entry) -> &str {
-        let suggestion = row.entry.set_query.as_ref().expect("a suggestion");
+        let suggestion = row.set_query.as_ref().expect("a suggestion");
         assert!(
             suggestion.keep_prefix,
             "{:?} must not carry its own prefix",
@@ -431,9 +440,9 @@ mod tests {
     fn an_empty_query_offers_a_placeholder() {
         let rows = query(&mut provider(), "");
         assert_eq!(titles(&rows), vec!["Search unicode characters"]);
-        assert_eq!(rows[0].entry.id, PLACEHOLDER_ID);
+        assert_eq!(rows[0].id, PLACEHOLDER_ID);
         assert_eq!(
-            rows[0].entry.subtitle.as_deref(),
+            rows[0].subtitle.as_deref(),
             Some("a name, a shortcode, or a code point")
         );
     }
@@ -530,14 +539,11 @@ mod tests {
     #[test]
     fn selecting_a_code_point_row_copies_the_number() {
         let rows = query(&mut provider(), "2603");
-        let Action::Clipboard { value } = &rows[0].entry.action else {
-            panic!(
-                "expected a clipboard action, got {:?}",
-                rows[0].entry.action
-            );
+        let Action::Clipboard { value } = &rows[0].action else {
+            panic!("expected a clipboard action, got {:?}", rows[0].action);
         };
         assert_eq!(value, "2603");
-        assert_eq!(rows[0].entry.title, "☃️", "the character is still shown");
+        assert_eq!(rows[0].title, "☃️", "the character is still shown");
         assert_eq!(suggestion(&rows[0]), "snowman");
     }
 
@@ -546,8 +552,8 @@ mod tests {
     #[test]
     fn selecting_a_name_row_copies_the_character_and_suggests_the_number() {
         let row = row_for(characters(), '→');
-        let Action::Clipboard { value } = &row.entry.action else {
-            panic!("expected a clipboard action, got {:?}", row.entry.action);
+        let Action::Clipboard { value } = &row.action else {
+            panic!("expected a clipboard action, got {:?}", row.action);
         };
         assert_eq!(value, "→");
         assert_eq!(suggestion(row), "u+2192");
@@ -574,10 +580,10 @@ mod tests {
         // The snowman's id spells out the whole text it pastes, variation
         // selector and all, so history keeps one key per pasted character.
         let row = row_for(characters(), '☃');
-        assert_eq!(row.entry.id, "unicode-2603-fe0f");
+        assert_eq!(row.id, "unicode-2603-fe0f");
         assert_eq!(row.history_key.as_deref(), Some("unicode-2603-fe0f"));
         let row = row_for(characters(), '→');
-        assert_eq!(row.entry.id, "unicode-2192");
+        assert_eq!(row.id, "unicode-2192");
         assert_eq!(row.history_key.as_deref(), Some("unicode-2192"));
     }
 
@@ -586,7 +592,7 @@ mod tests {
     #[test]
     fn sequences_sharing_a_code_point_have_different_ids() {
         let rows = query(&mut provider(), "1f1e9");
-        let ids: HashSet<&str> = rows.iter().map(|row| row.entry.id.as_str()).collect();
+        let ids: HashSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(ids.len(), rows.len(), "no two flags share an id");
         for id in ["unicode-1f1e9-1f1ea", "unicode-1f1e9-1f1ff"] {
             assert!(ids.contains(id), "{id} in {ids:?}");
@@ -603,7 +609,7 @@ mod tests {
         let rows = characters()
             .rows
             .iter()
-            .filter(|row| row.entry.title == "☃")
+            .filter(|row| row.title == "☃")
             .count();
         assert_eq!(rows, 0, "the bare character is not a row of its own");
     }
@@ -611,10 +617,8 @@ mod tests {
     #[test]
     fn a_sequence_emoji_is_pasted_whole() {
         let rows = query(&mut provider(), "flag_de");
-        let flag = rows
-            .iter()
-            .find(|row| row.entry.id == "unicode-1f1e9-1f1ea");
-        let Action::Clipboard { value } = &flag.expect("the German flag").entry.action else {
+        let flag = rows.iter().find(|row| row.id == "unicode-1f1e9-1f1ea");
+        let Action::Clipboard { value } = &flag.expect("the German flag").action else {
             panic!("expected a clipboard action");
         };
         assert_eq!(value, "🇩🇪");
@@ -651,11 +655,10 @@ mod tests {
         assert!(
             !rows
                 .iter()
-                .any(|row| row.entry.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00"))
+                .any(|row| row.subtitle.as_deref() == Some("CJK UNIFIED IDEOGRAPH-4E00"))
         );
         assert!(!rows.iter().any(|row| {
-            row.entry
-                .subtitle
+            row.subtitle
                 .as_deref()
                 .unwrap_or_default()
                 .starts_with("HANGUL")
@@ -675,8 +678,9 @@ mod tests {
     #[test]
     fn no_character_is_indexed_twice() {
         let mut seen = HashSet::new();
-        for row in &characters().rows {
-            assert!(seen.insert(row.entry.id.clone()), "twice: {}", row.entry.id);
+        let rows = characters().rows.clone();
+        for row in rows.as_ref().iter() {
+            assert!(seen.insert(row.id.clone()), "twice: {}", row.id);
         }
     }
 

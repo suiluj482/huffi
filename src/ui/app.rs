@@ -18,10 +18,11 @@ use gtk4::{
     Overlay, PropagationPhase, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use huffi::engine::Engine;
-use huffi::engine::provider::{EntryMeta, Icon, QuerySuggestion, is_detail_key};
-use huffi::engine::provider::{PreprocessedQuery, ProviderMeta, matches_prefix, matches_query};
-use huffi::engine::scoring::Scored;
+use huffi::engine::provider::{
+    Icon, PreprocessedQuery, ProviderMeta, QuerySuggestion, is_detail_key, matches_prefix,
+    matches_query,
+};
+use huffi::engine::{Engine, QueryHit};
 
 use crate::ui::control::{self, ControlRequest};
 use crate::ui::{tasks, theme};
@@ -95,23 +96,24 @@ struct Row {
     action_set_query: Option<QuerySuggestion>,
 }
 
-impl From<Scored<EntryMeta>> for Row {
-    fn from(scored: Scored<EntryMeta>) -> Self {
-        let entry = scored.entry;
+impl Row {
+    /// Copy the parts of one resolved hit that the row template renders.
+    fn from_hit(hit: QueryHit<'_>) -> Self {
+        let entry = hit.entry();
         let action_set_query = entry.action.query_suggestion().cloned();
         Self {
-            entry_id: entry.id,
-            provider_id: entry.provider_id,
-            history_key: scored.history_key,
-            base_score: scored.base_score,
-            history_score: scored.history_score,
-            title: entry.title,
-            subtitle: entry.subtitle,
-            comment: entry.comment,
-            details: entry.details,
-            variant: entry.variant,
-            icon: entry.icon,
-            set_query: entry.set_query,
+            entry_id: entry.id.clone(),
+            provider_id: Some(hit.provider_id().to_string()),
+            history_key: entry.history_key.clone(),
+            base_score: hit.base_score(),
+            history_score: hit.history_score(),
+            title: entry.title.clone(),
+            subtitle: entry.subtitle.clone(),
+            comment: entry.comment.clone(),
+            details: entry.details.clone(),
+            variant: entry.variant.clone(),
+            icon: entry.icon.clone(),
+            set_query: entry.set_query.clone(),
             action_set_query,
         }
     }
@@ -842,14 +844,12 @@ impl Launcher {
         page_size: usize,
     ) -> (PreprocessedQuery, Vec<Row>, usize) {
         let reply = engine.query(query);
-        let total = reply.scored.len();
+        let total = reply.len();
         let entries = reply
-            .scored
             .iter()
             .skip(offset)
             .take(page_size)
-            .cloned()
-            .map(Row::from)
+            .map(Row::from_hit)
             .collect();
         (reply.pre.clone(), entries, total)
     }

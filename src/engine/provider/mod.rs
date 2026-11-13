@@ -26,11 +26,12 @@ pub mod util;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use crate::engine::scoring::Rank;
 use crate::engine::scoring::history::{KnownHistory, QueryHistory};
-use crate::engine::scoring::{Scoreable, Scored};
 
-pub use collection::{PreprocessedQuery, matches_prefix, matches_query};
+pub use collection::{PreprocessedQuery, QueryGroup, matches_prefix, matches_query};
 pub use util::{
     Action, EntryBuilder, ExecMode, ProviderMetaBuilder, entry, is_detail_key, parse_extra_config,
 };
@@ -119,13 +120,17 @@ impl QuerySuggestion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryMeta {
+/// One launchable result: everything a provider declares about an entry.
+///
+/// The provider identity is not stored here: every entry in a
+/// [`QueryGroup`](collection::QueryGroup) comes from the same provider, so the
+/// group carries it once. `rank` and the history key are the provider's
+/// declared inputs to scoring; the engine reads them on every keystroke rather
+/// than mutating the entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
     /// Id unique within the provider; selection looks results up by it.
     pub id: String,
-    /// The provider that produced this entry, stamped by
-    /// [`ProviderCollection`] when the entry is queried.
-    pub provider_id: Option<String>,
     /// Primary label rendered in the entry list.
     pub title: String,
     /// Secondary label shown below the title.
@@ -159,10 +164,14 @@ pub struct EntryMeta {
     pub set_query: Option<QuerySuggestion>,
     /// What happens when the entry is selected.
     pub action: Action,
+    /// How the entry earns its score: a provider-declared value, or the
+    /// fields the matcher fuzzy-matches against.
+    pub rank: Rank,
+    /// Key this entry's usage history is recorded under. Entries without one
+    /// appear in results but neither contribute to nor are influenced by
+    /// history ranking.
+    pub history_key: Option<String>,
 }
-
-pub type Entry = Scoreable<EntryMeta>;
-pub type ScoredEntry = Scored<EntryMeta>;
 
 /// Static metadata describing a provider: its stable `id`, display name,
 /// the string prefixes that trigger it, whether it is active, and whether
@@ -411,7 +420,7 @@ pub struct HandleContext<'a> {
 /// # Example
 ///
 /// ```ignore
-/// struct MyProvider { entries: Vec<Entry> }
+/// struct MyProvider { entries: Arc<[Entry]> }
 ///
 /// impl Provider for MyProvider {
 ///     fn meta(&self) -> ProviderMeta {
@@ -420,17 +429,23 @@ pub struct HandleContext<'a> {
 ///     fn init(&mut self, _ctx: InitContext) -> ProviderResult {
 ///         ProviderResult::Ok /* populate self.entries here */
 ///     }
-///     fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-///         self.entries.clone()
+///     fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+///         Arc::clone(&self.entries)
 ///     }
 /// }
 /// ```
+///
+/// The result is a shared slice rather than an owned `Vec`: a provider that
+/// answers every keystroke from an index it built once pays one allocation
+/// up front instead of one deep clone per query. Callers still see ordinary
+/// `Entry` values — [`QueryGroup`] owns the slice, and scoring
+/// addresses its rows by position.
 ///
 /// See [`CalculatorProvider`] for a real provider with a prefix trigger.
 pub trait Provider: Send {
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]>;
     fn handle(&mut self, _ctx: HandleContext) {}
 }
 
@@ -490,19 +505,19 @@ mod tests {
 
     #[test]
     fn entry_title_is_correct() {
-        let entry = &sample_entries()[0].entry;
+        let entry = &sample_entries()[0];
         assert_eq!(entry.title, "Firefox");
     }
 
     #[test]
     fn entry_comment_is_correct() {
-        let entry = &sample_entries()[0].entry;
+        let entry = &sample_entries()[0];
         assert_eq!(entry.comment.as_deref(), Some("Browse the World Wide Web"));
     }
 
     #[test]
     fn entry_no_comment() {
-        let entry = &sample_entries()[2].entry;
+        let entry = &sample_entries()[2];
         assert!(entry.comment.is_none());
     }
 

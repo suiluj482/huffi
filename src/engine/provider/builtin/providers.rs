@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
 };
@@ -55,36 +57,37 @@ impl Provider for ProvidersProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.providers
-            .iter()
-            .filter(|meta| meta.enabled)
-            .map(|meta| {
-                let target = format!("{}{} ", self.target_prefix, meta.id);
-                let mut fields = vec![MatchField {
-                    text: meta.name.clone(),
-                    weight: 1.0,
-                }];
-                if meta.name != meta.id {
-                    fields.push(MatchField {
-                        text: meta.id.clone(),
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::from_iter(
+            self.providers
+                .iter()
+                .filter(|meta| meta.enabled)
+                .map(|meta| {
+                    let target = format!("{}{} ", self.target_prefix, meta.id);
+                    let mut fields = vec![MatchField {
+                        text: meta.name.clone(),
                         weight: 1.0,
-                    });
-                }
-                for prefix in &meta.prefixes {
-                    fields.push(MatchField {
-                        text: prefix.clone(),
-                        weight: 1.0,
-                    });
-                }
-                entry(format!("provider-{}", meta.id), meta.name.clone())
-                    .subtitle(Self::trigger(meta))
-                    .history_key(format!("provider-{}", meta.id))
-                    .set_query(target.clone())
-                    .action_set_query(target)
-                    .match_fields(fields)
-            })
-            .collect()
+                    }];
+                    if meta.name != meta.id {
+                        fields.push(MatchField {
+                            text: meta.id.clone(),
+                            weight: 1.0,
+                        });
+                    }
+                    for prefix in &meta.prefixes {
+                        fields.push(MatchField {
+                            text: prefix.clone(),
+                            weight: 1.0,
+                        });
+                    }
+                    entry(format!("provider-{}", meta.id), meta.name.clone())
+                        .subtitle(Self::trigger(meta))
+                        .history_key(format!("provider-{}", meta.id))
+                        .set_query(target.clone())
+                        .action_set_query(target)
+                        .match_fields(fields)
+                }),
+        )
     }
 }
 
@@ -124,7 +127,7 @@ mod tests {
         p
     }
 
-    fn query(p: &mut ProvidersProvider) -> Vec<Entry> {
+    fn query(p: &mut ProvidersProvider) -> Arc<[Entry]> {
         p.query(QueryContext {
             prefix: Some("\\"),
             query: "",
@@ -138,7 +141,7 @@ mod tests {
     #[test]
     fn lists_only_enabled_providers() {
         let entries = query(&mut provider());
-        let ids: Vec<_> = entries.iter().map(|e| e.entry.id.as_str()).collect();
+        let ids: Vec<_> = entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["provider-desktop", "provider-calculator"]);
     }
 
@@ -148,13 +151,13 @@ mod tests {
         let entries = query(&mut p);
         let calc = entries
             .iter()
-            .find(|e| e.entry.id == "provider-calculator")
+            .find(|e| e.id == "provider-calculator")
             .expect("calculator entry");
         assert_eq!(
-            calc.entry.set_query.as_ref().map(|s| s.query.as_str()),
+            calc.set_query.as_ref().map(|s| s.query.as_str()),
             Some("\\calculator ")
         );
-        match &calc.entry.action {
+        match &calc.action {
             Action::SetQuery { suggestion } => {
                 assert_eq!(suggestion.query, "\\calculator ");
                 assert!(!suggestion.keep_prefix);
@@ -169,13 +172,10 @@ mod tests {
         let entries = query(&mut p);
         let calc = entries
             .iter()
-            .find(|e| e.entry.id == "provider-calculator")
+            .find(|e| e.id == "provider-calculator")
             .unwrap();
-        assert_eq!(calc.entry.subtitle.as_deref(), Some("="));
-        let desktop = entries
-            .iter()
-            .find(|e| e.entry.id == "provider-desktop")
-            .unwrap();
-        assert_eq!(desktop.entry.subtitle.as_deref(), Some("always active"));
+        assert_eq!(calc.subtitle.as_deref(), Some("="));
+        let desktop = entries.iter().find(|e| e.id == "provider-desktop").unwrap();
+        assert_eq!(desktop.subtitle.as_deref(), Some("always active"));
     }
 }

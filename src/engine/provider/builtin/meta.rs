@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::engine::provider::{
@@ -59,7 +60,7 @@ impl Provider for MetaProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
         let uptime = format_uptime(self.uptime());
         let socket = self.control_socket.to_string_lossy().into_owned();
         let data = self.data_dir.to_string_lossy().into_owned();
@@ -68,7 +69,7 @@ impl Provider for MetaProvider {
         let dry_run = if self.dry_run { "on" } else { "off" };
         let started_at = started_at_string(self.started_at).unwrap_or_default();
 
-        let mut entries = vec![
+        let fixed = [
             meta_entry("meta-uptime", "Uptime", uptime),
             meta_entry("meta-socket", "Control socket", socket),
             meta_entry("meta-data", "Data path", data.clone()),
@@ -77,34 +78,30 @@ impl Provider for MetaProvider {
             meta_entry("meta-dry-run", "Dry-run", dry_run.to_string()),
             meta_entry("meta-started-at", "Started at", started_at),
         ];
-
-        if let Some(rss) = proc_status_field("VmRSS:") {
-            entries.push(meta_entry(
-                "meta-memory",
-                "Memory (RSS)",
-                format!("{rss} KiB"),
-            ));
-        }
-        if let Some(threads) = proc_status_field("Threads:") {
-            entries.push(meta_entry("meta-threads", "Threads", threads.to_string()));
-        }
-
-        entries.push(
+        let memory = proc_status_field("VmRSS:")
+            .map(|rss| meta_entry("meta-memory", "Memory (RSS)", format!("{rss} KiB")));
+        let threads = proc_status_field("Threads:")
+            .map(|threads| meta_entry("meta-threads", "Threads", threads.to_string()));
+        let actions = [
             entry("meta-kill", "Quit huffi")
                 .subtitle(format!("terminate pid {pid}"))
                 .exec(vec!["kill".into(), pid])
-                .history_key("meta-kill")
+                .track_history()
                 .match_field("Quit huffi"),
-        );
-        entries.push(
             entry("meta-open-data", "Open data folder")
                 .subtitle(data.clone())
                 .exec(vec!["xdg-open".into(), data])
-                .history_key("meta-open-data")
+                .track_history()
                 .match_field("Open data folder"),
-        );
+        ];
 
-        entries
+        Arc::from_iter(
+            fixed
+                .into_iter()
+                .chain(memory)
+                .chain(threads)
+                .chain(actions),
+        )
     }
 }
 
@@ -112,14 +109,11 @@ impl Provider for MetaProvider {
 /// copies that value to the clipboard when selected. Only the label is
 /// fuzzy-matched, so `@uptime` finds the entry but arbitrary path fragments
 /// do not.
-///
-/// The entry id doubles as the history key: every id already carries the
-/// `meta-` provider prefix, so it is namespaced by construction.
 fn meta_entry(id: &str, label: &str, value: String) -> Entry {
     entry(id, label)
         .subtitle(value.clone())
         .clipboard(value)
-        .history_key(id)
+        .track_history()
         .match_field(label)
 }
 
@@ -253,14 +247,14 @@ mod tests {
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 11);
-        assert!(entries.iter().any(|e| e.entry.id == "meta-uptime"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-socket"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-dry-run"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-started-at"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-memory"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-threads"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-kill"));
-        assert!(entries.iter().any(|e| e.entry.id == "meta-open-data"));
+        assert!(entries.iter().any(|e| e.id == "meta-uptime"));
+        assert!(entries.iter().any(|e| e.id == "meta-socket"));
+        assert!(entries.iter().any(|e| e.id == "meta-dry-run"));
+        assert!(entries.iter().any(|e| e.id == "meta-started-at"));
+        assert!(entries.iter().any(|e| e.id == "meta-memory"));
+        assert!(entries.iter().any(|e| e.id == "meta-threads"));
+        assert!(entries.iter().any(|e| e.id == "meta-kill"));
+        assert!(entries.iter().any(|e| e.id == "meta-open-data"));
     }
 
     #[test]
@@ -274,17 +268,17 @@ mod tests {
             known_history: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
-        for e in &entries {
+        for e in entries.iter() {
             assert!(
-                e.entry.id.starts_with("meta-"),
+                e.id.starts_with("meta-"),
                 "id {} must carry the provider prefix",
-                e.entry.id
+                e.id
             );
             assert_eq!(
                 e.history_key.as_deref(),
-                Some(e.entry.id.as_str()),
+                Some(e.id.as_str()),
                 "{} must key history by its namespaced id",
-                e.entry.id
+                e.id
             );
         }
     }
@@ -302,22 +296,14 @@ mod tests {
         });
         let memory = entries
             .iter()
-            .find(|e| e.entry.id == "meta-memory")
+            .find(|e| e.id == "meta-memory")
             .expect("meta-memory entry");
-        assert!(memory.entry.subtitle.as_deref().unwrap().ends_with("KiB"));
+        assert!(memory.subtitle.as_deref().unwrap().ends_with("KiB"));
         let threads = entries
             .iter()
-            .find(|e| e.entry.id == "meta-threads")
+            .find(|e| e.id == "meta-threads")
             .expect("meta-threads entry");
-        assert!(
-            threads
-                .entry
-                .subtitle
-                .as_deref()
-                .unwrap()
-                .parse::<u64>()
-                .is_ok()
-        );
+        assert!(threads.subtitle.as_deref().unwrap().parse::<u64>().is_ok());
     }
 
     #[test]
@@ -341,10 +327,10 @@ mod tests {
         });
         let kill = entries
             .iter()
-            .find(|e| e.entry.id == "meta-kill")
+            .find(|e| e.id == "meta-kill")
             .expect("meta-kill entry");
-        assert_eq!(kill.entry.title, "Quit huffi");
-        match &kill.entry.action {
+        assert_eq!(kill.title, "Quit huffi");
+        match &kill.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(*mode, crate::engine::provider::ExecMode::Direct);
                 assert_eq!(args[0], "kill");
@@ -367,11 +353,11 @@ mod tests {
         });
         let open = entries
             .iter()
-            .find(|e| e.entry.id == "meta-open-data")
+            .find(|e| e.id == "meta-open-data")
             .expect("meta-open-data entry");
-        assert_eq!(open.entry.title, "Open data folder");
-        assert_eq!(open.entry.subtitle.as_deref(), Some("/tmp/data"));
-        match &open.entry.action {
+        assert_eq!(open.title, "Open data folder");
+        assert_eq!(open.subtitle.as_deref(), Some("/tmp/data"));
+        match &open.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(*mode, crate::engine::provider::ExecMode::Direct);
                 assert_eq!(args, &vec!["xdg-open".to_string(), "/tmp/data".to_string()]);
@@ -393,11 +379,11 @@ mod tests {
         });
         let socket = entries
             .iter()
-            .find(|e| e.entry.id == "meta-socket")
+            .find(|e| e.id == "meta-socket")
             .expect("meta-socket entry");
-        assert_eq!(socket.entry.title, "Control socket");
-        assert_eq!(socket.entry.subtitle.as_deref(), Some("/tmp/x.sock"));
-        match &socket.entry.action {
+        assert_eq!(socket.title, "Control socket");
+        assert_eq!(socket.subtitle.as_deref(), Some("/tmp/x.sock"));
+        match &socket.action {
             crate::engine::provider::Action::Clipboard { value } => {
                 assert_eq!(value, "/tmp/x.sock");
             }
@@ -425,10 +411,10 @@ mod tests {
         });
         let dry = entries
             .iter()
-            .find(|e| e.entry.id == "meta-dry-run")
+            .find(|e| e.id == "meta-dry-run")
             .expect("meta-dry-run entry");
-        assert_eq!(dry.entry.title, "Dry-run");
-        assert_eq!(dry.entry.subtitle.as_deref(), Some("on"));
+        assert_eq!(dry.title, "Dry-run");
+        assert_eq!(dry.subtitle.as_deref(), Some("on"));
     }
 
     #[test]
@@ -451,7 +437,7 @@ mod tests {
         });
         let socket = entries
             .iter()
-            .find(|e| e.entry.id == "meta-socket")
+            .find(|e| e.id == "meta-socket")
             .expect("meta-socket entry");
         match &socket.rank {
             crate::engine::scoring::Rank::MatchFields(fields) => {

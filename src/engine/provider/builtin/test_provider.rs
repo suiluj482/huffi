@@ -1,11 +1,12 @@
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext,
 };
+use std::sync::Arc;
 
 pub struct TestProvider {
     id: String,
     prefixes: Vec<&'static str>,
-    entries: Vec<Entry>,
+    entries: Arc<[Entry]>,
 }
 
 impl TestProvider {
@@ -13,7 +14,7 @@ impl TestProvider {
         Self {
             id: id.into(),
             prefixes: Vec::new(),
-            entries,
+            entries: Arc::from(entries),
         }
     }
 
@@ -21,7 +22,7 @@ impl TestProvider {
         Self {
             id: id.into(),
             prefixes,
-            entries,
+            entries: Arc::from(entries),
         }
     }
 }
@@ -37,7 +38,7 @@ impl Provider for TestProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.entries.clone()
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::clone(&self.entries)
     }
 }

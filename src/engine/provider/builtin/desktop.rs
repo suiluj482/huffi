@@ -80,8 +80,8 @@ impl Provider for DesktopEntryProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.entries.to_vec()
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::clone(&self.entries)
     }
 }
 
@@ -190,7 +190,7 @@ mod tests {
             "desktop-path",
         )
         .expect("entry");
-        match entry.entry.action {
+        match entry.action {
             Action::Exec {
                 mode,
                 cwd: Some(ref cwd),
@@ -212,7 +212,7 @@ mod tests {
         .expect("entry");
         assert_eq!(
             entry.history_key.as_deref(),
-            Some(format!("{HISTORY_PREFIX}-{}", entry.entry.id).as_str())
+            Some(format!("{HISTORY_PREFIX}-{}", entry.id).as_str())
         );
     }
 
@@ -223,7 +223,7 @@ mod tests {
             "desktop-no-path",
         )
         .expect("entry");
-        match entry.entry.action {
+        match entry.action {
             Action::Exec { cwd: None, .. } => {}
             other => panic!("expected an exec without cwd, got {other:?}"),
         }
