@@ -172,12 +172,6 @@ if another provider declared the prefix `"=="`, typing `"== 2"` would activate
 *that* prefix; a provider only declaring `"="` would then be called with
 `prefix: None` and the full `"== 2"` query instead.
 
-A prefix-triggered provider typically returns an empty slice when `prefix`
-is `None`, since it has nothing to offer for un-prefixed input. This is
-exactly what [`CalculatorProvider`] does — it returns `Arc::from([])` at the
-top of `query()` when no prefix matched, staying performant and out of the way
-for normal app searching.
-
 Return an `Arc<[Entry]>` rather than an owned `Vec`. A provider that builds its
 entries once in `init()` should cache them in an `Arc<[Entry]>` and answer each
 keystroke with `Arc::clone(&self.entries)`, which is a refcount bump instead of
