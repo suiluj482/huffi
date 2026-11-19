@@ -31,3 +31,10 @@ gtk4-layer-shell = "0.8"
 async-channel = "2"
 include_dir = "0.7"
 ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "hot_path"
+harness = false

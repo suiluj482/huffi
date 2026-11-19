@@ -53,7 +53,7 @@
 //!
 //! **History entries** are rebuilt from the usage history as well as from the
 //! current listing. The store records a use under *every* prefix of the
-//! query, including the empty one, so `ctx.known_history` is an unscoped
+//! query, including the empty one, so `ctx.known_history_keys` is an unscoped
 //! global key list: a path launched or completed at `/etc/ho` is reachable
 //! from `/`, `/etc/`, or any unrelated query alike. On each query the
 //! provider takes every key and keeps the `files-` namespace — keys from
@@ -73,15 +73,16 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mime_guess::Mime;
 use serde::Deserialize;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, Icon, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// Trigger prefix: `/etc` lists `/etc`.
 const PREFIX: &str = "/";
@@ -380,7 +381,7 @@ impl FilesProvider {
     /// reconstructed under an unrelated one; ranking stays on
     /// `ctx.history`. A suffix that does not name a configured opener is
     /// left as path text, so paths containing the symbol keep working. Keys
-    /// from other providers share the same `ctx.known_history` and are
+    /// from other providers share the same `ctx.known_history_keys` and are
     /// skipped here.
     fn history_targets(&self, ctx: &QueryContext) -> Vec<Target> {
         if !self.config.history_entries {
@@ -388,7 +389,7 @@ impl FilesProvider {
         }
         let namespace = format!("{HISTORY_PREFIX}-");
         let symbol = self.suffix_symbol();
-        ctx.known_history
+        ctx.known_history_keys
             .keys()
             .filter_map(|key| {
                 let rest = key.strip_prefix(&namespace)?;
@@ -645,7 +646,7 @@ impl Provider for FilesProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]> {
         // The suffix marks opener variants, never path text: `/etc/ho @code`
         // lists from `/etc/ho ` and suffixes with `code`.
         let (query, suffix) = self.split_suffix(ctx.query);
@@ -671,37 +672,38 @@ impl Provider for FilesProvider {
         // One dedup pass over the targets — current first, so the listing
         // wins over history — then a single construction pass: each
         // surviving target that still exists becomes exactly one entry.
-        let mut entries: Vec<Entry> = dedup_targets(&[&current, &history])
-            .iter()
-            .filter_map(|target| self.path_entry(target))
-            .collect();
+        let entries = dedup_targets(&[&current, &history])
+            .into_iter()
+            .filter_map(|target| self.path_entry(&target));
 
-        if browsing && self.config.show_parent {
+        let parent = if browsing && self.config.show_parent {
             let dir = self.extended_prefix(query);
-            if let Some(parent) = dir.parent() {
-                entries.push(self.parent_entry(
+            dir.parent().map(|parent| {
+                self.parent_entry(
                     parent,
                     format!("{}/", relative_to(&self.config.root, parent)),
-                ));
-            }
-        }
+                )
+            })
+        } else {
+            None
+        };
 
-        entries
+        Arc::from_iter(entries.chain(parent))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::Rank;
     use crate::engine::provider::{Action, ExecMode, Generation};
-    use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::{HistoryStore, KnownHistory, QueryHistory};
 
     fn ctx<'a>(query: &'a str, original: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
-        ctx_with_known(query, original, history, no_known_history())
+        ctx_with_known(query, original, history, no_known_history_keys())
     }
 
-    fn no_known_history() -> &'static KnownHistory {
+    fn no_known_history_keys() -> &'static KnownHistory {
         static EMPTY: KnownHistory = KnownHistory::EMPTY;
         &EMPTY
     }
@@ -710,14 +712,14 @@ mod tests {
         query: &'a str,
         original: &'a str,
         history: &'a QueryHistory,
-        known_history: &'a KnownHistory,
+        known_history_keys: &'a KnownHistory,
     ) -> QueryContext<'a> {
         QueryContext {
             prefix: Some(PREFIX),
             query,
             original,
             history,
-            known_history,
+            known_history_keys,
             generation: Generation::default(),
         }
     }
@@ -726,21 +728,21 @@ mod tests {
         query: &'a str,
         original: &'a str,
         history: &'a QueryHistory,
-        known_history: &'a KnownHistory,
+        known_history_keys: &'a KnownHistory,
     ) -> QueryContext<'a> {
         QueryContext {
             prefix: None,
             query,
             original,
             history,
-            known_history,
+            known_history_keys,
             generation: Generation::default(),
         }
     }
 
     /// A real [`HistoryStore`] with `keys` recorded under the empty query, so
     /// both [`history_for`](HistoryStore::history_for) and
-    /// [`known_history`](HistoryStore::known_history) hand back exactly those
+    /// [`known_history_keys`](HistoryStore::known_history_keys) hand back exactly those
     /// keys. This exercises the store's own key format and global index
     /// rather than a hand-built view.
     fn store_with(keys: impl IntoIterator<Item = String>) -> HistoryStore {
@@ -771,7 +773,7 @@ mod tests {
     }
 
     fn ids(entries: &[Entry]) -> Vec<String> {
-        entries.iter().map(|r| r.entry.id.clone()).collect()
+        entries.iter().map(|r| r.id.clone()).collect()
     }
 
     fn id(path: &Path) -> String {
@@ -848,7 +850,7 @@ mod tests {
         let entries = p.query(ctx("note.txt", "/note.txt", &QueryHistory::EMPTY));
         let file = entries
             .iter()
-            .find(|r| r.entry.title == "note.txt")
+            .find(|r| r.title == "note.txt")
             .expect("the file entry");
         let fields = match &file.rank {
             Rank::MatchFields(fields) => fields,
@@ -922,25 +924,25 @@ mod tests {
         let entries = p.query(ctx("sub/deep.txt", "/sub/deep.txt", &QueryHistory::EMPTY));
         let entry = entries
             .iter()
-            .find(|r| r.entry.id == id(&root.join("sub").join("deep.txt")))
+            .find(|r| r.id == id(&root.join("sub").join("deep.txt")))
             .expect("the typed file path is an entry");
-        match &entry.entry.action {
+        match &entry.action {
             Action::Exec { mode, cwd, .. } => {
                 assert_eq!(*mode, ExecMode::Direct);
                 assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
             }
             other => panic!("expected direct Exec, got {other:?}"),
         }
-        let suggestion = entry.entry.set_query.as_ref().expect("a suggestion");
+        let suggestion = entry.set_query.as_ref().expect("a suggestion");
         assert_eq!(suggestion.resolve(Some(PREFIX)), "/sub/deep.txt");
 
         // A directory typed in full is an entry too, opening a terminal in it.
         let entries = p.query(ctx("sub", "/sub", &QueryHistory::EMPTY));
         let dir_entry = entries
             .iter()
-            .find(|r| r.entry.id == id(&root.join("sub")))
+            .find(|r| r.id == id(&root.join("sub")))
             .expect("the typed directory path is an entry");
-        match &dir_entry.entry.action {
+        match &dir_entry.action {
             Action::Exec { mode, cwd, .. } => {
                 assert_eq!(*mode, ExecMode::Terminal);
                 assert_eq!(cwd.as_deref(), Some(root.join("sub").as_path()));
@@ -964,10 +966,10 @@ mod tests {
         let entries = p.query(ctx("sub/", "/sub/", &QueryHistory::EMPTY));
         let parent = entries
             .iter()
-            .find(|r| r.entry.title == "..")
+            .find(|r| r.title == "..")
             .expect("a parent entry");
-        assert_eq!(parent.entry.set_query.as_ref().unwrap().query, "/");
-        match &parent.entry.action {
+        assert_eq!(parent.set_query.as_ref().unwrap().query, "/");
+        match &parent.action {
             Action::Exec { cwd, mode, .. } => {
                 assert_eq!(cwd.as_deref(), Some(root.as_path()));
                 assert_eq!(*mode, ExecMode::Terminal);
@@ -977,7 +979,7 @@ mod tests {
 
         p.config.show_parent = false;
         let entries = p.query(ctx("sub/", "/sub/", &QueryHistory::EMPTY));
-        assert!(!entries.iter().any(|r| r.entry.title == ".."));
+        assert!(!entries.iter().any(|r| r.title == ".."));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -993,9 +995,9 @@ mod tests {
 
         let file = entries
             .iter()
-            .find(|r| r.entry.title == "note.txt")
+            .find(|r| r.title == "note.txt")
             .expect("the file entry");
-        match &file.entry.action {
+        match &file.action {
             Action::Exec { args, mode, cwd } => {
                 assert_eq!(*mode, ExecMode::Direct);
                 assert_eq!(
@@ -1009,9 +1011,9 @@ mod tests {
 
         let dir = entries
             .iter()
-            .find(|r| r.entry.title == "subdir")
+            .find(|r| r.title == "subdir")
             .expect("the directory entry");
-        match &dir.entry.action {
+        match &dir.action {
             Action::Exec { mode, cwd, .. } => {
                 assert_eq!(*mode, ExecMode::Terminal);
                 assert_eq!(cwd.as_deref(), Some(root.join("subdir").as_path()));
@@ -1028,8 +1030,8 @@ mod tests {
         std::fs::write(root.join("note.txt"), "hi").unwrap();
 
         let mut p = provider_at(&root);
-        for entry in p.query(ctx("", "/", &QueryHistory::EMPTY)) {
-            let key = entry.history_key.expect("a history key");
+        for entry in p.query(ctx("", "/", &QueryHistory::EMPTY)).iter() {
+            let key = entry.history_key.as_ref().expect("a history key");
             assert!(key.starts_with("files-"), "{key} must be namespaced");
             assert!(matches!(entry.rank, Rank::MatchFields(_)));
         }
@@ -1046,16 +1048,13 @@ mod tests {
         let mut p = provider_at(&root);
         let entries = p.query(ctx("", "/", &QueryHistory::EMPTY));
 
-        let dir = entries.iter().find(|r| r.entry.title == "subdir").unwrap();
-        let s = dir.entry.set_query.clone().expect("a suggestion");
+        let dir = entries.iter().find(|r| r.title == "subdir").unwrap();
+        let s = dir.set_query.clone().expect("a suggestion");
         assert!(s.keep_prefix);
         assert_eq!(s.resolve(Some(PREFIX)), "/subdir/");
 
-        let file = entries
-            .iter()
-            .find(|r| r.entry.title == "note.txt")
-            .unwrap();
-        let s = file.entry.set_query.clone().expect("a suggestion");
+        let file = entries.iter().find(|r| r.title == "note.txt").unwrap();
+        let s = file.set_query.clone().expect("a suggestion");
         assert!(s.keep_prefix);
         assert_eq!(s.resolve(Some(PREFIX)), "/note.txt");
 
@@ -1080,7 +1079,12 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         let entry_ids = ids(&entries);
         assert!(entry_ids.contains(&id(&remembered.join("old.txt"))));
         assert!(
@@ -1125,7 +1129,7 @@ mod tests {
             "note",
             "/note",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         assert!(
             ids(&entries).contains(&id(&remembered)),
@@ -1154,7 +1158,7 @@ mod tests {
             "remembered",
             "remembered",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         let entry_ids = ids(&entries);
         assert_eq!(
@@ -1164,7 +1168,7 @@ mod tests {
         );
         assert!(!entry_ids.contains(&id(&current)));
         assert!(!entry_ids.contains(&id(&root)));
-        assert!(entries.iter().all(|entry| entry.entry.title != ".."));
+        assert!(entries.iter().all(|entry| entry.title != ".."));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -1182,8 +1186,13 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
-        assert!(entries.iter().all(|r| r.entry.title != "firefox.desktop"));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
+        assert!(entries.iter().all(|r| r.title != "firefox.desktop"));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -1203,7 +1212,12 @@ mod tests {
 
         let mut p = provider_at(&root);
         p.config.history_entries = false;
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         assert!(!ids(&entries).contains(&id(&remembered.join("old.txt"))));
 
         std::fs::remove_dir_all(&root).ok();
@@ -1293,9 +1307,9 @@ mod tests {
         let suffixed = p.query(ctx("hosts@co", "/hosts@co", &QueryHistory::EMPTY));
         let variant = suffixed
             .iter()
-            .find(|entry| entry.entry.id == variant_id)
+            .find(|entry| entry.id == variant_id)
             .expect("the code variant of hosts");
-        assert_eq!(variant.entry.title, "hosts (code)");
+        assert_eq!(variant.title, "hosts (code)");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -1458,8 +1472,8 @@ mod tests {
         let icon = |opener: &str| {
             entries
                 .iter()
-                .find(|entry| entry.entry.id == format!("{}@{opener}", id(&path)))
-                .and_then(|entry| entry.entry.icon.clone())
+                .find(|entry| entry.id == format!("{}@{opener}", id(&path)))
+                .and_then(|entry| entry.icon.clone())
         };
 
         assert_eq!(icon("themed"), Some(Icon::Name("text-editor".into())));
@@ -1474,8 +1488,8 @@ mod tests {
         assert_eq!(
             entries
                 .iter()
-                .find(|entry| entry.entry.id == id(&path))
-                .and_then(|entry| entry.entry.icon.clone()),
+                .find(|entry| entry.id == id(&path))
+                .and_then(|entry| entry.icon.clone()),
             Some(Icon::Name("text-x-generic".into())),
             "plain entries keep their file-type icon"
         );
@@ -1497,17 +1511,17 @@ mod tests {
         let entries = p.query(ctx("note.txt@edi", "/note.txt@edi", &QueryHistory::EMPTY));
         let entry = entries
             .iter()
-            .find(|entry| entry.entry.id == format!("{}@editor", id(&path)))
+            .find(|entry| entry.id == format!("{}@editor", id(&path)))
             .expect("the editor variant");
 
         assert_eq!(entry.history_key, Some(format!("files-{display}@editor")));
-        let suggestion = entry.entry.set_query.as_ref().expect("a suggestion");
+        let suggestion = entry.set_query.as_ref().expect("a suggestion");
         assert_eq!(
             suggestion.resolve(Some(PREFIX)),
             "/note.txt@editor",
             "tab re-types the suffixed path"
         );
-        match &entry.entry.action {
+        match &entry.action {
             Action::Exec { args, mode, cwd } => {
                 assert_eq!(*mode, ExecMode::Direct);
                 assert_eq!(
@@ -1547,14 +1561,19 @@ mod tests {
         p.config.openers = vec![opener("code", &["code"], &[])];
         let variant_id = format!("{}@code", id(&path));
 
-        let plain_query = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let plain_query = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         assert!(ids(&plain_query).contains(&variant_id));
 
         let suffixed = p.query(ctx_with_known(
             "note.txt@code",
             "/note.txt@code",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         assert_eq!(
             ids(&suffixed)
@@ -1581,8 +1600,13 @@ mod tests {
         let mut p = provider_at(&root);
         p.config.openers = vec![opener("code", &["code"], &[])];
         assert!(
-            ids(&p.query(ctx_with_known("", "/", &history, store.known_history())))
-                .contains(&id(&path))
+            ids(&p.query(ctx_with_known(
+                "",
+                "/",
+                &history,
+                store.known_history_keys()
+            )))
+            .contains(&id(&path))
         );
 
         std::fs::remove_dir_all(&root).ok();

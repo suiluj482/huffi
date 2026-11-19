@@ -235,9 +235,9 @@ fn spawn_instance(
     )))?;
 
     if spawn.dry_run {
+        use huffi::engine::provider::MatchField;
         use huffi::engine::provider::TestProvider;
         use huffi::engine::provider::entry;
-        use huffi::engine::scoring::MatchField;
 
         let test_entries = vec![
             entry("firefox.desktop", "Firefox")

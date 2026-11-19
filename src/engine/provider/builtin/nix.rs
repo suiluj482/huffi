@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// Per-provider tuning knobs. When provided via
 /// `[engine.provider.builtin.nix.extra]`, the fields are parsed from the
@@ -132,11 +132,11 @@ impl Provider for NixRunProvider {
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
         self.entries
             .read()
-            .map(|guard| guard.to_vec())
-            .unwrap_or_default()
+            .map(|guard| Arc::clone(&*guard))
+            .unwrap_or_else(|_| Arc::from([]))
     }
 }
 
@@ -397,7 +397,7 @@ mod tests {
             description: Some("A program that produces a familiar, friendly greeting".into()),
         };
         let e = build_entry(&package, NixConfig::default());
-        match &e.entry.action {
+        match &e.action {
             crate::engine::provider::Action::Exec { args, mode, .. } => {
                 assert_eq!(*mode, crate::engine::provider::ExecMode::Terminal);
                 assert_eq!(
@@ -412,9 +412,9 @@ mod tests {
             _ => panic!("expected Exec action"),
         }
         assert_eq!(e.history_key.as_deref(), Some("nix-hello"));
-        assert_eq!(e.entry.title, "hello");
+        assert_eq!(e.title, "hello");
         assert_eq!(
-            e.entry.subtitle.as_deref(),
+            e.subtitle.as_deref(),
             Some("A program that produces a familiar, friendly greeting")
         );
     }
@@ -429,7 +429,7 @@ mod tests {
         let config = NixConfig::default();
         let e = build_entry(&package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         assert_eq!(fields.len(), 2);
@@ -456,7 +456,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "weight_attr": 2.0 })).unwrap();
         let e = build_entry(&package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         assert!(
@@ -487,7 +487,7 @@ mod tests {
     fn description_is_match_field(package: &PackageInfo, config: NixConfig) -> bool {
         let e = build_entry(package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         fields
@@ -511,7 +511,7 @@ mod tests {
                 query: "",
                 original: "",
                 history: &QueryHistory::EMPTY,
-                known_history: &KnownHistory::EMPTY,
+                known_history_keys: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -523,7 +523,7 @@ mod tests {
                 query: "hello",
                 original: "hello",
                 history: &QueryHistory::EMPTY,
-                known_history: &KnownHistory::EMPTY,
+                known_history_keys: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -546,11 +546,11 @@ mod tests {
             query: "hell",
             original: "!hell",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].entry.id, "nix-hello");
+        assert_eq!(entries[0].id, "nix-hello");
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     #[ignore]
     fn profile_nix_keystroke_cost() {
-        use crate::engine::scoring::QueryGroup;
+        use crate::engine::provider::QueryGroup;
         use crate::engine::scoring::base_scorer::BaseScorer;
         use std::time::Instant;
 
@@ -593,10 +593,11 @@ mod tests {
             let mut scorer = BaseScorer::default();
             let groups = vec![QueryGroup {
                 query: needle.to_string(),
-                entries: cloned,
+                provider_id: "nix".to_string(),
+                entries: cloned.into(),
             }];
             let t = Instant::now();
-            let scored = scorer.base_scoring(groups);
+            let scored = scorer.base_scoring(&groups);
             let score_dur = t.elapsed();
 
             eprintln!(

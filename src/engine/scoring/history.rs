@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::config::ScoringConfig;
 
-use super::{BaseScored, Scored};
+use crate::engine::provider::QueryGroup;
+
+use super::EntryAnnotation;
 
 pub type HistoryKey = String;
 
@@ -148,7 +150,7 @@ impl QueryHistory {
 /// therefore a global index of used keys: no per-query lookup or decay pass is
 /// needed to ask "which keys have been used at all?" This is the view
 /// providers use to reconstruct entries that the current listing does not
-/// contain (see `QueryContext::known_history`).
+/// contain (see `QueryContext::known_history_keys`).
 ///
 /// It deliberately carries no scores and is not prefix-scoped. Ranking still
 /// uses the scoped [`QueryHistory`] from [`HistoryStore::history_for`].
@@ -231,7 +233,7 @@ impl HistoryStore {
 
     /// The unscoped view of every key ever used. Cached, so reading it is
     /// free; it is rebuilt only when history changes.
-    pub fn known_history(&self) -> &KnownHistory {
+    pub fn known_history_keys(&self) -> &KnownHistory {
         &self.known
     }
 
@@ -354,24 +356,34 @@ impl HistoryStore {
         }
     }
 
-    /// Blend base scores with a precomputed [`QueryHistory`].
+    /// Blend usage history into the annotations in place.
     ///
     /// The query-level [`confidence`](QueryHistory::confidence) and
     /// [`peak`](QueryHistory::peak) look over the whole query; the final blend
     /// narrows to the keys **present in the result set** so records left
     /// behind by launch fan-out for entries the query does not surface
     /// cannot inflate confidence or the normalizer.
-    pub fn history_scoring<T>(
+    ///
+    /// `groups` resolves each annotation to the entry that carries its
+    /// history key; the scores it produces replace `combined`.
+    pub fn history_scoring(
         &self,
         history: &QueryHistory,
-        base_scored: Vec<BaseScored<T>>,
-    ) -> Vec<Scored<T>> {
+        groups: &[QueryGroup],
+        annotations: &mut [EntryAnnotation],
+    ) {
         // Only records for entries actually present in the result set may
         // influence confidence and normalization; launch fan-out leaves
         // records for apps that the current query does not surface.
-        let present: HashMap<&str, &QueryHistoryEntry> = base_scored
+        let present: HashMap<&str, &QueryHistoryEntry> = annotations
             .iter()
-            .filter_map(|c| c.history_key.as_deref().and_then(|key| history.get(key)))
+            .filter_map(|a| {
+                let entry = a.resolve(groups);
+                entry
+                    .history_key
+                    .as_deref()
+                    .and_then(|key| history.get(key))
+            })
             .map(|e| (e.key.as_str(), e))
             .collect();
 
@@ -379,39 +391,30 @@ impl HistoryStore {
         let confidence = n / (n + self.confidence_k);
         let max_effective = present.values().map(|e| e.effective).fold(0.0f64, f64::max);
 
-        base_scored
-            .into_iter()
-            .map(|c| {
-                let (history_score, combined) = match &c.history_key {
-                    Some(key) => {
-                        let h = present
-                            .get(key.as_str())
-                            .map(|e| {
-                                if max_effective > 0.0 {
-                                    e.effective / max_effective
-                                } else {
-                                    0.0
-                                }
-                            })
-                            .unwrap_or(0.0);
-                        let combined = confidence * h + (1.0 - confidence) * c.base_score;
-                        (Some(h), combined)
-                    }
-                    None => (None, c.base_score),
-                };
-                Scored {
-                    entry: c.entry,
-                    rank: c.rank,
-                    history_key: c.history_key,
-                    base_score: c.base_score,
-                    history_score,
-                    combined,
+        for a in annotations.iter_mut() {
+            let entry = a.resolve(groups);
+            let combined = match &entry.history_key {
+                Some(key) => {
+                    let h = present
+                        .get(key.as_str())
+                        .map(|e| {
+                            if max_effective > 0.0 {
+                                e.effective / max_effective
+                            } else {
+                                0.0
+                            }
+                        })
+                        .unwrap_or(0.0);
+                    a.history_score = Some(h);
+                    confidence * h + (1.0 - confidence) * a.base_score
                 }
-            })
-            .collect()
+                None => a.base_score,
+            };
+            a.combined = combined;
+        }
     }
 
-    pub fn list_entries(&self, prefix: &str) -> Vec<KeyedHistoryRecord> {
+    pub fn list_prefix_history(&self, prefix: &str) -> Vec<KeyedHistoryRecord> {
         let now = timestamp();
         self.data
             .get(prefix)
@@ -539,21 +542,54 @@ mod tests {
     }
 
     #[test]
-    fn list_entries_returns_data() {
+    fn list_prefix_history_returns_data() {
         let mut history = HistoryStore::default();
         history.record_launch("f", "Firefox");
         history.record_launch("f", "Firefox");
-        let entries = history.list_entries("f");
+        let entries = history.list_prefix_history("f");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].key, "Firefox");
         assert_eq!(entries[0].record.n, 2);
     }
 
     #[test]
-    fn list_entries_empty_for_unknown_prefix() {
+    fn list_prefix_history_empty_for_unknown_prefix() {
         let history = HistoryStore::default();
-        let entries = history.list_entries("zzz");
+        let entries = history.list_prefix_history("zzz");
         assert!(entries.is_empty());
+    }
+
+    /// One group of entries identified by their `id`, plus the un-scored
+    /// annotations `history_scoring` fills in.
+    fn groups_and_base(
+        rows: &[(&str, f64, Option<&str>)],
+    ) -> (Vec<QueryGroup>, Vec<EntryAnnotation>) {
+        let mut entries = Vec::new();
+        let mut annotations = Vec::new();
+        for (index, (id, base_score, key)) in rows.iter().enumerate() {
+            let mut builder = crate::engine::provider::entry(*id, *id);
+            if let Some(key) = key {
+                builder = builder.history_key(*key);
+            }
+            entries.push(builder.score(*base_score as f32));
+            annotations.push(EntryAnnotation::new(0, index, *base_score));
+        }
+        let groups = vec![QueryGroup {
+            query: String::new(),
+            provider_id: "p".to_string(),
+            entries: entries.into(),
+        }];
+        (groups, annotations)
+    }
+
+    fn scored_by_id<'a>(
+        groups: &'a [QueryGroup],
+        annotations: &'a [EntryAnnotation],
+    ) -> Vec<(&'a str, &'a EntryAnnotation)> {
+        annotations
+            .iter()
+            .map(|a| (a.resolve(groups).id.as_str(), a))
+            .collect()
     }
 
     #[test]
@@ -615,15 +651,19 @@ mod tests {
     }
 
     #[test]
-    fn known_history_is_the_unscoped_global_key_list() {
+    fn known_history_keys_is_the_unscoped_global_key_list() {
         let mut history = HistoryStore::default();
-        assert!(history.known_history().is_empty());
+        assert!(history.known_history_keys().is_empty());
 
         history.record_launch("/etc/ho", "files-/etc/hosts");
         history.record_launch("fire", "desktop-firefox");
 
         assert_eq!(
-            history.known_history().keys().cloned().collect::<Vec<_>>(),
+            history
+                .known_history_keys()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
             vec![
                 "desktop-firefox".to_string(),
                 "files-/etc/hosts".to_string()
@@ -637,19 +677,25 @@ mod tests {
     }
 
     #[test]
-    fn known_history_survives_a_scoped_delete() {
+    fn known_history_keys_survives_a_scoped_delete() {
         let mut history = HistoryStore::default();
         history.record_launch("fi", "Firefox");
         history.delete("fi", "Firefox");
 
         assert!(
-            history.known_history().keys().any(|key| key == "Firefox"),
+            history
+                .known_history_keys()
+                .keys()
+                .any(|key| key == "Firefox"),
             "delete currently clears only the exact bucket; global cleanup is deferred to the boost/delete-scope work"
         );
 
         history.delete("", "Firefox");
         assert!(
-            !history.known_history().keys().any(|key| key == "Firefox"),
+            !history
+                .known_history_keys()
+                .keys()
+                .any(|key| key == "Firefox"),
             "deleting the global bucket removes the key from the unscoped view"
         );
     }
@@ -664,22 +710,15 @@ mod tests {
             history.record_launch("fi", "Gimp");
         }
 
-        fn base<'a>(name: &'a str, score: f64, key: Option<&str>) -> BaseScored<&'a str> {
-            BaseScored {
-                entry: name,
-                rank: crate::engine::scoring::Rank::Score(0.0),
-                history_key: key.map(str::to_string),
-                base_score: score,
-            }
-        }
+        let (groups, mut annotations) =
+            groups_and_base(&[("Gimp", 0.7, Some("Gimp")), ("Other", 0.6, None)]);
+        history.history_scoring(&history.history_for("fi"), &groups, &mut annotations);
 
-        let scored = history.history_scoring(
-            &history.history_for("fi"),
-            vec![base("Gimp", 0.7, Some("Gimp")), base("Other", 0.6, None)],
-        );
-
-        let gimp = scored.iter().find(|s| s.entry == "Gimp").unwrap();
-        let other = scored.iter().find(|s| s.entry == "Other").unwrap();
+        let rows = scored_by_id(&groups, &annotations);
+        let gimp = rows[0].1;
+        let other = rows[1].1;
+        assert_eq!(rows[0].0, "Gimp");
+        assert_eq!(rows[1].0, "Other");
 
         assert_eq!(
             gimp.history_score.unwrap(),
@@ -704,27 +743,18 @@ mod tests {
             history.record_launch("fi", "Gimp");
         }
 
-        fn base<'a>(name: &'a str, score: f64, key: Option<&str>) -> BaseScored<&'a str> {
-            BaseScored {
-                entry: name,
-                rank: crate::engine::scoring::Rank::Score(0.0),
-                history_key: key.map(str::to_string),
-                base_score: score,
-            }
-        }
+        let (groups, mut annotations) = groups_and_base(&[
+            ("Firefox", 0.8, Some("Firefox")),
+            ("Gimp", 0.7, Some("Gimp")),
+            ("Other", 0.6, None),
+        ]);
+        history.history_scoring(&history.history_for("fi"), &groups, &mut annotations);
 
-        let scored = history.history_scoring(
-            &history.history_for("fi"),
-            vec![
-                base("Firefox", 0.8, Some("Firefox")),
-                base("Gimp", 0.7, Some("Gimp")),
-                base("Other", 0.6, None),
-            ],
-        );
-
-        let firefox = scored.iter().find(|s| s.entry == "Firefox").unwrap();
-        let gimp = scored.iter().find(|s| s.entry == "Gimp").unwrap();
-        let other = scored.iter().find(|s| s.entry == "Other").unwrap();
+        let rows = scored_by_id(&groups, &annotations);
+        let find = |id: &str| rows.iter().find(|(i, _)| *i == id).unwrap().1;
+        let firefox = find("Firefox");
+        let gimp = find("Gimp");
+        let other = find("Other");
 
         assert_eq!(firefox.history_score.unwrap(), 1.0);
         assert!((gimp.history_score.unwrap() - 0.2).abs() < 1e-6);

@@ -5,13 +5,24 @@ a data source for the launcher — every keystroke, the engine calls every
 registered provider's `query()` method and blends the returned entries into
 a ranked list.
 
+Everything you need is re-exported from `huffi::engine::provider`, whose first
+item is the trait itself. The rest is split by concern, so you only need to
+follow the links the trait gives you:
+
+| Module | Contains |
+|---|---|
+| `provider::entry` | `Entry`, `EntryBuilder`, `Rank`, `MatchField`, `Icon`, `QuerySuggestion` |
+| `provider::action` | `Action`, `ExecMode`, and the code that performs a selection |
+| `provider::collection` | engine-side registry and `QueryGroup` (rarely needed by a provider) |
+| `provider::config` | config overrides applied to registered providers |
+
 ## The trait
 
 ```rust
 pub trait Provider: Send {
     fn meta(&self) -> ProviderMeta;
     fn init(&mut self, ctx: InitContext) -> ProviderResult;
-    fn query(&mut self, ctx: QueryContext) -> Vec<Entry>;
+    fn query(&mut self, ctx: QueryContext) -> Arc<[Entry]>;
     fn handle(&mut self, ctx: HandleContext); // has a default no-op impl
 }
 ```
@@ -42,7 +53,7 @@ fn meta(&self) -> ProviderMeta {
 **`prefix_only`** — when `true`, the engine never calls your `query()`
 unless the user's input matched one of your prefixes; the provider is
 skipped entirely otherwise. Prefix-triggered providers can declare this
-instead of returning `vec![]` for unprefixed input, saving a call per
+instead of answering every unprefixed keystroke, saving a call per
 keystroke. [`CalculatorProvider`] and [`MetaProvider`] do this.
 
 Prefixes are resolved once per query by the engine: the **longest** declared
@@ -149,7 +160,7 @@ The `QueryContext` fields:
   promote entries the user already used for this text). It is looked up
   under `original`, so a prefix-triggered provider still sees the history
   recorded for the full typed query, not for its stripped `query`.
-- `known_history` — every key ever used, independent of the typed query.
+- `known_history_keys` — every key ever used, independent of the typed query.
   Use it to reconstruct entries the current listing does not contain (the
   files provider does this); use `history` when the decision depends on
   the current text. Both Enter and accepting a Tab suggestion count as a
@@ -172,11 +183,12 @@ if another provider declared the prefix `"=="`, typing `"== 2"` would activate
 *that* prefix; a provider only declaring `"="` would then be called with
 `prefix: None` and the full `"== 2"` query instead.
 
-A prefix-triggered provider typically returns an empty `Vec` when `prefix`
-is `None`, since it has nothing to offer for un-prefixed input. This is
-exactly what [`CalculatorProvider`] does — it returns `vec![]` at the top
-of `query()` when no prefix matched, staying performant and out of the way for normal app
-searching.
+Return an `Arc<[Entry]>` rather than an owned `Vec`. A provider that builds its
+entries once in `init()` should cache them in an `Arc<[Entry]>` and answer each
+keystroke with `Arc::clone(&self.entries)`, which is a refcount bump instead of
+a deep clone. Build a fresh slice only when the entries genuinely change per
+query (as the calculator does); `Arc::from_iter(...)` collects into one without
+an intermediate `Vec` when a chain is easier than a literal.
 
 ### Caching per session
 
@@ -232,6 +244,7 @@ entry("my-entry-id", "Display Name")
 | `.clipboard_command(args)` | `Vec<String>` | Run `args` on selection and pipe its stdout into the clipboard tool's stdin, for exact or binary data |
 | `.cwd(path)` | path | Directory the exec action runs in, if it differs from the configured `working_dir` |
 | `.history_key(key)` | `String` | Enable history tracking under this stable key |
+| `.track_history()` | — | Enable history tracking under the entry's own id (for ids already namespaced by the provider) |
 | `.set_query(query)` | `String` | Query suggestion applied when this entry is tab-selected, replacing the whole query |
 | `.set_query_keeping_prefix(text)` | `String` | Query suggestion applied under the active prefix, which stays in front of it |
 | `.action_set_query(query)` | `String` | Selection action: Enter replaces the query with this text and the launcher stays open |
@@ -325,8 +338,10 @@ and boost each other. Prefix the key with the provider id and a `-` separator.
 | `files` | `files-/home/me/src/lib.rs` |
 
 A provider whose entry ids already begin with the provider id (like
-`unicode-…`, `nix-…`, and `meta-…`) can use the id itself as the key. A
-provider that returns a single entry named after the provider, like the
+`unicode-…`, `nix-…`, and `meta-…`) can use the id itself as the key. The
+builder offers `.track_history()` for exactly that case: it sets
+`history_key` to the entry's own id, so the namespace is written once.
+A provider that returns a single entry named after the provider, like the
 calculator, can use the bare provider id. Don't invent a second namespace
 like `huffi-…`; the provider id is the namespace.
 
@@ -345,14 +360,14 @@ query. Each entry carries:
 keys accumulate uses. The engine builds the history once per query,
 so iterating it is free of decay math.
 
-`ctx.known_history` is the complementary **unscoped** view: every key
+`ctx.known_history_keys` is the complementary **unscoped** view: every key
 ever used, whatever query it was used under, with no scores. Recorded
 uses fan out to every prefix of the typed query — including the empty
 one — so this is the store's global key index, cached and rebuilt only
 when history changes. It answers "has this key ever been used?";
 `ctx.history` answers "how relevant is this key to what I just typed?".
 Keep the two separate: a provider that reconstructs entries from
-`known_history` should still let the engine's ranking use the scoped
+`known_history_keys` should still let the engine's ranking use the scoped
 `history`.
 
 ### Query suggestions
@@ -571,10 +586,13 @@ gets no variant at all — a title plus a subtitle is already the stock row.
 ## Complete example: always-active provider
 
 ```rust
-use huffi::engine::provider::{Entry, Provider, ProviderMeta, ProviderResult, InitContext, entry};
-use huffi::engine::scoring::MatchField;
+use std::sync::Arc;
 
-struct CustomDirProvider { entries: Vec<Entry> }
+use huffi::engine::provider::{
+    Entry, InitContext, MatchField, Provider, ProviderMeta, ProviderResult, entry,
+};
+
+struct CustomDirProvider { entries: Arc<[Entry]> }
 
 impl Provider for CustomDirProvider {
     fn meta(&self) -> ProviderMeta {
@@ -582,19 +600,17 @@ impl Provider for CustomDirProvider {
     }
 
     fn init(&mut self, ctx: InitContext) -> ProviderResult {
-        self.entries = vec![
-            entry("projects", "Projects")
-                .exec(vec!["xdg-open".into(), "/home/me/projects".into()])
-                .match_fields(vec![
-                    MatchField { text: "Projects".into(), weight: 1.0 },
-                ])
-                .history_key("custom-dirs-projects")
-        ];
+        self.entries = Arc::from([entry("projects", "Projects")
+            .exec(vec!["xdg-open".into(), "/home/me/projects".into()])
+            .match_fields(vec![
+                MatchField { text: "Projects".into(), weight: 1.0 },
+            ])
+            .history_key("custom-dirs-projects")]);
         ProviderResult::Ok
     }
 
-    fn query(&mut self, _ctx: QueryContext) -> Vec<Entry> {
-        self.entries.clone()
+    fn query(&mut self, _ctx: QueryContext) -> Arc<[Entry]> {
+        Arc::clone(&self.entries)
     }
 }
 ```
