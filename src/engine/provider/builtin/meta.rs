@@ -215,7 +215,7 @@ mod tests {
                     query: "",
                     original: "",
                     history: &QueryHistory::EMPTY,
-                    known_history: &KnownHistory::EMPTY,
+                    known_history_keys: &KnownHistory::EMPTY,
                     generation: Generation::default(),
                 })
                 .is_empty(),
@@ -228,7 +228,7 @@ mod tests {
                     query: "uptime",
                     original: "uptime",
                     history: &QueryHistory::EMPTY,
-                    known_history: &KnownHistory::EMPTY,
+                    known_history_keys: &KnownHistory::EMPTY,
                     generation: Generation::default(),
                 })
                 .is_empty()
@@ -243,7 +243,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 11);
@@ -265,7 +265,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         for e in entries.iter() {
@@ -291,7 +291,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let memory = entries
@@ -322,7 +322,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let kill = entries
@@ -348,7 +348,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let open = entries
@@ -374,7 +374,7 @@ mod tests {
             query: "sock",
             original: "@sock",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let socket = entries
@@ -406,7 +406,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let dry = entries
@@ -432,7 +432,7 @@ mod tests {
             query: "",
             original: "@",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let socket = entries
@@ -440,7 +440,7 @@ mod tests {
             .find(|e| e.id == "meta-socket")
             .expect("meta-socket entry");
         match &socket.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => {
+            crate::engine::provider::Rank::MatchFields(fields) => {
                 assert!(
                     fields.iter().all(|f| f.text != "/tmp/unlikely-path.sock"),
                     "value should not be fuzzy-matched"

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
 };
-use crate::engine::scoring::MatchField;
 
 /// Lists the registered providers and scopes the next query to one of them.
 ///
@@ -133,7 +133,7 @@ mod tests {
             query: "",
             original: "\\",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         })
     }

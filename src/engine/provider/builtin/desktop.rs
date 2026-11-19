@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config, split_command,
 };
-use crate::engine::scoring::MatchField;
 
 /// History namespace for desktop entries: every entry's history key is
 /// `desktop-<id>`, so a desktop id can never collide with a key from another

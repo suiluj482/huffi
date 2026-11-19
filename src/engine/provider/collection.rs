@@ -271,14 +271,14 @@ impl ProviderCollection {
     /// stripped when this provider owns the query's global prefix (declared it
     /// or is the query's target), otherwise prefix dropped and the full query
     /// kept. `history` (the precomputed history for the original query),
-    /// `known_history` (the store's unscoped key list), and `generation` are
+    /// `known_history_keys` (the store's unscoped key list), and `generation` are
     /// the same for every provider answering the query.
     fn provider_query_context<'a>(
         meta: &ProviderMeta,
         pre: &'a PreprocessedQuery,
         target_prefix: &str,
         history: &'a QueryHistory,
-        known_history: &'a KnownHistory,
+        known_history_keys: &'a KnownHistory,
         generation: Generation,
     ) -> QueryContext<'a> {
         let owns = pre
@@ -291,7 +291,7 @@ impl ProviderCollection {
                 query: &pre.query,
                 original: &pre.original_query,
                 history,
-                known_history,
+                known_history_keys,
                 generation,
             }
         } else {
@@ -300,7 +300,7 @@ impl ProviderCollection {
                 query: &pre.original_query,
                 original: &pre.original_query,
                 history,
-                known_history,
+                known_history_keys,
                 generation,
             }
         }
@@ -320,7 +320,7 @@ impl ProviderCollection {
     /// Scoring itself is owned by [`crate::engine::Engine`]; export the raw
     /// groups here so the engine can hand them to the
     /// [`Scorer`](crate::engine::scoring::Scorer). `history` is the
-    /// precomputed [`QueryHistory`] for the original query, `known_history`
+    /// precomputed [`QueryHistory`] for the original query, `known_history_keys`
     /// is the store's unscoped key list, and `generation` is the engine's
     /// current [`Generation`]; all are stamped into every provider's
     /// [`QueryContext`].
@@ -328,7 +328,7 @@ impl ProviderCollection {
         &mut self,
         pre: &PreprocessedQuery,
         history: &QueryHistory,
-        known_history: &KnownHistory,
+        known_history_keys: &KnownHistory,
         generation: Generation,
     ) -> Vec<QueryGroup> {
         let target_prefix = self.target_prefix.clone();
@@ -343,7 +343,7 @@ impl ProviderCollection {
                     pre,
                     &target_prefix,
                     history,
-                    known_history,
+                    known_history_keys,
                     generation,
                 );
                 Some(QueryGroup {
@@ -360,7 +360,7 @@ impl ProviderCollection {
     /// provider-relative: `prefix` is `Some` only when the provider owns the
     /// query's global prefix (declared it or is the query's target), and
     /// `history` is the precomputed history for the original query, taken
-    /// before this selection is recorded, `known_history` is the store's
+    /// before this selection is recorded, `known_history_keys` is the store's
     /// unscoped key list, and `generation` is the engine's current
     /// [`Generation`]. No-op when the provider is no longer registered.
     pub fn handle(
@@ -369,7 +369,7 @@ impl ProviderCollection {
         entry_id: &str,
         pre: &PreprocessedQuery,
         history: &QueryHistory,
-        known_history: &KnownHistory,
+        known_history_keys: &KnownHistory,
         generation: Generation,
     ) {
         let target_prefix = self.target_prefix.clone();
@@ -384,7 +384,7 @@ impl ProviderCollection {
                     pre,
                     &target_prefix,
                     history,
-                    known_history,
+                    known_history_keys,
                     generation,
                 ),
             });
@@ -420,11 +420,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::engine::provider::MatchField;
     use crate::engine::provider::{
         Entry, HandleContext, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext,
         TestProvider, entry,
     };
-    use crate::engine::scoring::MatchField;
 
     type CallLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
     type HandleLog = Arc<Mutex<Vec<(String, Option<String>, String)>>>;

@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// Trigger prefix: `:snowman` copies ☃ to the clipboard.
 const PREFIX: &str = ":";
@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use crate::engine::provider::Action;
     use crate::engine::provider::Generation;
-    use crate::engine::scoring::Rank;
+    use crate::engine::provider::Rank;
     use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
     fn characters() -> &'static Arc<Characters> {
@@ -394,7 +394,7 @@ mod tests {
             query: text,
             original: text,
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         })
     }

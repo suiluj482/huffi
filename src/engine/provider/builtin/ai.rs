@@ -371,7 +371,7 @@ mod tests {
     use crate::engine::provider::Generation;
     use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
-    fn no_known_history() -> &'static KnownHistory {
+    fn no_known_history_keys() -> &'static KnownHistory {
         static EMPTY: KnownHistory = KnownHistory::EMPTY;
         &EMPTY
     }
@@ -382,7 +382,7 @@ mod tests {
             query: text,
             original: text,
             history,
-            known_history: no_known_history(),
+            known_history_keys: no_known_history_keys(),
             generation: Generation::default(),
         }
     }

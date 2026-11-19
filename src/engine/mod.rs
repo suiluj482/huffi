@@ -42,7 +42,7 @@ pub struct QueryReply {
     pub pre: PreprocessedQuery,
     pub history: QueryHistory,
     groups: Vec<QueryGroup>,
-    scored: Vec<EntryAnnotation>,
+    annotations: Vec<EntryAnnotation>,
 }
 
 /// A borrowed, fully resolved result row.
@@ -89,22 +89,24 @@ impl<'a> QueryHit<'a> {
 impl QueryReply {
     /// The number of ranked results.
     pub fn len(&self) -> usize {
-        self.scored.len()
+        self.annotations.len()
     }
 
     /// Whether the query produced no ranked results.
     pub fn is_empty(&self) -> bool {
-        self.scored.is_empty()
+        self.annotations.is_empty()
     }
 
     /// Iterate the ranked results in order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = QueryHit<'_>> {
-        self.scored.iter().map(|annotation| self.hit(annotation))
+        self.annotations
+            .iter()
+            .map(|annotation| self.hit(annotation))
     }
 
     /// The ranked result at `index`, if any.
     pub fn get(&self, index: usize) -> Option<QueryHit<'_>> {
-        self.scored
+        self.annotations
             .get(index)
             .map(|annotation| self.hit(annotation))
     }
@@ -209,16 +211,16 @@ impl Engine {
             let pre = self.providers.preprocess_query(query);
             let history = self.scorer.history_for(query);
             let groups = {
-                let known_history = self.scorer.known_history();
+                let known_history_keys = self.scorer.known_history_keys();
                 self.providers
-                    .grouped_entries(&pre, &history, known_history, self.generation)
+                    .grouped_entries(&pre, &history, known_history_keys, self.generation)
             };
-            let scored = self.scorer.score(&groups, &history);
+            let annotations = self.scorer.score(&groups, &history);
             self.cache = Some(QueryReply {
                 pre,
                 history,
                 groups,
-                scored,
+                annotations,
             });
         }
         self.cache.as_ref().expect("query always fills the cache")
@@ -255,13 +257,13 @@ impl Engine {
             action.perform(&self.external);
         }
         if let Some(provider_id) = &provider_id {
-            let known_history = self.scorer.known_history();
+            let known_history_keys = self.scorer.known_history_keys();
             self.providers.handle(
                 provider_id,
                 entry_id,
                 &pre,
                 &history,
-                known_history,
+                known_history_keys,
                 self.generation,
             );
         }
@@ -294,8 +296,9 @@ impl Engine {
         self.scorer.delete(query, history_key);
     }
 
-    pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
-        self.scorer.list_entries(prefix)
+    /// History records filed under exactly `prefix`, with their decayed scores.
+    pub fn list_prefix_history(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
+        self.scorer.list_prefix_history(prefix)
     }
 
     /// List registered providers and their trigger prefixes, for the UI.
@@ -314,11 +317,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::engine::provider::MatchField;
     use crate::engine::provider::{
         Entry, HandleContext, InitContext, ProviderMeta, ProviderResult, QueryContext,
         TestProvider, entry,
     };
-    use crate::engine::scoring::MatchField;
 
     fn engine() -> Engine {
         Engine::new("/tmp/huffi-engine-test", true).unwrap()
@@ -383,7 +386,7 @@ mod tests {
     fn history_view(ctx: &QueryContext) -> HistoryView {
         HistoryView {
             keys: ctx.history.keys().cloned().collect(),
-            known_keys: ctx.known_history.keys().cloned().collect(),
+            known_keys: ctx.known_history_keys.keys().cloned().collect(),
             confidence: ctx.history.confidence(),
             alpha_score: ctx
                 .history
@@ -723,7 +726,7 @@ mod tests {
             );
         }
 
-        let history = e.list_entries("::fire");
+        let history = e.list_prefix_history("::fire");
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].key, "firefox");
         assert_eq!(history[0].record.n, 5);
@@ -786,7 +789,7 @@ mod tests {
         for _ in 0..4 {
             e.boost("b", "b");
         }
-        let entries = e.list_entries("b");
+        let entries = e.list_prefix_history("b");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].record.n, 8);
 
@@ -912,7 +915,7 @@ mod tests {
             "select should reuse the cached query instead of re-running providers"
         );
         assert_eq!(*handled.lock().unwrap(), vec!["alpha".to_string()]);
-        let entries = e.list_entries("al");
+        let entries = e.list_prefix_history("al");
         assert!(
             entries.iter().any(|r| r.key == "alpha"),
             "select should record a launch in history"
@@ -929,7 +932,7 @@ mod tests {
         e.select("al", "missing");
 
         assert!(handled.lock().unwrap().is_empty());
-        assert!(e.list_entries("al").is_empty());
+        assert!(e.list_prefix_history("al").is_empty());
         assert_eq!(
             *calls.lock().unwrap(),
             1,
@@ -1025,17 +1028,20 @@ mod tests {
             let history = engine.scorer.history_for(q);
             let t = Instant::now();
             let groups = {
-                let known_history = engine.scorer.known_history();
-                engine
-                    .providers
-                    .grouped_entries(&pre, &history, known_history, engine.generation)
+                let known_history_keys = engine.scorer.known_history_keys();
+                engine.providers.grouped_entries(
+                    &pre,
+                    &history,
+                    known_history_keys,
+                    engine.generation,
+                )
             };
             let group_dur = t.elapsed();
             let t = Instant::now();
-            let scored = engine.scorer.score(&groups, &history);
+            let annotations = engine.scorer.score(&groups, &history);
             let score_dur = t.elapsed();
 
-            assert_eq!(scored.len(), n);
+            assert_eq!(annotations.len(), n);
             eprintln!(
                 "[prof] query '{q}': total {:?} = group {:?} + score {:?} ({} results)",
                 total, group_dur, score_dur, n

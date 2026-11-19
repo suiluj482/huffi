@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use huffi::engine::Engine;
+use huffi::engine::provider::MatchField;
 use huffi::engine::provider::{Entry, TestProvider, entry};
-use huffi::engine::scoring::MatchField;
 
 fn corpus(n: usize) -> Vec<Entry> {
     const PREFIXES: &[&str] = &[

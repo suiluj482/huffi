@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry, is_detail_key,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// History namespace for configured entries: every entry's history key is
 /// `actions-<id>`, so it can never collide with a key from another provider.
@@ -405,7 +405,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert!(entries.is_empty());
@@ -439,7 +439,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 2);
@@ -468,7 +468,7 @@ mod tests {
         }
         // Title plus each keyword — the whitespace-only keyword is dropped.
         let fields = match &first.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected match fields, got {other:?}"),
         };
         assert_eq!(fields.len(), 3);
@@ -503,7 +503,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         match &entries[0].action {
@@ -539,7 +539,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         match &entries[0].action {
@@ -649,7 +649,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         let row = &entries[0];
@@ -725,7 +725,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert!(
@@ -750,7 +750,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries[0].history_key.as_deref(), Some("legacy-key"));
@@ -804,7 +804,7 @@ mod tests {
             query: "",
             original: "",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries[0].id, "snow");

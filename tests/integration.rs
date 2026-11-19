@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use huffi::engine::provider::MatchField;
 use huffi::engine::provider::{Entry, MetaProvider, TestProvider, entry};
-use huffi::engine::scoring::MatchField;
 use huffi::engine::{Engine, QueryHit};
 
 static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -538,7 +538,7 @@ fn files_provider_lists_and_descends() {
     let file_id = file_row.entry().id.clone();
     engine.select("/sub/n", &file_id);
     let key = engine
-        .list_entries("/sub/n")
+        .list_prefix_history("/sub/n")
         .iter()
         .find(|r| r.key.starts_with("files-"))
         .map(|r| r.key.clone())

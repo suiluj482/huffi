@@ -156,7 +156,7 @@ fn entries_from_list(text: &str, max: usize) -> Vec<Entry> {
 mod tests {
     use super::*;
     use crate::engine::provider::Action;
-    use crate::engine::scoring::Rank;
+    use crate::engine::provider::Rank;
 
     fn copy_command(row: &Entry) -> Vec<String> {
         let Action::ClipboardCommand { args } = &row.action else {

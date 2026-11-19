@@ -245,11 +245,11 @@ fn is_zsh_meta(meta: &str) -> bool {
 mod tests {
     use super::*;
     use crate::engine::provider::Generation;
+    use crate::engine::provider::Rank;
     use crate::engine::provider::{Action, ExecMode, HandleContext, QueryContext};
-    use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::{KnownHistory, QueryHistory};
 
-    fn no_known_history() -> &'static KnownHistory {
+    fn no_known_history_keys() -> &'static KnownHistory {
         static EMPTY: KnownHistory = KnownHistory::EMPTY;
         &EMPTY
     }
@@ -260,7 +260,7 @@ mod tests {
             query,
             original: query,
             history,
-            known_history: no_known_history(),
+            known_history_keys: no_known_history_keys(),
             generation: Generation::default(),
         }
     }

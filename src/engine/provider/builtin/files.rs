@@ -53,7 +53,7 @@
 //!
 //! **History entries** are rebuilt from the usage history as well as from the
 //! current listing. The store records a use under *every* prefix of the
-//! query, including the empty one, so `ctx.known_history` is an unscoped
+//! query, including the empty one, so `ctx.known_history_keys` is an unscoped
 //! global key list: a path launched or completed at `/etc/ho` is reachable
 //! from `/`, `/etc/`, or any unrelated query alike. On each query the
 //! provider takes every key and keeps the `files-` namespace — keys from
@@ -78,11 +78,11 @@ use std::sync::Arc;
 use mime_guess::Mime;
 use serde::Deserialize;
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, Icon, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// Trigger prefix: `/etc` lists `/etc`.
 const PREFIX: &str = "/";
@@ -381,7 +381,7 @@ impl FilesProvider {
     /// reconstructed under an unrelated one; ranking stays on
     /// `ctx.history`. A suffix that does not name a configured opener is
     /// left as path text, so paths containing the symbol keep working. Keys
-    /// from other providers share the same `ctx.known_history` and are
+    /// from other providers share the same `ctx.known_history_keys` and are
     /// skipped here.
     fn history_targets(&self, ctx: &QueryContext) -> Vec<Target> {
         if !self.config.history_entries {
@@ -389,7 +389,7 @@ impl FilesProvider {
         }
         let namespace = format!("{HISTORY_PREFIX}-");
         let symbol = self.suffix_symbol();
-        ctx.known_history
+        ctx.known_history_keys
             .keys()
             .filter_map(|key| {
                 let rest = key.strip_prefix(&namespace)?;
@@ -695,15 +695,15 @@ impl Provider for FilesProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::provider::Rank;
     use crate::engine::provider::{Action, ExecMode, Generation};
-    use crate::engine::scoring::Rank;
     use crate::engine::scoring::history::{HistoryStore, KnownHistory, QueryHistory};
 
     fn ctx<'a>(query: &'a str, original: &'a str, history: &'a QueryHistory) -> QueryContext<'a> {
-        ctx_with_known(query, original, history, no_known_history())
+        ctx_with_known(query, original, history, no_known_history_keys())
     }
 
-    fn no_known_history() -> &'static KnownHistory {
+    fn no_known_history_keys() -> &'static KnownHistory {
         static EMPTY: KnownHistory = KnownHistory::EMPTY;
         &EMPTY
     }
@@ -712,14 +712,14 @@ mod tests {
         query: &'a str,
         original: &'a str,
         history: &'a QueryHistory,
-        known_history: &'a KnownHistory,
+        known_history_keys: &'a KnownHistory,
     ) -> QueryContext<'a> {
         QueryContext {
             prefix: Some(PREFIX),
             query,
             original,
             history,
-            known_history,
+            known_history_keys,
             generation: Generation::default(),
         }
     }
@@ -728,21 +728,21 @@ mod tests {
         query: &'a str,
         original: &'a str,
         history: &'a QueryHistory,
-        known_history: &'a KnownHistory,
+        known_history_keys: &'a KnownHistory,
     ) -> QueryContext<'a> {
         QueryContext {
             prefix: None,
             query,
             original,
             history,
-            known_history,
+            known_history_keys,
             generation: Generation::default(),
         }
     }
 
     /// A real [`HistoryStore`] with `keys` recorded under the empty query, so
     /// both [`history_for`](HistoryStore::history_for) and
-    /// [`known_history`](HistoryStore::known_history) hand back exactly those
+    /// [`known_history_keys`](HistoryStore::known_history_keys) hand back exactly those
     /// keys. This exercises the store's own key format and global index
     /// rather than a hand-built view.
     fn store_with(keys: impl IntoIterator<Item = String>) -> HistoryStore {
@@ -1079,7 +1079,12 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         let entry_ids = ids(&entries);
         assert!(entry_ids.contains(&id(&remembered.join("old.txt"))));
         assert!(
@@ -1124,7 +1129,7 @@ mod tests {
             "note",
             "/note",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         assert!(
             ids(&entries).contains(&id(&remembered)),
@@ -1153,7 +1158,7 @@ mod tests {
             "remembered",
             "remembered",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         let entry_ids = ids(&entries);
         assert_eq!(
@@ -1181,7 +1186,12 @@ mod tests {
         let history = store.history_for("");
 
         let mut p = provider_at(&root);
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         assert!(entries.iter().all(|r| r.title != "firefox.desktop"));
 
         std::fs::remove_dir_all(&root).ok();
@@ -1202,7 +1212,12 @@ mod tests {
 
         let mut p = provider_at(&root);
         p.config.history_entries = false;
-        let entries = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let entries = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         assert!(!ids(&entries).contains(&id(&remembered.join("old.txt"))));
 
         std::fs::remove_dir_all(&root).ok();
@@ -1546,14 +1561,19 @@ mod tests {
         p.config.openers = vec![opener("code", &["code"], &[])];
         let variant_id = format!("{}@code", id(&path));
 
-        let plain_query = p.query(ctx_with_known("", "/", &history, store.known_history()));
+        let plain_query = p.query(ctx_with_known(
+            "",
+            "/",
+            &history,
+            store.known_history_keys(),
+        ));
         assert!(ids(&plain_query).contains(&variant_id));
 
         let suffixed = p.query(ctx_with_known(
             "note.txt@code",
             "/note.txt@code",
             &history,
-            store.known_history(),
+            store.known_history_keys(),
         ));
         assert_eq!(
             ids(&suffixed)
@@ -1580,8 +1600,13 @@ mod tests {
         let mut p = provider_at(&root);
         p.config.openers = vec![opener("code", &["code"], &[])];
         assert!(
-            ids(&p.query(ctx_with_known("", "/", &history, store.known_history())))
-                .contains(&id(&path))
+            ids(&p.query(ctx_with_known(
+                "",
+                "/",
+                &history,
+                store.known_history_keys()
+            )))
+            .contains(&id(&path))
         );
 
         std::fs::remove_dir_all(&root).ok();

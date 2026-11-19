@@ -5,6 +5,17 @@ a data source for the launcher — every keystroke, the engine calls every
 registered provider's `query()` method and blends the returned entries into
 a ranked list.
 
+Everything you need is re-exported from `huffi::engine::provider`, whose first
+item is the trait itself. The rest is split by concern, so you only need to
+follow the links the trait gives you:
+
+| Module | Contains |
+|---|---|
+| `provider::entry` | `Entry`, `EntryBuilder`, `Rank`, `MatchField`, `Icon`, `QuerySuggestion` |
+| `provider::action` | `Action`, `ExecMode`, and the code that performs a selection |
+| `provider::collection` | engine-side registry and `QueryGroup` (rarely needed by a provider) |
+| `provider::config` | config overrides applied to registered providers |
+
 ## The trait
 
 ```rust
@@ -149,7 +160,7 @@ The `QueryContext` fields:
   promote entries the user already used for this text). It is looked up
   under `original`, so a prefix-triggered provider still sees the history
   recorded for the full typed query, not for its stripped `query`.
-- `known_history` — every key ever used, independent of the typed query.
+- `known_history_keys` — every key ever used, independent of the typed query.
   Use it to reconstruct entries the current listing does not contain (the
   files provider does this); use `history` when the decision depends on
   the current text. Both Enter and accepting a Tab suggestion count as a
@@ -349,14 +360,14 @@ query. Each entry carries:
 keys accumulate uses. The engine builds the history once per query,
 so iterating it is free of decay math.
 
-`ctx.known_history` is the complementary **unscoped** view: every key
+`ctx.known_history_keys` is the complementary **unscoped** view: every key
 ever used, whatever query it was used under, with no scores. Recorded
 uses fan out to every prefix of the typed query — including the empty
 one — so this is the store's global key index, cached and rebuilt only
 when history changes. It answers "has this key ever been used?";
 `ctx.history` answers "how relevant is this key to what I just typed?".
 Keep the two separate: a provider that reconstructs entries from
-`known_history` should still let the engine's ranking use the scoped
+`known_history_keys` should still let the engine's ranking use the scoped
 `history`.
 
 ### Query suggestions
@@ -577,8 +588,9 @@ gets no variant at all — a title plus a subtitle is already the stock row.
 ```rust
 use std::sync::Arc;
 
-use huffi::engine::provider::{Entry, Provider, ProviderMeta, ProviderResult, InitContext, entry};
-use huffi::engine::scoring::MatchField;
+use huffi::engine::provider::{
+    Entry, InitContext, MatchField, Provider, ProviderMeta, ProviderResult, entry,
+};
 
 struct CustomDirProvider { entries: Arc<[Entry]> }
 

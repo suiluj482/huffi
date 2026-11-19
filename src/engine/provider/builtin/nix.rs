@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::provider::MatchField;
 use crate::engine::provider::{
     Entry, InitContext, Provider, ProviderMeta, ProviderResult, QueryContext, entry,
     parse_extra_config,
 };
-use crate::engine::scoring::MatchField;
 
 /// Per-provider tuning knobs. When provided via
 /// `[engine.provider.builtin.nix.extra]`, the fields are parsed from the
@@ -429,7 +429,7 @@ mod tests {
         let config = NixConfig::default();
         let e = build_entry(&package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         assert_eq!(fields.len(), 2);
@@ -456,7 +456,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "weight_attr": 2.0 })).unwrap();
         let e = build_entry(&package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         assert!(
@@ -487,7 +487,7 @@ mod tests {
     fn description_is_match_field(package: &PackageInfo, config: NixConfig) -> bool {
         let e = build_entry(package, config);
         let fields = match &e.rank {
-            crate::engine::scoring::Rank::MatchFields(fields) => fields,
+            crate::engine::provider::Rank::MatchFields(fields) => fields,
             other => panic!("expected MatchFields, got {other:?}"),
         };
         fields
@@ -511,7 +511,7 @@ mod tests {
                 query: "",
                 original: "",
                 history: &QueryHistory::EMPTY,
-                known_history: &KnownHistory::EMPTY,
+                known_history_keys: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -523,7 +523,7 @@ mod tests {
                 query: "hello",
                 original: "hello",
                 history: &QueryHistory::EMPTY,
-                known_history: &KnownHistory::EMPTY,
+                known_history_keys: &KnownHistory::EMPTY,
                 generation: Generation::default(),
             })
             .len(),
@@ -546,7 +546,7 @@ mod tests {
             query: "hell",
             original: "!hell",
             history: &QueryHistory::EMPTY,
-            known_history: &KnownHistory::EMPTY,
+            known_history_keys: &KnownHistory::EMPTY,
             generation: Generation::default(),
         });
         assert_eq!(entries.len(), 1);

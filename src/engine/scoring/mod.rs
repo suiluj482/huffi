@@ -9,18 +9,6 @@ use history::{HistoryStore, KeyedHistoryRecord, KnownHistory, QueryHistory};
 
 use crate::engine::provider::{Entry, QueryGroup};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchField {
-    pub text: String,
-    pub weight: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Rank {
-    Score(f32),
-    MatchFields(Vec<MatchField>),
-}
-
 /// One scored entry: where it sits in its [`QueryGroup`], plus the scores the
 /// ranking produced for it.
 ///
@@ -108,14 +96,15 @@ impl Scorer {
     /// The result addresses entries by position in `groups`, which the caller
     /// keeps alive; see [`EntryAnnotation`].
     pub fn score(&mut self, groups: &[QueryGroup], history: &QueryHistory) -> Vec<EntryAnnotation> {
-        let mut scored = self.base_scorer.base_scoring(groups);
-        self.history.history_scoring(history, groups, &mut scored);
-        scored.sort_by(|a, b| {
+        let mut annotations = self.base_scorer.base_scoring(groups);
+        self.history
+            .history_scoring(history, groups, &mut annotations);
+        annotations.sort_by(|a, b| {
             b.combined
                 .partial_cmp(&a.combined)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        scored
+        annotations
     }
 
     pub fn record_launch(&mut self, query: &str, history_key: &str) {
@@ -131,8 +120,8 @@ impl Scorer {
         self.history.delete(query, history_key);
     }
 
-    pub fn list_entries(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
-        self.history.list_entries(prefix)
+    pub fn list_prefix_history(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {
+        self.history.list_prefix_history(prefix)
     }
 
     /// The precomputed [`QueryHistory`] for `query` — the store's
@@ -145,7 +134,7 @@ impl Scorer {
     /// The unscoped view of every key ever used, cached by the store.
     /// Providers use it to reconstruct entries; ranking uses
     /// [`history_for`](Self::history_for) instead.
-    pub fn known_history(&self) -> &KnownHistory {
-        self.history.known_history()
+    pub fn known_history_keys(&self) -> &KnownHistory {
+        self.history.known_history_keys()
     }
 }

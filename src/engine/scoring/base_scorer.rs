@@ -3,7 +3,8 @@ use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use super::config::ScoringConfig;
 use crate::engine::provider::QueryGroup;
 
-use super::{EntryAnnotation, MatchField, Rank};
+use super::EntryAnnotation;
+use crate::engine::provider::{MatchField, Rank};
 
 pub struct BaseScorer {
     fuzzy_matcher: nucleo::Matcher,
@@ -37,12 +38,12 @@ impl BaseScorer {
     /// Entries are read in place and referenced by position, so nothing here
     /// moves or copies an [`Entry`](crate::engine::provider::Entry).
     pub fn base_scoring(&mut self, groups: &[QueryGroup]) -> Vec<EntryAnnotation> {
-        let mut base_scored: Vec<EntryAnnotation> = Vec::new();
+        let mut base_annotations: Vec<EntryAnnotation> = Vec::new();
         let mut fuzzy: Vec<EntryAnnotation> = Vec::new();
         let mut haystack_buf: Vec<char> = Vec::new();
         for (group, g) in groups.iter().enumerate() {
             if g.query.is_empty() {
-                base_scored.extend(
+                base_annotations.extend(
                     (0..g.entries.len())
                         .map(|index| EntryAnnotation::new(group, index, self.empty_query_score)),
                 );
@@ -65,7 +66,7 @@ impl BaseScorer {
             for (index, entry) in g.entries.iter().enumerate() {
                 match entry.rank {
                     Rank::Score(score) => {
-                        base_scored.push(EntryAnnotation::new(group, index, score as f64));
+                        base_annotations.push(EntryAnnotation::new(group, index, score as f64));
                     }
                     Rank::MatchFields(ref fields) => {
                         if let Some(r) = score_fields(
@@ -83,8 +84,8 @@ impl BaseScorer {
         }
 
         normalize_in_place(&mut fuzzy);
-        base_scored.extend(fuzzy);
-        base_scored
+        base_annotations.extend(fuzzy);
+        base_annotations
     }
 }
 
@@ -317,9 +318,9 @@ mod tests {
     fn base_scoring_empty_query_group_keeps_baseline() {
         let mut bs = BaseScorer::default();
         let groups = vec![group("", vec![ranked(Rank::Score(1.0))])];
-        let scored = bs.base_scoring(&groups);
+        let annotations = bs.base_scoring(&groups);
         assert_eq!(
-            scored[0].base_score,
+            annotations[0].base_score,
             ScoringConfig::default().empty_query_score
         );
     }
@@ -334,13 +335,13 @@ mod tests {
                 ranked(Rank::MatchFields(fields(&[("Firefox", 1.0)]))),
             ],
         )];
-        let scored = bs.base_scoring(&groups);
+        let annotations = bs.base_scoring(&groups);
         let rank_of = |a: &EntryAnnotation| a.resolve(&groups).rank.clone();
-        let score = scored
+        let score = annotations
             .iter()
             .find(|a| matches!(rank_of(a), Rank::Score(_)))
             .unwrap();
-        let fuzzy = scored
+        let fuzzy = annotations
             .iter()
             .find(|a| matches!(rank_of(a), Rank::MatchFields(_)))
             .unwrap();
@@ -364,12 +365,12 @@ mod tests {
                 vec![ranked(Rank::MatchFields(fields(&[("Firefox", 1.0)])))],
             ),
         ];
-        let scored = bs.base_scoring(&groups);
+        let annotations = bs.base_scoring(&groups);
         assert_eq!(
-            scored.len(),
+            annotations.len(),
             1,
             "only the group matching its query survives"
         );
-        assert_eq!(scored[0].base_score, 1.0);
+        assert_eq!(annotations[0].base_score, 1.0);
     }
 }
