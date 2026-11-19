@@ -60,6 +60,16 @@ half_life_days   = 14.0
 confidence_k     = 3.0
 # Base score for results shown while the query is empty.
 empty_query_score = 0.8
+# Mild bonus (in fuzzy-score points) for an entry whose shortest matching
+# field is close to the query length. Loses one point per character that field
+# is longer than the query, and is added once regardless of field weights.
+# 0 disables the preference.
+short_field_bonus = 6.0
+# Split the query on whitespace and require every word to match, instead of
+# treating the whole query as one fuzzy needle. `\ ` escapes a space. With
+# this on, each word may also use nucleo's operators: ^prefix, 'substring,
+# postfix$, ^exact$ and !negation. Off by default.
+# split_query_words = false
 
 [engine.provider]
 # Prefixes that own a query outright. When the resolved global prefix of a

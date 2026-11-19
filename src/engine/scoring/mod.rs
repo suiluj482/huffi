@@ -79,7 +79,7 @@ impl Scorer {
         let history = HistoryStore::new_with_config(data_dir, dry_run, scoring)?;
         Ok(Self {
             history,
-            base_scorer: BaseScorer::new(scoring.empty_query_score),
+            base_scorer: BaseScorer::new(scoring),
             boost_weight: scoring.boost_weight,
             boost_samples: scoring.boost_samples,
         })
