@@ -28,6 +28,10 @@ pub struct ScoringConfig {
     /// exceeds it by this many. Added once per entry, independent of field
     /// weights. `0.0` disables the preference entirely.
     pub short_field_bonus: f64,
+    /// Split the query on whitespace and fuzzy-match every word separately,
+    /// requiring all of them to match. See `docs/ALGORITHM.md` for the
+    /// supported operators. Off by default: a query is one fuzzy needle.
+    pub split_query_words: bool,
 }
 
 impl Default for ScoringConfig {
@@ -39,6 +43,7 @@ impl Default for ScoringConfig {
             confidence_k: 3.0,
             empty_query_score: 0.8,
             short_field_bonus: 6.0,
+            split_query_words: false,
         }
     }
 }

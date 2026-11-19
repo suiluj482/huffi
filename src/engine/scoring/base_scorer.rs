@@ -1,4 +1,4 @@
-use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization};
+use nucleo::pattern::{Atom, AtomKind, CaseMatching, Normalization, Pattern};
 
 use super::config::ScoringConfig;
 use crate::engine::provider::QueryGroup;
@@ -6,10 +6,40 @@ use crate::engine::provider::QueryGroup;
 use super::EntryAnnotation;
 use crate::engine::provider::{MatchField, Rank};
 
+/// A single fuzzy atom or a parsed multi-word pattern, behind one scoring API.
+trait ScoredPattern {
+    fn score(
+        &self,
+        fuzzy_matcher: &mut nucleo::Matcher,
+        haystack: nucleo::Utf32Str<'_>,
+    ) -> Option<u32>;
+}
+
+impl ScoredPattern for Atom {
+    fn score(
+        &self,
+        fuzzy_matcher: &mut nucleo::Matcher,
+        haystack: nucleo::Utf32Str<'_>,
+    ) -> Option<u32> {
+        Atom::score(self, haystack, fuzzy_matcher).map(u32::from)
+    }
+}
+
+impl ScoredPattern for Pattern {
+    fn score(
+        &self,
+        fuzzy_matcher: &mut nucleo::Matcher,
+        haystack: nucleo::Utf32Str<'_>,
+    ) -> Option<u32> {
+        Pattern::score(self, haystack, fuzzy_matcher)
+    }
+}
+
 pub struct BaseScorer {
     fuzzy_matcher: nucleo::Matcher,
     empty_query_score: f64,
     short_field_bonus: f64,
+    split_query_words: bool,
 }
 
 impl Default for BaseScorer {
@@ -25,6 +55,7 @@ impl BaseScorer {
             fuzzy_matcher: nucleo::Matcher::new(nucleo::Config::DEFAULT),
             empty_query_score: scoring.empty_query_score,
             short_field_bonus: scoring.short_field_bonus,
+            split_query_words: scoring.split_query_words,
         }
     }
 
@@ -51,18 +82,27 @@ impl BaseScorer {
                 continue;
             }
 
-            // The query is matched through a fuzzy [`Atom`] rather than the
+            // Queries are matched through nucleo's pattern API rather than the
             // raw [`nucleo::Matcher`]: the matcher's `fuzzy_match` panics
             // ("should have been caught by prefilter") for some case-mismatched
-            // needles the caller cannot predict, while an atom runs nucleo's
-            // own prefilter and returns `None` instead.
-            let needle = Atom::new(
-                &g.query,
-                CaseMatching::Ignore,
-                Normalization::Smart,
-                AtomKind::Fuzzy,
-                false,
-            );
+            // needles the caller cannot predict, while atoms and patterns run
+            // nucleo's own prefilter and return `None` instead.
+            let atom;
+            let pattern;
+            let needle: &dyn ScoredPattern = if self.split_query_words {
+                // Splits on spaces (`\ ` escapes one) and parses ^, ', $ and !.
+                pattern = Pattern::parse(&g.query, CaseMatching::Ignore, Normalization::Smart);
+                &pattern
+            } else {
+                atom = Atom::new(
+                    &g.query,
+                    CaseMatching::Ignore,
+                    Normalization::Smart,
+                    AtomKind::Fuzzy,
+                    false,
+                );
+                &atom
+            };
             let query_len = g.query.chars().count();
 
             for (index, entry) in g.entries.iter().enumerate() {
@@ -73,7 +113,7 @@ impl BaseScorer {
                     Rank::MatchFields(ref fields) => {
                         if let Some(r) = score_fields(
                             &mut self.fuzzy_matcher,
-                            &needle,
+                            needle,
                             fields,
                             &mut haystack_buf,
                             query_len,
@@ -115,12 +155,12 @@ fn normalize_in_place(fuzzy: &mut [EntryAnnotation]) {
 
 fn score(
     fuzzy_matcher: &mut nucleo::Matcher,
-    needle: &Atom,
+    needle: &dyn ScoredPattern,
     field: &str,
     haystack_buf: &mut Vec<char>,
-) -> Option<u16> {
+) -> Option<u32> {
     let haystack = nucleo::Utf32Str::new(field, haystack_buf);
-    needle.score(haystack, fuzzy_matcher)
+    needle.score(fuzzy_matcher, haystack)
 }
 
 /// Score all match fields of one entry and return their weighted average.
@@ -137,7 +177,7 @@ fn score(
 /// match purely because shortcodes are weighted higher.
 fn score_fields(
     fuzzy_matcher: &mut nucleo::Matcher,
-    needle: &Atom,
+    needle: &dyn ScoredPattern,
     fields: &[MatchField],
     haystack_buf: &mut Vec<char>,
     query_len: usize,
@@ -201,7 +241,7 @@ mod tests {
     /// behavior before `short_field_bonus` existed.
     fn score_fields_plain(
         fuzzy_matcher: &mut nucleo::Matcher,
-        needle: &Atom,
+        needle: &dyn ScoredPattern,
         fields: &[MatchField],
         haystack_buf: &mut Vec<char>,
     ) -> Option<f64> {
@@ -419,6 +459,146 @@ mod tests {
                 .base_score
         };
         assert!(score_of("short") > score_of("long"));
+    }
+
+    /// The pattern the scorer builds when `split_query_words` is enabled.
+    fn words(query: &str) -> Pattern {
+        Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart)
+    }
+
+    #[test]
+    fn word_splitting_requires_every_token() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let needle = words("fire fox");
+        let mut haystack_buf: Vec<char> = Vec::new();
+        let both = fields(&[("Firefox", 1.0)]);
+        let one = fields(&[("Firebird", 1.0)]);
+
+        let both_score = score_fields(
+            &mut fuzzy_matcher,
+            &needle,
+            &both,
+            &mut haystack_buf,
+            8,
+            0.0,
+        )
+        .unwrap();
+        let one_score =
+            score_fields(&mut fuzzy_matcher, &needle, &one, &mut haystack_buf, 8, 0.0).unwrap();
+        assert!(both_score > 0.0);
+        assert_eq!(one_score, 0.0, "a missing word must not match");
+    }
+
+    #[test]
+    fn word_splitting_off_keeps_the_whitespace_needle() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let needle = atom("fire fox");
+        let mut haystack_buf: Vec<char> = Vec::new();
+        let fields = fields(&[("Firefox", 1.0)]);
+
+        assert_eq!(
+            score_fields(
+                &mut fuzzy_matcher,
+                &needle,
+                &fields,
+                &mut haystack_buf,
+                8,
+                0.0,
+            ),
+            Some(0.0),
+            "without splitting, the space is part of the fuzzy needle"
+        );
+    }
+
+    #[test]
+    fn word_splitting_parses_operators() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let needle = words("^fire fox$");
+        let mut haystack_buf: Vec<char> = Vec::new();
+        let matching = fields(&[("Firefox", 1.0)]);
+        let non_prefix = fields(&[("Mozilla Firefox", 1.0)]);
+
+        let matching_score = score_fields(
+            &mut fuzzy_matcher,
+            &needle,
+            &matching,
+            &mut haystack_buf,
+            10,
+            0.0,
+        )
+        .unwrap();
+        let non_prefix_score = score_fields(
+            &mut fuzzy_matcher,
+            &needle,
+            &non_prefix,
+            &mut haystack_buf,
+            10,
+            0.0,
+        )
+        .unwrap();
+        assert!(matching_score > 0.0);
+        assert_eq!(non_prefix_score, 0.0);
+    }
+
+    #[test]
+    fn word_splitting_escaped_space_stays_one_token() {
+        let mut fuzzy_matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let escaped = words(r"fire\ fox");
+        let split = words("fire fox");
+        let mut haystack_buf: Vec<char> = Vec::new();
+        let fields = fields(&[("Firefox", 1.0)]);
+
+        assert_eq!(
+            score_fields(
+                &mut fuzzy_matcher,
+                &escaped,
+                &fields,
+                &mut haystack_buf,
+                9,
+                0.0,
+            ),
+            Some(0.0),
+            r"an escaped space keeps fire\ fox as one needle"
+        );
+        assert!(
+            score_fields(
+                &mut fuzzy_matcher,
+                &split,
+                &fields,
+                &mut haystack_buf,
+                8,
+                0.0,
+            )
+            .unwrap()
+                > 0.0
+        );
+    }
+
+    #[test]
+    fn base_scoring_can_split_query_words() {
+        let config = ScoringConfig {
+            split_query_words: true,
+            short_field_bonus: 0.0,
+            ..Default::default()
+        };
+        let mut bs = BaseScorer::new(&config);
+        let groups = vec![group(
+            "fire fox",
+            vec![
+                crate::engine::provider::entry("both", "Firefox")
+                    .match_fields(fields(&[("Firefox", 1.0)])),
+                crate::engine::provider::entry("one", "Firebird")
+                    .match_fields(fields(&[("Firebird", 1.0)])),
+            ],
+        )];
+
+        let annotations = bs.base_scoring(&groups);
+        assert_eq!(
+            annotations.len(),
+            1,
+            "only the entry matching all words survives"
+        );
+        assert_eq!(annotations[0].resolve(&groups).id, "both");
     }
 
     fn ranked(rank: Rank) -> crate::engine::provider::Entry {

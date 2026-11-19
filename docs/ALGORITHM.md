@@ -155,6 +155,15 @@ applies to [`Rank::MatchFields`](../src/engine/provider/mod.rs) entries only,
 before the global fuzzy-score normalization, so provider-supplied
 `Rank::Score` entries are unaffected.
 
+By default the whole query is one fuzzy needle, spaces included. With
+`split_query_words = true`, the query is parsed into separate words which are
+all required to match (`Pattern::parse`): their scores are summed, and
+nucleo's operators become available — `^prefix`, `'substring`, `postfix$`,
+`^exact$` and `!negation` (a negated fuzzy atom behaves as a negated
+substring). `\ ` escapes a space so it stays inside one word. This is opt-in
+because it changes multi-word query semantics: a query with two words no
+longer has to appear as one contiguous fuzzy match.
+
 ## Adaptation / migration behavior
 
 If a new app starts overtaking Firefox at the "f" node, no special-cased
