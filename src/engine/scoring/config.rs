@@ -22,6 +22,12 @@ pub struct ScoringConfig {
     pub confidence_k: f64,
     /// Base score for entries queried with an empty query.
     pub empty_query_score: f64,
+    /// Bonus in fuzzy-score points for an entry whose shortest matching field
+    /// is close to the query length. The bonus loses one point for every
+    /// character that field is longer than the query, reaching zero once it
+    /// exceeds it by this many. Added once per entry, independent of field
+    /// weights. `0.0` disables the preference entirely.
+    pub short_field_bonus: f64,
 }
 
 impl Default for ScoringConfig {
@@ -32,6 +38,7 @@ impl Default for ScoringConfig {
             half_life_days: 14.0,
             confidence_k: 3.0,
             empty_query_score: 0.8,
+            short_field_bonus: 6.0,
         }
     }
 }
@@ -59,6 +66,11 @@ impl ScoringConfig {
             self.confidence_k > 0.0,
             "confidence_k must be > 0 (got {})",
             self.confidence_k
+        );
+        anyhow::ensure!(
+            self.short_field_bonus >= 0.0,
+            "short_field_bonus must be >= 0 (got {})",
+            self.short_field_bonus
         );
         Ok(())
     }

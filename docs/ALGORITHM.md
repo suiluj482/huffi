@@ -142,6 +142,19 @@ fall through straight to the neutral text-score-only floor.
 crate (the matcher built for the Helix editor), which implements fzf-style
 consecutive-character and word-boundary bonus scoring with gap penalties.
 
+nucleo's gap penalties already give a soft preference to matches with fewer
+gaps. It does not, however, reward a shorter match field: once a match is
+found, trailing text is largely irrelevant to the score. To break ties in
+favor of tighter labels, an entry receives a small bonus
+(`short_field_bonus`, default 6 points) based on its shortest *matching* field.
+The bonus is full when that field is no longer than the query, loses one point
+per character it exceeds the query, and is zero once it is longer by that many
+characters. It is added once to the weighted average, independent of field
+weights: a heavily weighted field must not amplify the preference. The bonus
+applies to [`Rank::MatchFields`](../src/engine/provider/mod.rs) entries only,
+before the global fuzzy-score normalization, so provider-supplied
+`Rank::Score` entries are unaffected.
+
 ## Adaptation / migration behavior
 
 If a new app starts overtaking Firefox at the "f" node, no special-cased
