@@ -535,6 +535,21 @@ mod tests {
         }
     }
 
+    /// Popovers are separate surfaces but still use the theme's colours; a
+    /// builtin stylesheet that forgets them falls back to the system GTK theme
+    /// and clashes with the rest of the launcher.
+    #[test]
+    fn every_builtin_stylesheet_styles_popovers() {
+        for dir in BUILTIN_THEMES.dirs() {
+            let name = theme_name(dir);
+            let css = builtin_file(name, "style.css").expect("stylesheet");
+            assert!(
+                css.contains(".huffi-popover"),
+                "{name} never styles .huffi-popover"
+            );
+        }
+    }
+
     /// A builtin theme that ships only a stylesheet still has to get every row
     /// template from the base theme underneath it. If this regresses the theme
     /// renders with real colours and no rows, which is a confusing way to fail.

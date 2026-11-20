@@ -124,7 +124,8 @@ huffi show --socket /custom.sock   # talk to an instance on a different socket
 | `Enter` | Launch selection |
 | `Esc` | Dismiss |
 | Mouse wheel | Scroll results |
-| `+` / `−` button | Boost / delete association |
+| `+` button | Boost at all prefixes; right-click to boost a chosen prefix |
+| `−` button | Delete everywhere; right-click to choose a scope or zero the boost instead |
 
 ### Subcommands
 
@@ -203,9 +204,14 @@ weight_comment = 0.9      # comments match a bit harder
   and exactly one of `exec`, `terminal_exec`, or `clipboard`, plus
   theme-ready `details` and layout `variant`s. They fuzzy-match like
   everything else and rank up with use.
-- **Boost / Delete** — correct the model in the moment. Both are scoped to the
-  exact prefix you typed and are available on result rows with a history key:
-  boost is a synthetic 10x launch, delete clears the prefix's association.
+- **Boost / Delete** — correct the model in the moment, on result rows with a
+  history key. Boost is a synthetic 10x launch that fans out to every prefix of
+  the query; right-click `+` to boost a different prefix the same way. A boost
+  also acts as an alias: the app surfaces for that prefix even when its name
+  does not fuzzy-match it. Delete removes the association from every bucket by
+  default; right-click `−` to
+  delete only `exact`, `exact + broader`, or `exact + narrower` prefixes, or to
+  zero the score and sample count instead of removing the record.
 - **Prefix resolution** — each query is preprocessed once to resolve the
   *global prefix*: the longest declared provider prefix that the input
   starts with. It is returned with every query result so the UI can mark it

@@ -175,3 +175,52 @@ window {
 .flat-btn:hover {
     color: @huffi_accent_color;
 }
+
+/* Action popovers are their own GDK surfaces. The display-wide stylesheet
+   reaches them, but the visible surface is the `contents` node (plus `arrow`)
+   rather than the `popover` node itself — style both or the system GTK theme
+   shows through. Scoped to the class app.rs puts on our popovers. */
+.huffi-popover {
+    color: @huffi_text_color;
+}
+.huffi-popover contents,
+.huffi-popover > arrow {
+    background-color: @huffi_surface0_color;
+    color: @huffi_text_color;
+    border: 1px solid @huffi_surface1_color;
+    border-radius: 4px;
+    padding: 6px;
+}
+.huffi-popover label {
+    font-size: 12px;
+    color: @huffi_text_color;
+}
+.huffi-popover entry {
+    background-color: @huffi_base_color;
+    color: @huffi_text_color;
+    caret-color: @huffi_accent_color;
+    border: 1px solid @huffi_surface1_color;
+    padding: 6px;
+}
+.huffi-popover entry > text {
+    background-color: transparent;
+    color: @huffi_text_color;
+    caret-color: @huffi_accent_color;
+}
+.huffi-popover entry > text > selection {
+    background-color: @huffi_accent_color;
+    color: @huffi_base_color;
+}
+.huffi-popover button {
+    background-color: @huffi_surface1_color;
+    color: @huffi_text_color;
+    border: none;
+    border-radius: 0;
+    padding: 6px 10px;
+}
+.huffi-popover button:hover {
+    color: @huffi_accent_color;
+}
+.huffi-popover checkbutton {
+    color: @huffi_text_color;
+}
