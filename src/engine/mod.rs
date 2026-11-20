@@ -18,7 +18,7 @@ use crate::engine::provider::{
     Entry, Generation, PreprocessedQuery, Provider, ProviderCollection, ProviderMeta, QueryGroup,
 };
 use crate::engine::scoring::history::{KeyedHistoryRecord, QueryHistory};
-use crate::engine::scoring::{EntryAnnotation, Scorer};
+use crate::engine::scoring::{DeleteScope, EntryAnnotation, Scorer};
 
 /// The result of a query: the resolved [`PreprocessedQuery`], the
 /// precomputed [`QueryHistory`] for it, the entry batches the results were
@@ -285,15 +285,18 @@ impl Engine {
         self.scorer.record_launch(query, history_key);
     }
 
-    /// Boost a history key's ranking using the scorer's configured boost weight.
+    /// Boost a history key at `query` and all of its prefixes, using the
+    /// scorer's configured boost weight.
     pub fn boost(&mut self, query: &str, history_key: &str) {
         self.cache = None;
         self.scorer.record_boost(query, history_key);
     }
 
-    pub fn delete(&mut self, query: &str, history_key: &str) {
+    /// Delete a history key from the prefix buckets selected by `scope`, or
+    /// zero its score and sample count in place when `zero_only` is set.
+    pub fn delete(&mut self, query: &str, history_key: &str, scope: DeleteScope, zero_only: bool) {
         self.cache = None;
-        self.scorer.delete(query, history_key);
+        self.scorer.delete(query, history_key, scope, zero_only);
     }
 
     /// History records filed under exactly `prefix`, with their decayed scores.
@@ -756,6 +759,82 @@ mod tests {
     }
 
     #[test]
+    fn boost_at_another_prefix_trains_that_prefix_only() {
+        let mut e = engine();
+        e.add_provider(Box::new(TestProvider::new(
+            "desktop",
+            vec![
+                match_fields_entry("firefox", "Firefox"),
+                match_fields_entry("files", "Files"),
+            ],
+        )))
+        .unwrap();
+
+        e.boost("f", "files");
+
+        let reply = e.query("f");
+        assert_eq!(
+            reply.get(0).unwrap().entry().history_key.as_deref(),
+            Some("files"),
+            "boosting another prefix should rank that key first there"
+        );
+        let current = e.query("fire");
+        assert!(
+            current
+                .get(0)
+                .unwrap()
+                .history_score()
+                .is_none_or(|score| score == 0.0),
+            "the current query's own bucket should stay untouched"
+        );
+    }
+
+    #[test]
+    fn boost_surfaces_entry_that_does_not_fuzzy_match_the_boosted_prefix() {
+        let mut e = engine();
+        // "Software" matches "sof" but has no 'z', so it can never fuzzy-match
+        // "zzz". Boosting "zzz" must still make it appear there.
+        e.add_provider(Box::new(TestProvider::new(
+            "desktop",
+            vec![
+                match_fields_entry("software", "Software"),
+                match_fields_entry("firefox", "Firefox"),
+            ],
+        )))
+        .unwrap();
+
+        assert!(
+            e.query("zzz").get(0).is_none(),
+            "precondition: nothing matches zzz"
+        );
+
+        e.boost("zzz", "software");
+
+        let reply = e.query("zzz");
+        assert_eq!(
+            reply.get(0).unwrap().entry().history_key.as_deref(),
+            Some("software"),
+            "the boosted prefix should surface the entry even without a fuzzy match"
+        );
+        assert!(
+            reply.get(0).unwrap().history_score().unwrap_or(0.0) > 0.0,
+            "the boost should drive its rank, not a fuzzy score"
+        );
+        assert_eq!(
+            reply.len(),
+            1,
+            "the unmatched, unboosted entry is dropped for a zero final score"
+        );
+
+        // A zeroed record at the exact prefix stops acting as an alias.
+        e.delete("zzz", "software", DeleteScope::Exact, true);
+        assert!(
+            e.query("zzz").get(0).is_none(),
+            "zeroing the boost should drop the alias"
+        );
+    }
+
+    #[test]
     fn configured_scoring_constants_are_used() {
         let mut config = EngineConfig::default();
         config.scoring.boost_weight = 2.0;
@@ -885,7 +964,7 @@ mod tests {
             "boost should invalidate the cache"
         );
 
-        e.delete("al", "alpha");
+        e.delete("al", "alpha", DeleteScope::Everywhere, false);
         e.query("al");
         assert_eq!(
             *calls.lock().unwrap(),

@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::os::unix::net::UnixListener;
 use std::rc::Rc;
@@ -13,15 +13,16 @@ use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GBox, Button, DrawingArea, Entry, EventControllerKey, EventControllerScroll,
-    EventControllerScrollFlags, GestureClick, GestureDrag, Image, Label, Orientation, Overflow,
-    Overlay, PropagationPhase, Separator, Window,
+    Align, Box as GBox, Button, CheckButton, DrawingArea, Entry, EventControllerKey,
+    EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Image, Label,
+    Orientation, Overflow, Overlay, Popover, PropagationPhase, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use huffi::engine::provider::{
     Icon, PreprocessedQuery, ProviderMeta, QuerySuggestion, is_detail_key, matches_prefix,
     matches_query,
 };
+use huffi::engine::scoring::DeleteScope;
 use huffi::engine::{Engine, QueryHit};
 
 use crate::ui::control::{self, ControlRequest};
@@ -61,7 +62,7 @@ enum Step {
 #[derive(Debug, Clone, Copy)]
 enum ModifyKind {
     Boost,
-    Delete,
+    Delete(DeleteScope, bool),
 }
 
 /// Control messages forwarded from the socket threads to the main GTK loop.
@@ -167,6 +168,7 @@ pub struct Launcher {
     backdrop: GBox,
     engine: Arc<Mutex<Engine>>,
     visible: Arc<AtomicBool>,
+    popovers_open: Cell<u32>,
     state: RefCell<State>,
     page_size: usize,
     icon_size: i32,
@@ -274,6 +276,15 @@ impl Launcher {
         panel.set_halign(Align::Center);
         panel.set_valign(Align::Center);
 
+        // A secondary click inside the launcher must not fall through to the
+        // backdrop, whose primary-click gesture dismisses the window.
+        let secondary_click = GestureClick::new();
+        secondary_click.set_button(3);
+        secondary_click.connect_pressed(|gesture, _, _, _| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        panel.add_controller(secondary_click);
+
         let backdrop = GBox::new(Orientation::Vertical, 0);
         backdrop.set_hexpand(true);
         backdrop.set_vexpand(true);
@@ -309,6 +320,7 @@ impl Launcher {
             backdrop,
             engine,
             visible: Arc::new(AtomicBool::new(false)),
+            popovers_open: Cell::new(0),
             state: RefCell::new(State {
                 query: String::new(),
                 active_pre: None,
@@ -454,7 +466,10 @@ impl Launcher {
             let weak = Rc::downgrade(self);
             self.window.connect_is_active_notify(move |_| {
                 let Some(this) = weak.upgrade() else { return };
-                if !this.window.is_active() && this.window.is_visible() {
+                if !this.window.is_active()
+                    && this.window.is_visible()
+                    && this.popovers_open.get() == 0
+                {
                     this.dismiss();
                 }
             });
@@ -790,7 +805,12 @@ impl Launcher {
         self.window.set_visible(false);
     }
 
-    fn modify_history(self: &Rc<Self>, index: usize, kind: ModifyKind) {
+    fn modify_history(
+        self: &Rc<Self>,
+        index: usize,
+        kind: ModifyKind,
+        query_override: Option<String>,
+    ) {
         let history_key = {
             let st = self.state.borrow();
             st.entries.get(index).and_then(|h| h.history_key.clone())
@@ -799,7 +819,10 @@ impl Launcher {
             return;
         };
 
-        let query = self.state.borrow().query.clone();
+        // The popover may boost a different prefix, but the results shown
+        // must stay those for the query still in the entry box.
+        let view_query = self.state.borrow().query.clone();
+        let query = query_override.unwrap_or_else(|| view_query.clone());
         let offset = self.page() * self.page_size;
         let page_size = self.page_size;
         let id = {
@@ -817,11 +840,11 @@ impl Launcher {
                         ModifyKind::Boost => {
                             engine.boost(&query, &history_key);
                         }
-                        ModifyKind::Delete => {
-                            engine.delete(&query, &history_key);
+                        ModifyKind::Delete(scope, zero_only) => {
+                            engine.delete(&query, &history_key, scope, zero_only);
                         }
                     }
-                    Self::fetch_window(&mut engine, &query, offset, page_size)
+                    Self::fetch_window(&mut engine, &view_query, offset, page_size)
                 }
             },
             move |(prefix, entries, total)| {
@@ -832,6 +855,89 @@ impl Launcher {
                 }
             },
         );
+    }
+
+    /// Popovers are separate surfaces, so while one is up the toplevel can
+    /// report itself inactive — which would otherwise dismiss the launcher.
+    fn attach_popover(self: &Rc<Self>, popover: &Popover, button: &Button) {
+        let weak = Rc::downgrade(self);
+        popover.connect_closed(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.popovers_open
+                    .set(this.popovers_open.get().saturating_sub(1));
+            }
+        });
+        self.popovers_open.set(self.popovers_open.get() + 1);
+        popover.add_css_class("huffi-popover");
+        popover.set_parent(button);
+        popover.popup();
+    }
+
+    /// Popover for the `+` button: boost a prefix of your choosing, with the
+    /// same fan-out as a plain boost. The field starts on the current query.
+    fn boost_popover(self: &Rc<Self>, button: &Button, index: usize) {
+        let popover = Popover::new();
+
+        let content = GBox::new(Orientation::Vertical, 8);
+        content.append(&Label::new(Some("Boost prefix")));
+        let entry = Entry::new();
+        entry.set_text(&self.state.borrow().query);
+        content.append(&entry);
+
+        let apply = Button::with_label("Boost");
+        let weak = Rc::downgrade(self);
+        let entry_for_apply = entry.clone();
+        let popover_for_apply = popover.clone();
+        apply.connect_clicked(move |_| {
+            let Some(this) = weak.upgrade() else { return };
+            this.modify_history(
+                index,
+                ModifyKind::Boost,
+                Some(entry_for_apply.text().to_string()),
+            );
+            popover_for_apply.popdown();
+        });
+        content.append(&apply);
+
+        let entry_for_focus = entry.clone();
+        popover.connect_map(move |_| {
+            entry_for_focus.grab_focus();
+            entry_for_focus.select_region(0, -1);
+        });
+
+        popover.set_child(Some(&content));
+        self.attach_popover(&popover, button);
+    }
+
+    /// Popover for the `−` button: pick a delete scope, optionally zeroing
+    /// scores instead of removing records.
+    fn delete_popover(self: &Rc<Self>, button: &Button, index: usize) {
+        let popover = Popover::new();
+
+        let content = GBox::new(Orientation::Vertical, 6);
+        let zero = CheckButton::with_label("Zero boost instead of delete");
+        content.append(&zero);
+
+        for (label, scope) in [
+            ("Everywhere", DeleteScope::Everywhere),
+            ("Only here", DeleteScope::Exact),
+            ("Here + broader", DeleteScope::Broader),
+            ("Here + narrower", DeleteScope::Narrower),
+        ] {
+            let action = Button::with_label(label);
+            let weak = Rc::downgrade(self);
+            let zero = zero.clone();
+            let popover = popover.clone();
+            action.connect_clicked(move |_| {
+                let Some(this) = weak.upgrade() else { return };
+                this.modify_history(index, ModifyKind::Delete(scope, zero.is_active()), None);
+                popover.popdown();
+            });
+            content.append(&action);
+        }
+
+        popover.set_child(Some(&content));
+        self.attach_popover(&popover, button);
     }
 
     /// Run the query and cut the `page_size` window at `offset` out of the
@@ -1236,22 +1342,53 @@ impl Launcher {
             if let Some(boost) = &boost {
                 boost.add_css_class("flat-btn");
                 boost.set_visible(true);
+                boost
+                    .set_tooltip_text(Some("Boost at every prefix (right-click: choose a prefix)"));
                 let weak = Rc::downgrade(self);
                 boost.connect_clicked(move |_| {
                     if let Some(this) = weak.upgrade() {
-                        this.modify_history(local_index, ModifyKind::Boost);
+                        this.modify_history(local_index, ModifyKind::Boost, None);
                     }
                 });
+
+                let right_click = GestureClick::new();
+                right_click.set_button(3);
+                let weak = Rc::downgrade(self);
+                let button = boost.clone();
+                right_click.connect_pressed(move |gesture, _, _, _| {
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                    if let Some(this) = weak.upgrade() {
+                        this.boost_popover(&button, local_index);
+                    }
+                });
+                boost.add_controller(right_click);
             }
             if let Some(delete) = &delete {
                 delete.add_css_class("flat-btn");
                 delete.set_visible(true);
+                delete.set_tooltip_text(Some("Delete everywhere (right-click: choose a scope)"));
                 let weak = Rc::downgrade(self);
                 delete.connect_clicked(move |_| {
                     if let Some(this) = weak.upgrade() {
-                        this.modify_history(local_index, ModifyKind::Delete);
+                        this.modify_history(
+                            local_index,
+                            ModifyKind::Delete(DeleteScope::Everywhere, false),
+                            None,
+                        );
                     }
                 });
+
+                let right_click = GestureClick::new();
+                right_click.set_button(3);
+                let weak = Rc::downgrade(self);
+                let button = delete.clone();
+                right_click.connect_pressed(move |gesture, _, _, _| {
+                    gesture.set_state(gtk4::EventSequenceState::Claimed);
+                    if let Some(this) = weak.upgrade() {
+                        this.delete_popover(&button, local_index);
+                    }
+                });
+                delete.add_controller(right_click);
             }
         } else {
             if let Some(boost) = &boost {

@@ -3,6 +3,7 @@ pub mod config;
 pub mod history;
 
 pub use config::ScoringConfig;
+pub use history::DeleteScope;
 
 use base_scorer::BaseScorer;
 use history::{HistoryStore, KeyedHistoryRecord, KnownHistory, QueryHistory};
@@ -93,12 +94,18 @@ impl Scorer {
     /// for the original query — the same one providers received in their
     /// `QueryContext` — and drives the history half of the blend.
     ///
-    /// The result addresses entries by position in `groups`, which the caller
-    /// keeps alive; see [`EntryAnnotation`].
+    /// Entries with a final score of zero are dropped here, after the blend,
+    /// so history can promote a non-match without a special case in base
+    /// scoring. The result addresses entries by position in `groups`, which
+    /// the caller keeps alive; see [`EntryAnnotation`].
     pub fn score(&mut self, groups: &[QueryGroup], history: &QueryHistory) -> Vec<EntryAnnotation> {
         let mut annotations = self.base_scorer.base_scoring(groups);
         self.history
             .history_scoring(history, groups, &mut annotations);
+        // Base scoring keeps every entry, including non-matches with a zero
+        // base score. Only a positive combined score survives: an entry that
+        // neither matched nor has usable history has nothing to rank on.
+        annotations.retain(|a| a.combined > 0.0);
         annotations.sort_by(|a, b| {
             b.combined
                 .partial_cmp(&a.combined)
@@ -116,8 +123,8 @@ impl Scorer {
             .record_boost(query, history_key, self.boost_weight, self.boost_samples);
     }
 
-    pub fn delete(&mut self, query: &str, history_key: &str) {
-        self.history.delete(query, history_key);
+    pub fn delete(&mut self, query: &str, history_key: &str, scope: DeleteScope, zero_only: bool) {
+        self.history.delete(query, history_key, scope, zero_only);
     }
 
     pub fn list_prefix_history(&mut self, prefix: &str) -> Vec<KeyedHistoryRecord> {

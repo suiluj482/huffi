@@ -21,9 +21,15 @@ Three things happen on every keystroke:
 1. **Fuzzy match** every candidate app against the typed query → `text_score`
 2. **Look up history** for the *exact* typed string in a prefix trie → `history_score` + `confidence`
 3. **Blend** the two into a final ranking
+4. **Drop** results whose final score is zero
 
-Nothing is a hard filter except "does this even fuzzy-match at all." Ranking
-is one continuous scoring function, not filter-then-sort.
+Nothing is filtered during scoring. Every entry gets a score — a non-match
+simply gets a zero text score — and the blend decides whether history lifts it
+above zero. Only then are zero-scored entries removed. This is one continuous
+scoring function, not filter-then-sort, and it is what lets a boost at an
+arbitrary prefix act as an alias: boosting `zzz` on an app whose name has no `z`
+still makes it appear when `zzz` is typed, because its history lifts its final
+score above zero.
 
 ## The prefix trie
 
@@ -159,17 +165,29 @@ produce the right adaptive behavior:
 ## Manual intervention: boost and remove
 
 Correcting the model should be possible in the moment a wrong suggestion is
-seen, not via a separate tool. Two operations, both scoped to the *exact*
-currently-typed string only — no fan-out to shorter prefixes, since a
-deliberate correction at "fi" shouldn't silently push an opinion onto "f":
+seen, not via a separate tool. Two operations, available on result rows that
+carry a history key:
 
-- **Delete** — clears the association between the current string and the
-  highlighted app.
-- **Boost** — one-shot, not a repeatable nudge. Modeled as a synthetic
-  launch with a large weight (10x a normal launch) applied to *both*
-  the score and the sample count `n`, so confidence rises the same way it
-  would from organic use, rather than being a special-cased override with
-  different semantics from the rest of the model. Fan-out is skipped.
+- **Boost** — one-shot, not a repeatable nudge. Modeled as a synthetic launch
+  with a large weight (10x a normal launch) applied to *both* the score and
+  the sample count `n`, so confidence rises the same way it would from organic
+  use, rather than being a special-cased override with different semantics
+  from the rest of the model. Like a real launch, it fans out to every prefix
+  of the query; the UI can also boost a different typed prefix with the same
+  fan-out. Since non-matches are only dropped at the very end, a boost lifts an
+  app above zero even where its name does not fuzzy-match: boosting `zzz` makes
+  the app an alias for `zzz` (and, through fan-out, its prefixes).
+- **Delete** — by default clears the association between the highlighted app
+  and *every* prefix bucket holding it, including the empty prefix that acts
+  as the global key index. The UI also offers narrower scopes: the exact
+  string only, exact plus **broader** prefixes (the shorter strings the query
+  starts with), and exact plus **narrower** prefixes (existing buckets that
+  start with the query — `firefox` is narrower than `fire`, `browser` is not).
+  A "zero boost" variant clears each targeted record's score and sample count
+  in place instead of removing it, keeping the key in the global index.
+
+A boost at `fire` followed by a delete of `exact + broader` at `f` therefore
+boosts only the middle band (`fi`, `fir`, `fire`) when that is what's wanted.
 
 ## Open questions
 

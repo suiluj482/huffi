@@ -15,6 +15,25 @@ pub type HistoryData = HashMap<String, PrefixHistory>;
 /// Name of the history file inside the huffi data folder.
 pub const HISTORY_FILE: &str = "history.json";
 
+/// Which prefix buckets a delete (or zero) operation targets.
+///
+/// The exact query is always included. "Broader" prefixes are the shorter
+/// strings the query starts with (including the empty prefix); "narrower"
+/// prefixes are existing buckets that start with the query. A narrower bucket
+/// is therefore more specific, not merely longer — `browser` is not narrower
+/// than `fire`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteScope {
+    /// Every bucket holding the key, whatever its relation to the query.
+    Everywhere,
+    /// Only the bucket for the exact query.
+    Exact,
+    /// The exact query and all of its broader prefixes, including `""`.
+    Broader,
+    /// The exact query and existing narrower buckets that hold the key.
+    Narrower,
+}
+
 /// Decay constant for a half-life in days: `λ = ln(2) / half_life_secs`.
 fn half_life_lambda(half_life_days: f64) -> f64 {
     std::f64::consts::LN_2 / (half_life_days * 86400.0)
@@ -56,6 +75,12 @@ impl HistoryRecord {
         self.score = self.effective(now, lambda) + weight;
         self.last_update = now;
         self.n += samples;
+    }
+
+    fn zero(&mut self, now: f64) {
+        self.score = 0.0;
+        self.n = 0;
+        self.last_update = now;
     }
 }
 
@@ -290,23 +315,66 @@ impl HistoryStore {
         self.flush_to_disk();
     }
 
+    /// Boost `history_key` at `query` and every prefix of it, like a launch
+    /// with the configured boost weight and sample count instead of 1.
     pub fn record_boost(&mut self, query: &str, history_key: &str, weight: f64, samples: u32) {
         let now = timestamp();
-        self.data
-            .entry(query.to_string())
-            .or_default()
-            .entry(history_key.to_string())
-            .or_insert_with(|| HistoryRecord::new(now))
-            .record_boost(now, weight, samples, self.lambda);
+        for prefix in Self::prefixes(query) {
+            self.data
+                .entry(prefix.to_string())
+                .or_default()
+                .entry(history_key.to_string())
+                .or_insert_with(|| HistoryRecord::new(now))
+                .record_boost(now, weight, samples, self.lambda);
+        }
         self.rebuild_known();
         self.flush_to_disk();
     }
 
-    pub fn delete(&mut self, query: &str, history_key: &str) {
-        if let Some(history_keys) = self.data.get_mut(query) {
-            history_keys.remove(history_key);
-            if history_keys.is_empty() {
-                self.data.remove(query);
+    /// Remove `history_key` from the buckets selected by `scope`, or, when
+    /// `zero_only`, clear its score and samples in place instead. Zeroing
+    /// keeps the record (and so the key's place in [`KnownHistory`]); removing
+    /// it from the empty prefix drops the key from the unscoped view.
+    pub fn delete(&mut self, query: &str, history_key: &str, scope: DeleteScope, zero_only: bool) {
+        // Collect first: the match borrows `data` immutably while the loop
+        // below mutates it.
+        let targets: Vec<String> = match scope {
+            DeleteScope::Everywhere => self
+                .data
+                .iter()
+                .filter(|(_, keys)| keys.contains_key(history_key))
+                .map(|(prefix, _)| prefix.clone())
+                .collect(),
+            DeleteScope::Exact => vec![query.to_string()],
+            DeleteScope::Broader => Self::prefixes(query).map(str::to_string).collect(),
+            DeleteScope::Narrower => std::iter::once(query.to_string())
+                .chain(
+                    self.data
+                        .iter()
+                        .filter(|(prefix, keys)| {
+                            prefix.starts_with(query)
+                                && prefix.as_str() != query
+                                && keys.contains_key(history_key)
+                        })
+                        .map(|(prefix, _)| prefix.clone()),
+                )
+                .collect(),
+        };
+
+        let now = timestamp();
+        for prefix in targets {
+            let Some(keys) = self.data.get_mut(&prefix) else {
+                continue;
+            };
+            if zero_only {
+                if let Some(record) = keys.get_mut(history_key) {
+                    record.zero(now);
+                }
+            } else {
+                keys.remove(history_key);
+                if keys.is_empty() {
+                    self.data.remove(&prefix);
+                }
             }
         }
         self.rebuild_known();
@@ -358,11 +426,11 @@ impl HistoryStore {
 
     /// Blend usage history into the annotations in place.
     ///
-    /// The query-level [`confidence`](QueryHistory::confidence) and
-    /// [`peak`](QueryHistory::peak) look over the whole query; the final blend
-    /// narrows to the keys **present in the result set** so records left
-    /// behind by launch fan-out for entries the query does not surface
-    /// cannot inflate confidence or the normalizer.
+    /// Every entry is annotated before this step, including non-matches with
+    /// a zero base score. `present` narrows the query's records to keys that
+    /// actually have an entry in these results, so stale history for a key
+    /// no provider returned cannot inflate confidence or the normalizer. The
+    /// caller drops zero-scored annotations after the blend.
     ///
     /// `groups` resolves each annotation to the entry that carries its
     /// history key; the scores it produces replace `combined`.
@@ -372,9 +440,9 @@ impl HistoryStore {
         groups: &[QueryGroup],
         annotations: &mut [EntryAnnotation],
     ) {
-        // Only records for entries actually present in the result set may
-        // influence confidence and normalization; launch fan-out leaves
-        // records for apps that the current query does not surface.
+        // Only keys with an entry in this result set may influence confidence
+        // and normalization; a history record whose app is no longer returned
+        // by any provider must not skew the blend.
         let present: HashMap<&str, &QueryHistoryEntry> = annotations
             .iter()
             .filter_map(|a| {
@@ -523,11 +591,16 @@ mod tests {
     }
 
     #[test]
-    fn boost_does_not_fan_out() {
+    fn boost_fans_out_like_launch() {
         let mut history = HistoryStore::default();
         history.record_boost("fi", "Finder", 10.0, 5);
-        let confidence = confidence(&history, "f");
-        assert_eq!(confidence, 0.0);
+        for prefix in ["", "f", "fi"] {
+            let view = history.history_for(prefix);
+            let entry = view.get("Finder").expect("boost reaches every prefix");
+            assert_eq!(entry.samples, 5);
+            assert!(entry.effective > 0.0);
+        }
+        assert!(history.history_for("fir").get("Finder").is_none());
     }
 
     #[test]
@@ -536,9 +609,96 @@ mod tests {
         for _ in 0..5 {
             history.record_launch("f", "Firefox");
         }
-        history.delete("f", "Firefox");
+        history.delete("f", "Firefox", DeleteScope::Everywhere, false);
         let confidence = confidence(&history, "f");
         assert_eq!(confidence, 0.0);
+    }
+
+    fn delete_fixture() -> HistoryStore {
+        let mut history = HistoryStore::default();
+        for query in ["fire", "firefox", "browser"] {
+            history.record_launch(query, "Firefox");
+        }
+        history
+    }
+
+    fn has(history: &HistoryStore, prefix: &str, key: &str) -> bool {
+        history
+            .list_prefix_history(prefix)
+            .iter()
+            .any(|e| e.key == key)
+    }
+
+    #[test]
+    fn delete_exact_only_keeps_other_buckets() {
+        let mut history = delete_fixture();
+        history.delete("fire", "Firefox", DeleteScope::Exact, false);
+
+        assert!(!has(&history, "fire", "Firefox"));
+        for prefix in ["", "f", "fi", "fir", "firefox", "browser"] {
+            assert!(has(&history, prefix, "Firefox"), "kept {prefix:?}");
+        }
+    }
+
+    #[test]
+    fn delete_broader_keeps_narrower_and_unrelated_buckets() {
+        let mut history = delete_fixture();
+        history.delete("fire", "Firefox", DeleteScope::Broader, false);
+
+        for prefix in ["", "f", "fi", "fir", "fire"] {
+            assert!(!has(&history, prefix, "Firefox"), "deleted {prefix:?}");
+        }
+        assert!(has(&history, "firefox", "Firefox"));
+        assert!(has(&history, "browser", "Firefox"));
+    }
+
+    #[test]
+    fn delete_narrower_means_more_specific_not_just_longer() {
+        let mut history = delete_fixture();
+        history.record_launch("firefighter", "Firefox");
+        history.delete("fire", "Firefox", DeleteScope::Narrower, false);
+
+        for prefix in ["fire", "firefox", "firefighter"] {
+            assert!(!has(&history, prefix, "Firefox"), "deleted {prefix:?}");
+        }
+        assert!(
+            has(&history, "browser", "Firefox"),
+            "browser is longer but not narrower than fire"
+        );
+        for prefix in ["", "f", "fi", "fir"] {
+            assert!(has(&history, prefix, "Firefox"), "kept {prefix:?}");
+        }
+    }
+
+    #[test]
+    fn delete_everywhere_removes_key_from_all_buckets() {
+        let mut history = delete_fixture();
+        history.delete("fire", "Firefox", DeleteScope::Everywhere, false);
+
+        for prefix in ["", "f", "fi", "fir", "fire", "firefox", "browser"] {
+            assert!(!has(&history, prefix, "Firefox"), "deleted {prefix:?}");
+        }
+        assert!(history.known_history_keys().is_empty());
+    }
+
+    #[test]
+    fn zero_boost_keeps_records_but_clears_their_scores() {
+        let mut history = delete_fixture();
+        history.record_boost("fire", "Firefox", 10.0, 5);
+        history.delete("fire", "Firefox", DeleteScope::Exact, true);
+
+        let view = history.history_for("fire");
+        let entry = view.get("Firefox").expect("zeroing keeps the record");
+        assert_eq!(entry.effective, 0.0);
+        assert_eq!(entry.samples, 0);
+        assert_eq!(confidence(&history, "fire"), 0.0);
+        assert!(has(&history, "fire", "Firefox"));
+        assert!(
+            history
+                .known_history_keys()
+                .keys()
+                .any(|key| key == "Firefox")
+        );
     }
 
     #[test]
@@ -677,20 +837,20 @@ mod tests {
     }
 
     #[test]
-    fn known_history_keys_survives_a_scoped_delete() {
+    fn known_history_keys_follows_the_delete_scope() {
         let mut history = HistoryStore::default();
         history.record_launch("fi", "Firefox");
-        history.delete("fi", "Firefox");
 
+        history.delete("fi", "Firefox", DeleteScope::Exact, false);
         assert!(
             history
                 .known_history_keys()
                 .keys()
                 .any(|key| key == "Firefox"),
-            "delete currently clears only the exact bucket; global cleanup is deferred to the boost/delete-scope work"
+            "a scoped delete leaves the global key index alone"
         );
 
-        history.delete("", "Firefox");
+        history.delete("fi", "Firefox", DeleteScope::Everywhere, false);
         assert!(
             !history
                 .known_history_keys()

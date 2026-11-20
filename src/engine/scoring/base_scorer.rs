@@ -27,13 +27,18 @@ impl BaseScorer {
         }
     }
 
-    /// Score each group against its own query, then normalize globally.
+    /// Score every entry in each group against that group's query, then
+    /// normalize the fuzzy scores globally.
     ///
     /// [`Rank::Score`] entries are moved straight onto the result (providers
     /// promise a score in `0.0..=1.0`, so no normalization applies).
     /// [`Rank::MatchFields`] entries are fuzzy-scored and normalized against
     /// the best fuzzy match in the whole batch. Entries from a group with an
     /// empty query keep the empty-query baseline and are exempt as well.
+    ///
+    /// Nothing is filtered here — every entry gets a score, including a zero
+    /// one for a non-match. Dropping zero-scored results is the caller's job,
+    /// after history has had a chance to promote them.
     ///
     /// Entries are read in place and referenced by position, so nothing here
     /// moves or copies an [`Entry`](crate::engine::provider::Entry).
@@ -69,15 +74,14 @@ impl BaseScorer {
                         base_annotations.push(EntryAnnotation::new(group, index, score as f64));
                     }
                     Rank::MatchFields(ref fields) => {
-                        if let Some(r) = score_fields(
+                        let r = score_fields(
                             &mut self.fuzzy_matcher,
                             &needle,
                             fields,
                             &mut haystack_buf,
-                        ) && r > 0.0
-                        {
-                            fuzzy.push(EntryAnnotation::new(group, index, r));
-                        }
+                        )
+                        .unwrap_or(0.0);
+                        fuzzy.push(EntryAnnotation::new(group, index, r));
                     }
                 }
             }
@@ -353,6 +357,20 @@ mod tests {
     }
 
     #[test]
+    fn base_scoring_keeps_non_matching_entry_at_zero() {
+        let mut bs = BaseScorer::default();
+        // "software" has no 'z', so it cannot fuzzy-match "zzz".
+        let entry = crate::engine::provider::entry("s", "Software")
+            .history_key("software")
+            .match_fields(fields(&[("Software", 1.0)]));
+        let groups = vec![group("zzz", vec![entry])];
+
+        let annotations = bs.base_scoring(&groups);
+        assert_eq!(annotations.len(), 1, "base scoring does not filter");
+        assert_eq!(annotations[0].base_score, 0.0);
+    }
+
+    #[test]
     fn base_scoring_per_group_query() {
         let mut bs = BaseScorer::default();
         let groups = vec![
@@ -366,11 +384,11 @@ mod tests {
             ),
         ];
         let annotations = bs.base_scoring(&groups);
+        assert_eq!(annotations.len(), 2, "both groups are scored");
+        assert_eq!(annotations[0].base_score, 1.0, "the matching group scores");
         assert_eq!(
-            annotations.len(),
-            1,
-            "only the group matching its query survives"
+            annotations[1].base_score, 0.0,
+            "the non-matching group scores zero"
         );
-        assert_eq!(annotations[0].base_score, 1.0);
     }
 }
