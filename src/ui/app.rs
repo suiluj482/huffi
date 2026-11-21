@@ -369,11 +369,13 @@ impl Launcher {
         self.set_loading(true);
         if self.entry.text() != query {
             self.entry.set_text(&query);
-            self.entry.set_position(-1);
         }
         self.visible.store(true, Ordering::Relaxed);
         self.window.present();
         self.entry.grab_focus();
+        // GTK selects the whole entry on focus, so place the caret after
+        // focusing to leave the initial query unselected.
+        self.entry.set_position(-1);
         self.fetch_page();
     }
 
